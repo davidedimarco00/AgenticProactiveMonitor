@@ -1,1 +1,1 @@
-# SmartGym-Monitor
+# AgenticProactiveMonitor
