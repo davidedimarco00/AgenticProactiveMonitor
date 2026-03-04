@@ -1,0 +1,36 @@
+{
+  "name": "smartgym-monitor",
+  "version": "1.0.0",
+  "description": "A tool for monitoring gym",
+  "homepage": "https://github.com/piertv21/SmartGym-Monitor#readme",
+  "bugs": {
+    "url": "https://github.com/piertv21/SmartGym-Monitor/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piertv21/SmartGym-Monitor.git"
+  },
+  "license": "MIT",
+  "author": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "prettier:check": "prettier --check ."
+  },
+  "lint-staged": {
+    "**/*.{js,jsx,ts,tsx,json,css,md,yml,yaml,html}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.1",
+    "@commitlint/config-conventional": "^20.4.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.8.1",
+    "semantic-release-preconfigured-conventional-commits": "^1.1.157"
+  }
+}

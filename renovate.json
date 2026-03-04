@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "baseBranchPatterns": ["main"],
+  "labels": ["dependencies"],
+  "semanticCommits": "enabled",
+  "ignoreUnstable": true,
+  "timezone": "CET",
+  "prHourlyLimit": 10,
+  "automergeSchedule": ["* 0-7 * * *"],
+  "packageRules": [
+    {
+      "description": "Auto-merge only safe updates (minor and patch)",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "description": "Updates to the dependencies should trigger a new patch release",
+      "matchPaths": ["**/package.json"],
+      "matchDepTypes": ["dependencies"],
+      "semanticCommitScope": "core-deps"
+    }
+  ]
+}

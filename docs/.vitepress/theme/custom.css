@@ -1,0 +1,8 @@
+
+.VPDoc .content {
+    max-width: 1500px !important; /* prova 1100 / 1200 / 1300 */
+}
+
+.VPDoc.has-aside .content-container {
+    max-width: 1500px !important;
+}
