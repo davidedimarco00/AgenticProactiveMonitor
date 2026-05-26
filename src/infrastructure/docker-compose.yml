@@ -15,24 +15,26 @@ services:
       # Required from OpenSearch 2.12+
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Tesista06+
 
-      # Keep security enabled, because OpenSearch is asking for the admin password
-      # and Dashboards will authenticate with admin/Admin123!
     ulimits:
       memlock:
         soft: -1
         hard: -1
+
     ports:
       - "9200:9200"
       - "9600:9600"
+
     volumes:
       - opensearch-data:/usr/share/opensearch/data
+
     networks:
       - monitoring-net
+
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -k -u admin:Admin123! https://localhost:9200 || exit 1",
+          "curl -k -u admin:Tesista06+ https://localhost:9200 || exit 1",
         ]
       interval: 20s
       timeout: 10s
@@ -64,6 +66,10 @@ services:
   opensearch-init:
     image: curlimages/curl:8.10.1
     container_name: agentic-opensearch-init
+    environment:
+      - OPENSEARCH_URL=https://opensearch:9200
+      - OPENSEARCH_USERNAME=admin
+      - OPENSEARCH_PASSWORD=Tesista06+
     volumes:
       - ./opensearch/init/create-index-templates.sh:/create-index-templates.sh:ro
     command: ["sh", "/create-index-templates.sh"]
@@ -73,6 +79,20 @@ services:
     networks:
       - monitoring-net
     restart: "no"
+
+  #############################
+  # OLLAMA - LOCAL LLM RUNTIME
+  #############################
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agentic-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - monitoring-net
+    restart: unless-stopped
 
   #############################
   # MONITORED MACHINE 01
@@ -94,6 +114,7 @@ services:
         condition: service_healthy
     networks:
       - monitoring-net
+    restart: unless-stopped
 
   #############################
   # MONITORED MACHINE 02
@@ -115,6 +136,7 @@ services:
         condition: service_healthy
     networks:
       - monitoring-net
+    restart: unless-stopped
 
   #############################
   # MONITORED MACHINE 03
@@ -136,6 +158,7 @@ services:
         condition: service_healthy
     networks:
       - monitoring-net
+    restart: unless-stopped
 
   #############################
   # MONITORED MACHINE 04
@@ -157,6 +180,7 @@ services:
         condition: service_healthy
     networks:
       - monitoring-net
+    restart: unless-stopped
 
   #############################
   # MONITORED MACHINE 05
@@ -178,6 +202,7 @@ services:
         condition: service_healthy
     networks:
       - monitoring-net
+    restart: unless-stopped
 
 networks:
   monitoring-net:
@@ -185,3 +210,4 @@ networks:
 
 volumes:
   opensearch-data:
+  ollama-data:
