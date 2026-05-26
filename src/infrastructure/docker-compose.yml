@@ -121,6 +121,26 @@ services:
     restart: unless-stopped
 
   #############################
+  # OPEN WEBUI - WEB INTERFACE FOR OLLAMA
+  #############################
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: agentic-open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_AUTH=true
+      - WEBUI_SECRET_KEY=agentic-proactive-monitor-secret-key-change-me
+    volumes:
+      - open-webui-data:/app/backend/data
+    depends_on:
+      - ollama
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+
+  #############################
   # MONITORED MACHINE 01
   #############################
   machine-01:
@@ -237,3 +257,4 @@ networks:
 volumes:
   opensearch-data:
   ollama-data:
+  open-webui-data:
