@@ -1,0 +1,187 @@
+services:
+  #############################
+  # OPENSEARCH
+  #############################
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    container_name: agentic-opensearch
+    environment:
+      - cluster.name=agentic-monitor-cluster
+      - node.name=agentic-opensearch-node
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+
+      # Required from OpenSearch 2.12+
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Tesista06+
+
+      # Keep security enabled, because OpenSearch is asking for the admin password
+      # and Dashboards will authenticate with admin/Admin123!
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    networks:
+      - monitoring-net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -k -u admin:Admin123! https://localhost:9200 || exit 1",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  #############################
+  # OPENSEARCH DASHBOARDS
+  #############################
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.18.0
+    container_name: agentic-opensearch-dashboards
+    environment:
+      - OPENSEARCH_HOSTS=["https://opensearch:9200"]
+      - OPENSEARCH_USERNAME=admin
+      - OPENSEARCH_PASSWORD=Tesista06+
+      - OPENSEARCH_SSL_VERIFICATIONMODE=none
+    ports:
+      - "5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  #############################
+  # OPENSEARCH INITIALIZATION
+  #############################
+  opensearch-init:
+    image: curlimages/curl:8.10.1
+    container_name: agentic-opensearch-init
+    volumes:
+      - ./opensearch/init/create-index-templates.sh:/create-index-templates.sh:ro
+    command: ["sh", "/create-index-templates.sh"]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+    restart: "no"
+
+  #############################
+  # MONITORED MACHINE 01
+  #############################
+  machine-01:
+    build:
+      context: ./monitored-machine
+    container_name: machine-01
+    hostname: machine-01
+    environment:
+      - HOST_ID=machine-01
+      - MACHINE_ROLE=application-server
+      - LOG_LEVEL_PROFILE=normal
+      - LATENCY_MIN=10
+      - LATENCY_MAX=500
+      - LOG_INTERVAL=3
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  #############################
+  # MONITORED MACHINE 02
+  #############################
+  machine-02:
+    build:
+      context: ./monitored-machine
+    container_name: machine-02
+    hostname: machine-02
+    environment:
+      - HOST_ID=machine-02
+      - MACHINE_ROLE=database-server
+      - LOG_LEVEL_PROFILE=normal
+      - LATENCY_MIN=20
+      - LATENCY_MAX=700
+      - LOG_INTERVAL=3
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  #############################
+  # MONITORED MACHINE 03
+  #############################
+  machine-03:
+    build:
+      context: ./monitored-machine
+    container_name: machine-03
+    hostname: machine-03
+    environment:
+      - HOST_ID=machine-03
+      - MACHINE_ROLE=api-gateway
+      - LOG_LEVEL_PROFILE=unstable
+      - LATENCY_MIN=30
+      - LATENCY_MAX=900
+      - LOG_INTERVAL=3
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  #############################
+  # MONITORED MACHINE 04
+  #############################
+  machine-04:
+    build:
+      context: ./monitored-machine
+    container_name: machine-04
+    hostname: machine-04
+    environment:
+      - HOST_ID=machine-04
+      - MACHINE_ROLE=worker-node
+      - LOG_LEVEL_PROFILE=normal
+      - LATENCY_MIN=40
+      - LATENCY_MAX=1100
+      - LOG_INTERVAL=3
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  #############################
+  # MONITORED MACHINE 05
+  #############################
+  machine-05:
+    build:
+      context: ./monitored-machine
+    container_name: machine-05
+    hostname: machine-05
+    environment:
+      - HOST_ID=machine-05
+      - MACHINE_ROLE=edge-node
+      - LOG_LEVEL_PROFILE=critical
+      - LATENCY_MIN=50
+      - LATENCY_MAX=1300
+      - LOG_INTERVAL=3
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+networks:
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  opensearch-data:
