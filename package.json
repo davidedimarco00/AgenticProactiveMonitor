@@ -1,17 +1,17 @@
 {
-  "name": "smartgym-monitor",
+  "name": "agentic-proactive-monitor",
   "version": "1.0.0",
-  "description": "A tool for monitoring gym",
-  "homepage": "https://github.com/piertv21/SmartGym-Monitor#readme",
+  "description": "Hybrid Multi-Agent System for Infrastructure Monitoring and Anomaly Detection",
+  "homepage": "https://github.com/davidedimarco00/AgenticProactiveMonitor#readme",
   "bugs": {
-    "url": "https://github.com/piertv21/SmartGym-Monitor/issues"
+    "url": "https://github.com/davidedimarco00/AgenticProactiveMonitor/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/piertv21/SmartGym-Monitor.git"
+    "url": "git+https://github.com/davidedimarco00/AgenticProactiveMonitor.git"
   },
   "license": "MIT",
-  "author": "",
+  "author": "Davide Di Marco",
   "main": "index.js",
   "directories": {
     "doc": "docs"
