@@ -13,7 +13,7 @@ services:
       - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
 
       # Required from OpenSearch 2.12+
-      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Tesista06+
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Davide00
 
     ulimits:
       memlock:
@@ -34,7 +34,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -k -u admin:Tesista06+ https://localhost:9200 || exit 1",
+          "curl -k -u admin:Davide00 https://localhost:9200 || exit 1",
         ]
       interval: 20s
       timeout: 10s
@@ -50,7 +50,7 @@ services:
     environment:
       - OPENSEARCH_HOSTS=["https://opensearch:9200"]
       - OPENSEARCH_USERNAME=admin
-      - OPENSEARCH_PASSWORD=Tesista06+
+      - OPENSEARCH_PASSWORD=Davide00
       - OPENSEARCH_SSL_VERIFICATIONMODE=none
     ports:
       - "5601:5601"
@@ -69,7 +69,7 @@ services:
     environment:
       - OPENSEARCH_URL=https://opensearch:9200
       - OPENSEARCH_USERNAME=admin
-      - OPENSEARCH_PASSWORD=Tesista06+
+      - OPENSEARCH_PASSWORD=Davide00
     volumes:
       - ./opensearch/init/create-index-templates.sh:/create-index-templates.sh:ro
     command: ["sh", "/create-index-templates.sh"]
