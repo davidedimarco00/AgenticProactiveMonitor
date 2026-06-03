@@ -3,17 +3,15 @@ services:
   # OPENSEARCH
   #############################
   opensearch:
-    image: opensearchproject/opensearch:3.6.0
+    image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
     container_name: agentic-opensearch
     environment:
-      - cluster.name=agentic-monitor-cluster
-      - node.name=agentic-opensearch-node
+      - cluster.name=${OPENSEARCH_CLUSTER_NAME}
+      - node.name=${OPENSEARCH_NODE_NAME}
       - discovery.type=single-node
       - bootstrap.memory_lock=true
-      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
-
-      # Required from OpenSearch 2.12+
-      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Davide00
+      - OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS}
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
 
     ulimits:
       memlock:
@@ -21,8 +19,8 @@ services:
         hard: -1
 
     ports:
-      - "9200:9200"
-      - "9600:9600"
+      - "${OPENSEARCH_HTTP_PORT}:9200"
+      - "${OPENSEARCH_PERFORMANCE_ANALYZER_PORT}:9600"
 
     volumes:
       - opensearch-data:/usr/share/opensearch/data
@@ -34,7 +32,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -k -u admin:Davide00 https://localhost:9200 || exit 1",
+          "curl -k -u ${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD} https://localhost:9200 || exit 1",
         ]
       interval: 20s
       timeout: 10s
@@ -45,18 +43,21 @@ services:
   # OPENSEARCH DASHBOARDS
   #############################
   opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:3.6.0
+    image: opensearchproject/opensearch-dashboards:${OPENSEARCH_DASHBOARDS_VERSION}
     container_name: agentic-opensearch-dashboards
     environment:
       - OPENSEARCH_HOSTS=["https://opensearch:9200"]
-      - OPENSEARCH_USERNAME=admin
-      - OPENSEARCH_PASSWORD=Davide00
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
       - OPENSEARCH_SSL_VERIFICATIONMODE=none
+
     ports:
-      - "5601:5601"
+      - "${OPENSEARCH_DASHBOARDS_PORT}:5601"
+
     depends_on:
       opensearch:
         condition: service_healthy
+
     networks:
       - monitoring-net
 
@@ -68,57 +69,70 @@ services:
     container_name: agentic-opensearch-init
     environment:
       - OPENSEARCH_URL=https://opensearch:9200
-      - OPENSEARCH_USERNAME=admin
-      - OPENSEARCH_PASSWORD=Davide00
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
+
     volumes:
       - ./opensearch/init/create-index-templates.sh:/create-index-templates.sh:ro
+
     command: ["sh", "/create-index-templates.sh"]
+
     depends_on:
       opensearch:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     restart: "no"
 
-    #############################
-    # OLLAMA - LOCAL LLM RUNTIME
-    #############################
+  #############################
+  # QDRANT - VECTOR DATABASE
+  #############################
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: agentic-qdrant
+    restart: unless-stopped
+
+    ports:
+      - "${QDRANT_HTTP_PORT}:6333"
+      - "${QDRANT_GRPC_PORT}:6334"
+
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+    networks:
+      - monitoring-net
+
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  #############################
+  # OLLAMA - LOCAL LLM RUNTIME
+  #############################
   ollama:
     image: ollama/ollama:latest
     container_name: agentic-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    networks:
-      - monitoring-net
     restart: unless-stopped
 
-  ############################# OLLAMA - LOCAL LLM RUNTIME WITH GPU SUPPORT (WINDOWS) #############################
-  #  ollama:
-  #    image: ollama/ollama:latest
-  #    container_name: agentic-ollama
-  #    ports:
-  #      - "11434:11434"
-  #    volumes:
-  #      - ollama-data:/root/.ollama
-  #    environment:
-  #      - OLLAMA_HOST=0.0.0.0:11434
-  #      - OLLAMA_KEEP_ALIVE=5m
-  #      - OLLAMA_NUM_PARALLEL=1
-  #      - OLLAMA_MAX_LOADED_MODELS=1
-  #      - NVIDIA_VISIBLE_DEVICES=all
-  #      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-  #    deploy:
-  #      resources:
-  #        reservations:
-  #          devices:
-  #            - driver: nvidia
-  #              count: all
-  #              capabilities: [gpu]
-  #    networks:
-  #      - monitoring-net
-  #    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT}:11434"
+
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE}
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS}
+
+    volumes:
+      - ollama-data:/root/.ollama
+
+    networks:
+      - monitoring-net
 
   #############################
   # OPEN WEBUI - WEB INTERFACE FOR OLLAMA
@@ -126,19 +140,24 @@ services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: agentic-open-webui
+    restart: unless-stopped
+
     ports:
-      - "3000:8080"
+      - "${OPEN_WEBUI_PORT}:8080"
+
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
-      - WEBUI_AUTH=true
-      - WEBUI_SECRET_KEY=agentic-proactive-monitor-secret-key-change-me
+      - WEBUI_AUTH=${WEBUI_AUTH}
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+
     volumes:
       - open-webui-data:/app/backend/data
+
     depends_on:
       - ollama
+
     networks:
       - monitoring-net
-    restart: unless-stopped
 
   #############################
   # MONITORED MACHINE 01
@@ -148,18 +167,22 @@ services:
       context: ./monitored-machine
     container_name: machine-01
     hostname: machine-01
+
     environment:
       - HOST_ID=machine-01
       - MACHINE_ROLE=application-server
       - LOG_LEVEL_PROFILE=normal
       - LATENCY_MIN=10
       - LATENCY_MAX=500
-      - LOG_INTERVAL=3
+      - LOG_INTERVAL=${LOG_INTERVAL}
+
     depends_on:
       opensearch:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     restart: unless-stopped
 
   #############################
@@ -170,18 +193,22 @@ services:
       context: ./monitored-machine
     container_name: machine-02
     hostname: machine-02
+
     environment:
       - HOST_ID=machine-02
       - MACHINE_ROLE=database-server
       - LOG_LEVEL_PROFILE=normal
       - LATENCY_MIN=20
       - LATENCY_MAX=700
-      - LOG_INTERVAL=3
+      - LOG_INTERVAL=${LOG_INTERVAL}
+
     depends_on:
       opensearch:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     restart: unless-stopped
 
   #############################
@@ -192,18 +219,22 @@ services:
       context: ./monitored-machine
     container_name: machine-03
     hostname: machine-03
+
     environment:
       - HOST_ID=machine-03
       - MACHINE_ROLE=api-gateway
       - LOG_LEVEL_PROFILE=unstable
       - LATENCY_MIN=30
       - LATENCY_MAX=900
-      - LOG_INTERVAL=3
+      - LOG_INTERVAL=${LOG_INTERVAL}
+
     depends_on:
       opensearch:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     restart: unless-stopped
 
   #############################
@@ -214,18 +245,22 @@ services:
       context: ./monitored-machine
     container_name: machine-04
     hostname: machine-04
+
     environment:
       - HOST_ID=machine-04
       - MACHINE_ROLE=worker-node
       - LOG_LEVEL_PROFILE=normal
       - LATENCY_MIN=40
       - LATENCY_MAX=1100
-      - LOG_INTERVAL=3
+      - LOG_INTERVAL=${LOG_INTERVAL}
+
     depends_on:
       opensearch:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     restart: unless-stopped
 
   #############################
@@ -236,18 +271,22 @@ services:
       context: ./monitored-machine
     container_name: machine-05
     hostname: machine-05
+
     environment:
       - HOST_ID=machine-05
       - MACHINE_ROLE=edge-node
       - LOG_LEVEL_PROFILE=critical
       - LATENCY_MIN=50
       - LATENCY_MAX=1300
-      - LOG_INTERVAL=3
+      - LOG_INTERVAL=${LOG_INTERVAL}
+
     depends_on:
       opensearch:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     restart: unless-stopped
 
 networks:
@@ -256,5 +295,6 @@ networks:
 
 volumes:
   opensearch-data:
+  qdrant-data:
   ollama-data:
   open-webui-data:
