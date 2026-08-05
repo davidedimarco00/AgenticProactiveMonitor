@@ -30,6 +30,9 @@ services:
         "sh /create-index-templates.sh && sh /create-anomaly-detectors.sh",
       ]
 
+  # Creates the physical bootstrap indexes and the two Dashboards index patterns.
+  # It is intentionally independent from detector provisioning, so Discover is
+  # available even when the Anomaly Detection initializer is still running.
   opensearch-dashboards-init:
     image: curlimages/curl:8.10.1
     container_name: agentic-opensearch-dashboards-init
