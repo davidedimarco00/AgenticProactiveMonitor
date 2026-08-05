@@ -1,13 +1,24 @@
 coordinator: {jid: coordinator@xmpp, password: coordinator}
-metrics: {jid: metrics@xmpp, password: metrics}
-logs: {jid: logs@xmpp, password: logs}
-topology: {jid: topology@xmpp, password: topology}
-hypothesis: {jid: hypothesis@xmpp, password: hypothesis}
-investigation: {jid: investigation@xmpp, password: investigation}
-diagnostic_executor: {jid: diagnostic@xmpp, password: diagnostic}
+metrics: {jid: evidence@xmpp, password: evidence}
+logs: {jid: unused-logs@xmpp, password: unused}
+topology: {jid: unused-topology@xmpp, password: unused}
+hypothesis: {jid: reasoning@xmpp, password: reasoning}
+investigation: {jid: unused-investigation@xmpp, password: unused}
+diagnostic_executor: {jid: remediation@xmpp, password: remediation}
 critic: {jid: critic@xmpp, password: critic}
+
 opensearch:
   base_url: http://opensearch:9200
   verify_ssl: false
+
+ollama:
+  base_url: http://ollama:11434
+  model: llama3.2:3b
+  temperature: 0.1
+  timeout_seconds: 120
+  keep_alive: 5m
+  max_retries: 1
+  check_model_on_start: true
+
 topology_file: src/agentic_system/config/topology.yaml
 sync_detectors_on_start: true

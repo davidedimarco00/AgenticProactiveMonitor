@@ -13,10 +13,20 @@ class AgentCredentials(BaseModel):
 
 
 class OpenSearchSettings(BaseModel):
-    base_url: str = Field(default_factory=lambda: os.getenv('OPENSEARCH_URL', 'http://opensearch:9200'))
-    username: str | None = Field(default_factory=lambda: os.getenv('OPENSEARCH_USERNAME'))
-    password: str | None = Field(default_factory=lambda: os.getenv('OPENSEARCH_PASSWORD'))
+    base_url: str = Field(default_factory=lambda: os.getenv("OPENSEARCH_URL", "http://opensearch:9200"))
+    username: str | None = Field(default_factory=lambda: os.getenv("OPENSEARCH_USERNAME"))
+    password: str | None = Field(default_factory=lambda: os.getenv("OPENSEARCH_PASSWORD"))
     verify_ssl: bool = False
+
+
+class OllamaSettings(BaseModel):
+    base_url: str = Field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"))
+    model: str = Field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
+    temperature: float = 0.1
+    timeout_seconds: float = 120.0
+    keep_alive: str = "5m"
+    max_retries: int = Field(default=1, ge=0, le=3)
+    check_model_on_start: bool = True
 
 
 class Settings(BaseModel):
@@ -29,10 +39,11 @@ class Settings(BaseModel):
     diagnostic_executor: AgentCredentials
     critic: AgentCredentials
     opensearch: OpenSearchSettings = OpenSearchSettings()
-    topology_file: str = 'src/agentic_system/config/topology.yaml'
+    ollama: OllamaSettings = OllamaSettings()
+    topology_file: str = "src/agentic_system/config/topology.yaml"
     sync_detectors_on_start: bool = True
 
 
 def load_settings(path: str | Path) -> Settings:
-    with Path(path).open('r', encoding='utf-8') as handle:
+    with Path(path).open("r", encoding="utf-8") as handle:
         return Settings.model_validate(yaml.safe_load(handle))

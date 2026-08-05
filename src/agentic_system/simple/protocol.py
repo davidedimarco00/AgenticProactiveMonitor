@@ -15,6 +15,7 @@ class MessageType(StrEnum):
     REVIEW_READY = "review_ready"
     REMEDIATE = "remediate"
     REMEDIATION_READY = "remediation_ready"
+    FAILURE = "failure"
 
 
 def message(to: str, kind: MessageType, incident_id: str, **payload) -> Message:
