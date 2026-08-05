@@ -1,0 +1,28 @@
+services:
+  opensearch:
+    environment:
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  opensearch-dashboards:
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+
+  opensearch-init:
+    environment:
+      - OPENSEARCH_URL=http://opensearch:9200
+      - OPENSEARCH_USERNAME=
+      - OPENSEARCH_PASSWORD=
+
+  agentic-system:
+    environment:
+      - OPENSEARCH_URL=http://opensearch:9200
+      - OPENSEARCH_USERNAME=
+      - OPENSEARCH_PASSWORD=

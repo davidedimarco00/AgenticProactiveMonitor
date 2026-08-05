@@ -14,7 +14,7 @@ class AgentCredentials(BaseModel):
 
 
 class OpenSearchSettings(BaseModel):
-    base_url: str = "https://opensearch:9200"
+    base_url: str = "http://opensearch:9200"
     username: str | None = None
     password: str | None = None
     verify_ssl: bool = False

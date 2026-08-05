@@ -19,9 +19,7 @@ remediation:
   password: remediation
 
 opensearch:
-  base_url: https://opensearch:9200
-  username: ${OPENSEARCH_USERNAME}
-  password: ${OPENSEARCH_PASSWORD}
+  base_url: http://opensearch:9200
   verify_ssl: false
 
 ollama:
