@@ -59,8 +59,11 @@ async def run(config_path: str) -> None:
                     settings.detector_metrics
                 )
                 log.info("Detector registry contains %d managed detectors", len(detectors))
-            except Exception:
-                log.exception("Detector synchronisation failed; continuing with the MAS runtime")
+            except Exception as exc:
+                log.warning(
+                    "Detector synchronisation was skipped without stopping the MAS: %s",
+                    exc,
+                )
         else:
             log.info("[3/7] Detector synchronisation disabled")
 
@@ -105,10 +108,10 @@ async def run(config_path: str) -> None:
 
         agents = [coordinator, evidence, reasoning, critic, remediation]
 
-        log.info("[6/7] Connecting SPADE agents to the XMPP server")
+        log.info("[6/7] Connecting SPADE agents to the provisioned XMPP accounts")
         for agent in agents:
-            await agent.start(auto_register=True)
-            log.info("Started agent %s", agent.jid)
+            await agent.start(auto_register=False)
+            log.info("Started and authenticated agent %s", agent.jid)
 
         _READY_FILE.write_text("ready\n", encoding="utf-8")
         log.info("[7/7] Agentic system is ready")

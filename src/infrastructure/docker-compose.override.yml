@@ -21,8 +21,36 @@ services:
       - OPENSEARCH_USERNAME=
       - OPENSEARCH_PASSWORD=
 
+  xmpp-init:
+    image: docker:27-cli
+    container_name: agentic-xmpp-init
+    environment:
+      - XMPP_CONTAINER_NAME=agentic-xmpp
+      - XMPP_DOMAIN=xmpp
+      - XMPP_COORDINATOR_PASSWORD=${XMPP_COORDINATOR_PASSWORD:-coordinator}
+      - XMPP_EVIDENCE_PASSWORD=${XMPP_EVIDENCE_PASSWORD:-evidence}
+      - XMPP_REASONING_PASSWORD=${XMPP_REASONING_PASSWORD:-reasoning}
+      - XMPP_CRITIC_PASSWORD=${XMPP_CRITIC_PASSWORD:-critic}
+      - XMPP_REMEDIATION_PASSWORD=${XMPP_REMEDIATION_PASSWORD:-remediation}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./prosody/provision-accounts.sh:/provision-accounts.sh:ro
+    command: ["sh", "/provision-accounts.sh"]
+    depends_on:
+      xmpp:
+        condition: service_healthy
+    restart: "no"
+
   agentic-system:
     environment:
       - OPENSEARCH_URL=http://opensearch:9200
       - OPENSEARCH_USERNAME=
       - OPENSEARCH_PASSWORD=
+      - XMPP_COORDINATOR_PASSWORD=${XMPP_COORDINATOR_PASSWORD:-coordinator}
+      - XMPP_EVIDENCE_PASSWORD=${XMPP_EVIDENCE_PASSWORD:-evidence}
+      - XMPP_REASONING_PASSWORD=${XMPP_REASONING_PASSWORD:-reasoning}
+      - XMPP_CRITIC_PASSWORD=${XMPP_CRITIC_PASSWORD:-critic}
+      - XMPP_REMEDIATION_PASSWORD=${XMPP_REMEDIATION_PASSWORD:-remediation}
+    depends_on:
+      xmpp-init:
+        condition: service_completed_successfully

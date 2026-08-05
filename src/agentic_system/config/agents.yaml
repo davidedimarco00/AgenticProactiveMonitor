@@ -1,25 +1,27 @@
 coordinator:
   jid: coordinator@xmpp
-  password: coordinator
+  password: ${XMPP_COORDINATOR_PASSWORD}
 
 evidence:
   jid: evidence@xmpp
-  password: evidence
+  password: ${XMPP_EVIDENCE_PASSWORD}
 
 reasoning:
   jid: reasoning@xmpp
-  password: reasoning
+  password: ${XMPP_REASONING_PASSWORD}
 
 critic:
   jid: critic@xmpp
-  password: critic
+  password: ${XMPP_CRITIC_PASSWORD}
 
 remediation:
   jid: remediation@xmpp
-  password: remediation
+  password: ${XMPP_REMEDIATION_PASSWORD}
 
 opensearch:
   base_url: http://opensearch:9200
+  username: null
+  password: null
   verify_ssl: false
 
 ollama:

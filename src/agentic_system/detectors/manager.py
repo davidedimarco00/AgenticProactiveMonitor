@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from ..opensearch import MetricsRepository, OpenSearchClient
 
 
@@ -41,13 +43,25 @@ class DetectorManager:
         return specs
 
     async def existing_by_name(self) -> dict[str, str]:
-        # OpenSearch's detector search API expects a Query DSL request body.
-        # A GET request with only ?size=1000 returns HTTP 400 on OpenSearch 3.x.
-        data = await self.client.request(
-            "POST",
-            "/_plugins/_anomaly_detection/detectors/_search",
-            json={"size": 1000, "query": {"match_all": {}}},
-        )
+        try:
+            data = await self.client.request(
+                "POST",
+                "/_plugins/_anomaly_detection/detectors/_search",
+                json={"size": 1000, "query": {"match_all": {}}},
+            )
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            if (
+                response is not None
+                and response.status_code == 404
+                and "index_not_found_exception" in response.text
+                and ".opendistro-anomaly-detectors" in response.text
+            ):
+                # Fresh clusters do not create the hidden detector index until the
+                # first detector is stored. Treat this as an empty registry.
+                return {}
+            raise
+
         result: dict[str, str] = {}
         for hit in data.get("hits", {}).get("hits", []):
             source = hit.get("_source", {})
@@ -68,7 +82,7 @@ class DetectorManager:
             "filter_query": {
                 "bool": {
                     "filter": [
-                        {"term": {"host_id.keyword": spec.host_id}},
+                        {"term": {"host_id": spec.host_id}},
                         {"exists": {"field": spec.metric}},
                     ]
                 }
@@ -91,9 +105,13 @@ class DetectorManager:
         }
 
     async def synchronise(self, configured_metrics: list[str]) -> dict[str, str]:
+        specs = await self.desired_specs(configured_metrics)
+        if not specs:
+            return {}
+
         existing = await self.existing_by_name()
         created: dict[str, str] = {}
-        for spec in await self.desired_specs(configured_metrics):
+        for spec in specs:
             if spec.name in existing:
                 created[spec.name] = existing[spec.name]
                 continue
