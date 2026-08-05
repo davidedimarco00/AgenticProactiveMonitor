@@ -1,0 +1,15 @@
+coordinator:
+  jid: coordinator@localhost
+  password: coordinator
+metrics:
+  jid: metrics@localhost
+  password: metrics
+logs:
+  jid: logs@localhost
+  password: logs
+hypothesis:
+  jid: hypothesis@localhost
+  password: hypothesis
+critic:
+  jid: critic@localhost
+  password: critic
