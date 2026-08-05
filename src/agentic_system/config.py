@@ -39,12 +39,8 @@ class Settings(BaseModel):
     opensearch: OpenSearchSettings = OpenSearchSettings()
     ollama: OllamaSettings = OllamaSettings()
     topology_file: str = "src/agentic_system/config/topology.yaml"
-    sync_detectors_on_start: bool = True
-    detector_metrics: list[str] = [
-        "cpu.usage_active",
-        "mem.used_percent",
-        "disk.used_percent",
-    ]
+    sync_detectors_on_start: bool = False
+    detector_metrics: list[str] = ["usage_active", "used_percent"]
     open_demo_incident: bool = True
 
 

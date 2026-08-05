@@ -24,7 +24,11 @@ class DiagnosticHandlers:
             "query_logs": self.query_logs,
         }
 
-    async def inspect_container(self, target: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def inspect_container(
+        self,
+        target: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         def run():
             container = self.docker.containers.get(target)
             return {
@@ -37,7 +41,11 @@ class DiagnosticHandlers:
 
         return await asyncio.to_thread(run)
 
-    async def get_container_stats(self, target: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def get_container_stats(
+        self,
+        target: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         def run():
             stats = self.docker.containers.get(target).stats(stream=False)
             return {
@@ -48,14 +56,31 @@ class DiagnosticHandlers:
 
         return await asyncio.to_thread(run)
 
-    async def check_health_endpoint(self, target: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def check_health_endpoint(
+        self,
+        target: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return await self.inspect_container(target, parameters)
 
-    async def query_metrics(self, target: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        metric = str(parameters.get("metric", "cpu.usage_active"))
+    async def query_metrics(
+        self,
+        target: str,
+        parameters: dict[str, Any],
+    ) -> dict[str, Any]:
+        metric = str(parameters.get("metric", "usage_active"))
         minutes = int(parameters.get("minutes", 10))
-        return {"metric": metric, "samples": await self.metrics_repository.window(target, metric, minutes)}
+        return {
+            "metric": metric,
+            "samples": await self.metrics_repository.window(target, metric, minutes),
+        }
 
-    async def query_logs(self, target: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    async def query_logs(
+        self,
+        target: str,
+        parameters: dict[str, Any],
+    ) -> dict[str, Any]:
         minutes = int(parameters.get("minutes", 10))
-        return {"logs": await self.logs_repository.window(target, minutes=minutes, limit=300)}
+        return {
+            "logs": await self.logs_repository.window(target, minutes=minutes, limit=300)
+        }

@@ -65,7 +65,7 @@ async def run(config_path: str) -> None:
                     exc,
                 )
         else:
-            log.info("[3/7] Detector synchronisation disabled")
+            log.info("[3/7] Detector synchronisation is managed by opensearch-init")
 
         log.info("[4/7] Loading topology from %s", settings.topology_file)
         topology = TopologyRegistry.from_yaml(settings.topology_file)
@@ -120,7 +120,7 @@ async def run(config_path: str) -> None:
             incident = IncidentContext(
                 detector_id="demo",
                 host_id="machine-03",
-                metric_name="cpu.usage_active",
+                metric_name="usage_active",
                 anomaly_score=0.91,
             )
             log.info("Opening demo incident %s for %s", incident.incident_id, incident.host_id)

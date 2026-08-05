@@ -20,6 +20,15 @@ services:
       - OPENSEARCH_URL=http://opensearch:9200
       - OPENSEARCH_USERNAME=
       - OPENSEARCH_PASSWORD=
+      - DETECTOR_WAIT_SECONDS=180
+    volumes:
+      - ./opensearch/init/create-anomaly-detectors.sh:/create-anomaly-detectors.sh:ro
+    command:
+      [
+        "sh",
+        "-c",
+        "sh /create-index-templates.sh && sh /create-anomaly-detectors.sh",
+      ]
 
   xmpp-init:
     image: docker:27-cli
@@ -52,5 +61,7 @@ services:
       - XMPP_CRITIC_PASSWORD=${XMPP_CRITIC_PASSWORD:-critic}
       - XMPP_REMEDIATION_PASSWORD=${XMPP_REMEDIATION_PASSWORD:-remediation}
     depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
       xmpp-init:
         condition: service_completed_successfully

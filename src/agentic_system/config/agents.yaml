@@ -34,9 +34,10 @@ ollama:
   check_model_on_start: true
 
 topology_file: src/agentic_system/config/topology.yaml
-sync_detectors_on_start: true
+
+# Detector lifecycle belongs to opensearch-init, not to the MAS runtime.
+sync_detectors_on_start: false
 detector_metrics:
-  - cpu.usage_active
-  - mem.used_percent
-  - disk.used_percent
+  - usage_active
+  - used_percent
 open_demo_incident: true
