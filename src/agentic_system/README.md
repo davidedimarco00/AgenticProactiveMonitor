@@ -1,21 +1,47 @@
-# Collaborative Troubleshooting MAS
+# Five-Agent Collaborative Troubleshooting System
 
-This module implements the SPADE-based collaborative troubleshooting layer of AgenticProactiveMonitor.
+The active runtime is `src.agentic_system.main`. It starts five SPADE agents:
 
-## Current foundation
+1. Coordinator
+2. Evidence
+3. Reasoning
+4. Critic
+5. Remediation
 
-- Shared incident workspace and typed evidence model
-- SPADE message protocol
-- Incident coordinator
-- Metrics, logs, hypothesis and critic agents
-- Iterative investigation loop
-- Deterministic repositories separated from LLM reasoning
+## Docker startup
 
-## Run
+From `src/infrastructure` run:
 
-1. Start an XMPP server and create the configured accounts.
-2. Copy `config/agents.example.yaml` to `config/agents.yaml`.
-3. Install dependencies with `pip install -r requirements.txt`.
-4. Run `python -m src.agentic_system.main` from the repository root.
+```bash
+docker compose up -d --build
+```
 
-The next implementation step will connect the evidence agents to OpenSearch queries, automatic detector creation, topology discovery and safe diagnostic tools.
+The Compose stack starts OpenSearch, Ollama, the model initializer, Prosody XMPP, the monitored machines, and finally `agentic-system`.
+
+Follow the MAS startup and investigation with:
+
+```bash
+docker compose logs -f agentic-system
+```
+
+Check the relevant services with:
+
+```bash
+docker compose ps opensearch ollama ollama-init xmpp agentic-system
+```
+
+The agent container is healthy when `/tmp/agentic-system.ready` exists. SPADE accounts are created automatically through Prosody in-band registration. This registration setting is intended only for the local thesis lab.
+
+## Runtime sequence
+
+1. Validate that the configured Ollama model is available.
+2. Create OpenSearch repositories.
+3. Synchronise anomaly detectors when enabled.
+4. Load the infrastructure topology.
+5. Create and connect the five SPADE agents to XMPP.
+6. Mark the runtime as ready.
+7. Open the demo incident when `open_demo_incident` is enabled.
+8. Execute the Evidence -> Reasoning -> Critic loop.
+9. Send an accepted diagnosis to the policy-gated Remediation Agent.
+
+The current remediation executor is intentionally disabled. The active incident source is still the demo event until the Perception component is connected to real OpenSearch anomaly results.

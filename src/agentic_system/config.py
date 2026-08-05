@@ -13,7 +13,7 @@ class AgentCredentials(BaseModel):
 
 
 class OpenSearchSettings(BaseModel):
-    base_url: str = Field(default_factory=lambda: os.getenv("OPENSEARCH_URL", "http://opensearch:9200"))
+    base_url: str = Field(default_factory=lambda: os.getenv("OPENSEARCH_URL", "https://opensearch:9200"))
     username: str | None = Field(default_factory=lambda: os.getenv("OPENSEARCH_USERNAME"))
     password: str | None = Field(default_factory=lambda: os.getenv("OPENSEARCH_PASSWORD"))
     verify_ssl: bool = False
@@ -31,19 +31,23 @@ class OllamaSettings(BaseModel):
 
 class Settings(BaseModel):
     coordinator: AgentCredentials
-    metrics: AgentCredentials
-    logs: AgentCredentials
-    topology: AgentCredentials
-    hypothesis: AgentCredentials
-    investigation: AgentCredentials
-    diagnostic_executor: AgentCredentials
+    evidence: AgentCredentials
+    reasoning: AgentCredentials
     critic: AgentCredentials
+    remediation: AgentCredentials
     opensearch: OpenSearchSettings = OpenSearchSettings()
     ollama: OllamaSettings = OllamaSettings()
     topology_file: str = "src/agentic_system/config/topology.yaml"
     sync_detectors_on_start: bool = True
+    detector_metrics: list[str] = [
+        "cpu.usage_active",
+        "mem.used_percent",
+        "disk.used_percent",
+    ]
+    open_demo_incident: bool = True
 
 
 def load_settings(path: str | Path) -> Settings:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        return Settings.model_validate(yaml.safe_load(handle))
+    raw = Path(path).read_text(encoding="utf-8")
+    expanded = os.path.expandvars(raw)
+    return Settings.model_validate(yaml.safe_load(expanded))

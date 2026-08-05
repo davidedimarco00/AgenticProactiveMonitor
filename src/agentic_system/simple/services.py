@@ -79,11 +79,18 @@ class EvidenceService:
             rows = await self.logs.window(check.target)
             return {"check": check.model_dump(), "success": True, "rows": rows[-50:]}
         if self.docker_tools and check.action == "inspect_container":
-            return {
-                "check": check.model_dump(),
-                "success": True,
-                "output": await self.docker_tools.inspect(check.target),
-            }
+            try:
+                output = await self.docker_tools.inspect_container(
+                    check.target,
+                    check.parameters,
+                )
+                return {"check": check.model_dump(), "success": True, "output": output}
+            except Exception as exc:
+                return {
+                    "check": check.model_dump(),
+                    "success": False,
+                    "error": str(exc),
+                }
         return {
             "check": check.model_dump(),
             "success": False,

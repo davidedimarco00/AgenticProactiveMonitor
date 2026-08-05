@@ -1,8 +1,22 @@
-coordinator: {jid: coordinator@xmpp, password: coordinator}
-evidence: {jid: evidence@xmpp, password: evidence}
-reasoning: {jid: reasoning@xmpp, password: reasoning}
-critic: {jid: critic@xmpp, password: critic}
-remediation: {jid: remediation@xmpp, password: remediation}
+coordinator:
+  jid: coordinator@xmpp
+  password: coordinator
+
+evidence:
+  jid: evidence@xmpp
+  password: evidence
+
+reasoning:
+  jid: reasoning@xmpp
+  password: reasoning
+
+critic:
+  jid: critic@xmpp
+  password: critic
+
+remediation:
+  jid: remediation@xmpp
+  password: remediation
 
 opensearch:
   base_url: https://opensearch:9200
@@ -21,5 +35,8 @@ ollama:
 
 topology_file: src/agentic_system/config/topology.yaml
 sync_detectors_on_start: true
-detector_metrics: [cpu.usage_active, mem.used_percent, disk.used_percent]
+detector_metrics:
+  - cpu.usage_active
+  - mem.used_percent
+  - disk.used_percent
 open_demo_incident: true

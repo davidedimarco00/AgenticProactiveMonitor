@@ -12,22 +12,17 @@ services:
       - bootstrap.memory_lock=true
       - OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS}
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
-
     ulimits:
       memlock:
         soft: -1
         hard: -1
-
     ports:
       - "${OPENSEARCH_HTTP_PORT}:9200"
       - "${OPENSEARCH_PERFORMANCE_ANALYZER_PORT}:9600"
-
     volumes:
       - opensearch-data:/usr/share/opensearch/data
-
     networks:
       - monitoring-net
-
     healthcheck:
       test:
         [
@@ -39,9 +34,6 @@ services:
       retries: 20
       start_period: 60s
 
-  #############################
-  # OPENSEARCH DASHBOARDS
-  #############################
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:${OPENSEARCH_DASHBOARDS_VERSION}
     container_name: agentic-opensearch-dashboards
@@ -50,20 +42,14 @@ services:
       - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME}
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
       - OPENSEARCH_SSL_VERIFICATIONMODE=none
-
     ports:
       - "${OPENSEARCH_DASHBOARDS_PORT}:5601"
-
     depends_on:
       opensearch:
         condition: service_healthy
-
     networks:
       - monitoring-net
 
-  #############################
-  # OPENSEARCH INITIALIZATION
-  #############################
   opensearch-init:
     image: curlimages/curl:8.10.1
     container_name: agentic-opensearch-init
@@ -71,39 +57,30 @@ services:
       - OPENSEARCH_URL=https://opensearch:9200
       - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME}
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
-
     volumes:
       - ./opensearch/init/create-index-templates.sh:/create-index-templates.sh:ro
-
     command: ["sh", "/create-index-templates.sh"]
-
     depends_on:
       opensearch:
         condition: service_healthy
-
     networks:
       - monitoring-net
-
     restart: "no"
 
   #############################
-  # QDRANT - VECTOR DATABASE
+  # QDRANT
   #############################
   qdrant:
     image: qdrant/qdrant:latest
     container_name: agentic-qdrant
     restart: unless-stopped
-
     ports:
       - "${QDRANT_HTTP_PORT}:6333"
       - "${QDRANT_GRPC_PORT}:6334"
-
     volumes:
       - qdrant-data:/qdrant/storage
-
     networks:
       - monitoring-net
-
     healthcheck:
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 20s
@@ -112,62 +89,95 @@ services:
       start_period: 20s
 
   #############################
-  # OLLAMA - LOCAL LLM RUNTIME
+  # OLLAMA
   #############################
   ollama:
     image: ollama/ollama:latest
     container_name: agentic-ollama
     restart: unless-stopped
-
     ports:
       - "${OLLAMA_PORT}:11434"
-
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE}
       - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL}
       - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS}
-
     volumes:
       - ollama-data:/root/.ollama
-
     networks:
       - monitoring-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
 
-  #############################
-  # OPEN WEBUI - WEB INTERFACE FOR OLLAMA
-  #############################
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: agentic-ollama-init
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    command: ["pull", "${OLLAMA_MODEL:-llama3.2:3b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+    restart: "no"
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: agentic-open-webui
     restart: unless-stopped
-
     ports:
       - "${OPEN_WEBUI_PORT}:8080"
-
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - WEBUI_AUTH=${WEBUI_AUTH}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
-
     volumes:
       - open-webui-data:/app/backend/data
-
     depends_on:
-      - ollama
-
+      ollama:
+        condition: service_healthy
     networks:
       - monitoring-net
 
   #############################
-  # MONITORED MACHINE 01
+  # XMPP FOR SPADE
+  #############################
+  xmpp:
+    image: prosodyim/prosody:13.0
+    container_name: agentic-xmpp
+    hostname: xmpp
+    restart: unless-stopped
+    environment:
+      - PROSODY_VIRTUAL_HOSTS=xmpp
+      - PROSODY_ENABLE_MODULES=register
+      - PROSODY_LOGLEVEL=info
+      - PROSODY_S2S_SECURE_AUTH=0
+    ports:
+      - "${XMPP_PORT:-5222}:5222"
+    volumes:
+      - ./prosody/agentic.cfg.lua:/etc/prosody/conf.d/agentic.cfg.lua:ro
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "prosodyctl status >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  #############################
+  # MONITORED MACHINES
   #############################
   machine-01:
     build:
       context: ./monitored-machine
     container_name: machine-01
     hostname: machine-01
-
     environment:
       - HOST_ID=machine-01
       - MACHINE_ROLE=application-server
@@ -175,25 +185,18 @@ services:
       - LATENCY_MIN=10
       - LATENCY_MAX=500
       - LOG_INTERVAL=${LOG_INTERVAL}
-
     depends_on:
       opensearch:
         condition: service_healthy
-
     networks:
       - monitoring-net
-
     restart: unless-stopped
 
-  #############################
-  # MONITORED MACHINE 02
-  #############################
   machine-02:
     build:
       context: ./monitored-machine
     container_name: machine-02
     hostname: machine-02
-
     environment:
       - HOST_ID=machine-02
       - MACHINE_ROLE=database-server
@@ -201,25 +204,18 @@ services:
       - LATENCY_MIN=20
       - LATENCY_MAX=700
       - LOG_INTERVAL=${LOG_INTERVAL}
-
     depends_on:
       opensearch:
         condition: service_healthy
-
     networks:
       - monitoring-net
-
     restart: unless-stopped
 
-  #############################
-  # MONITORED MACHINE 03
-  #############################
   machine-03:
     build:
       context: ./monitored-machine
     container_name: machine-03
     hostname: machine-03
-
     environment:
       - HOST_ID=machine-03
       - MACHINE_ROLE=api-gateway
@@ -227,25 +223,18 @@ services:
       - LATENCY_MIN=30
       - LATENCY_MAX=900
       - LOG_INTERVAL=${LOG_INTERVAL}
-
     depends_on:
       opensearch:
         condition: service_healthy
-
     networks:
       - monitoring-net
-
     restart: unless-stopped
 
-  #############################
-  # MONITORED MACHINE 04
-  #############################
   machine-04:
     build:
       context: ./monitored-machine
     container_name: machine-04
     hostname: machine-04
-
     environment:
       - HOST_ID=machine-04
       - MACHINE_ROLE=worker-node
@@ -253,25 +242,18 @@ services:
       - LATENCY_MIN=40
       - LATENCY_MAX=1100
       - LOG_INTERVAL=${LOG_INTERVAL}
-
     depends_on:
       opensearch:
         condition: service_healthy
-
     networks:
       - monitoring-net
-
     restart: unless-stopped
 
-  #############################
-  # MONITORED MACHINE 05
-  #############################
   machine-05:
     build:
       context: ./monitored-machine
     container_name: machine-05
     hostname: machine-05
-
     environment:
       - HOST_ID=machine-05
       - MACHINE_ROLE=edge-node
@@ -279,15 +261,60 @@ services:
       - LATENCY_MIN=50
       - LATENCY_MAX=1300
       - LOG_INTERVAL=${LOG_INTERVAL}
-
     depends_on:
       opensearch:
         condition: service_healthy
-
     networks:
       - monitoring-net
-
     restart: unless-stopped
+
+  #############################
+  # FIVE-AGENT MAS
+  #############################
+  agentic-system:
+    build:
+      context: ../..
+      dockerfile: src/agentic_system/Dockerfile
+    container_name: agentic-system
+    command:
+      [
+        "sh",
+        "-c",
+        "sleep 20 && python -m src.agentic_system.main --config src/agentic_system/config/agents.yaml",
+      ]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+      xmpp:
+        condition: service_healthy
+      machine-01:
+        condition: service_started
+      machine-02:
+        condition: service_started
+      machine-03:
+        condition: service_started
+      machine-04:
+        condition: service_started
+      machine-05:
+        condition: service_started
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/agentic-system.ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
 
 networks:
   monitoring-net:
