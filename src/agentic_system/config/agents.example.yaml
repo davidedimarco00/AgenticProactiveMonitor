@@ -1,15 +1,17 @@
-coordinator:
-  jid: coordinator@localhost
-  password: coordinator
-metrics:
-  jid: metrics@localhost
-  password: metrics
-logs:
-  jid: logs@localhost
-  password: logs
-hypothesis:
-  jid: hypothesis@localhost
-  password: hypothesis
-critic:
-  jid: critic@localhost
-  password: critic
+coordinator: {jid: coordinator@xmpp, password: coordinator}
+metrics: {jid: metrics@xmpp, password: metrics}
+logs: {jid: logs@xmpp, password: logs}
+topology: {jid: topology@xmpp, password: topology}
+hypothesis: {jid: hypothesis@xmpp, password: hypothesis}
+critic: {jid: critic@xmpp, password: critic}
+investigation: {jid: investigation@xmpp, password: investigation}
+diagnostic_executor: {jid: diagnostic-executor@xmpp, password: diagnostic-executor}
+opensearch:
+  url: http://opensearch:9200
+  verify_ssl: false
+  metrics_index: metrics-*
+  logs_index: logs-*
+topology_map:
+  machine-01: [machine-03]
+  machine-03: [machine-04]
+  machine-04: []

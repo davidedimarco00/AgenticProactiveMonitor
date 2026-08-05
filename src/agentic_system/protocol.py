@@ -15,6 +15,10 @@ class MessageType(StrEnum):
     HYPOTHESES_SUBMITTED = "hypotheses_submitted"
     CRITIQUE_REQUEST = "critique_request"
     CRITIQUE_SUBMITTED = "critique_submitted"
+    INVESTIGATION_REQUEST = "investigation_request"
+    TEST_PLAN_SUBMITTED = "test_plan_submitted"
+    DIAGNOSTIC_TEST_REQUEST = "diagnostic_test_request"
+    DIAGNOSTIC_TEST_COMPLETED = "diagnostic_test_completed"
 
 
 def build_message(to: str, message_type: MessageType, payload: dict[str, Any]) -> Message:

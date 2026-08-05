@@ -46,6 +46,16 @@ class Hypothesis(BaseModel):
     confirmed: bool = False
 
 
+class DiagnosticTest(BaseModel):
+    test_id: str = Field(default_factory=lambda: uuid4().hex)
+    incident_id: str
+    hypothesis_id: str
+    action: str
+    target: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    rationale: str
+
+
 class Incident(BaseModel):
     incident_id: str = Field(default_factory=lambda: uuid4().hex)
     detector_id: str
@@ -57,4 +67,5 @@ class Incident(BaseModel):
     investigation_round: int = 0
     evidence: list[Evidence] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
+    diagnostic_tests: list[DiagnosticTest] = Field(default_factory=list)
     confirmed_hypothesis_id: str | None = None
