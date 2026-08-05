@@ -1,3 +1,3 @@
-from .executor import DiagnosticExecutor
+from .handlers import DiagnosticHandlers
 
-__all__ = ["DiagnosticExecutor"]
+__all__ = ['DiagnosticHandlers']

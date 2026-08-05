@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import yaml
@@ -12,12 +13,10 @@ class AgentCredentials(BaseModel):
 
 
 class OpenSearchSettings(BaseModel):
-    url: str = "http://opensearch:9200"
-    username: str | None = None
-    password: str | None = None
+    base_url: str = Field(default_factory=lambda: os.getenv('OPENSEARCH_URL', 'http://opensearch:9200'))
+    username: str | None = Field(default_factory=lambda: os.getenv('OPENSEARCH_USERNAME'))
+    password: str | None = Field(default_factory=lambda: os.getenv('OPENSEARCH_PASSWORD'))
     verify_ssl: bool = False
-    metrics_index: str = "metrics-*"
-    logs_index: str = "logs-*"
 
 
 class Settings(BaseModel):
@@ -26,13 +25,14 @@ class Settings(BaseModel):
     logs: AgentCredentials
     topology: AgentCredentials
     hypothesis: AgentCredentials
-    critic: AgentCredentials
     investigation: AgentCredentials
     diagnostic_executor: AgentCredentials
-    opensearch: OpenSearchSettings = Field(default_factory=OpenSearchSettings)
-    topology_map: dict[str, list[str]] = Field(default_factory=dict)
+    critic: AgentCredentials
+    opensearch: OpenSearchSettings = OpenSearchSettings()
+    topology_file: str = 'src/agentic_system/config/topology.yaml'
+    sync_detectors_on_start: bool = True
 
 
 def load_settings(path: str | Path) -> Settings:
-    with Path(path).open("r", encoding="utf-8") as handle:
+    with Path(path).open('r', encoding='utf-8') as handle:
         return Settings.model_validate(yaml.safe_load(handle))

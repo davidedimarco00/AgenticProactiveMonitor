@@ -3,15 +3,11 @@ metrics: {jid: metrics@xmpp, password: metrics}
 logs: {jid: logs@xmpp, password: logs}
 topology: {jid: topology@xmpp, password: topology}
 hypothesis: {jid: hypothesis@xmpp, password: hypothesis}
-critic: {jid: critic@xmpp, password: critic}
 investigation: {jid: investigation@xmpp, password: investigation}
-diagnostic_executor: {jid: diagnostic-executor@xmpp, password: diagnostic-executor}
+diagnostic_executor: {jid: diagnostic@xmpp, password: diagnostic}
+critic: {jid: critic@xmpp, password: critic}
 opensearch:
-  url: http://opensearch:9200
+  base_url: http://opensearch:9200
   verify_ssl: false
-  metrics_index: metrics-*
-  logs_index: logs-*
-topology_map:
-  machine-01: [machine-03]
-  machine-03: [machine-04]
-  machine-04: []
+topology_file: src/agentic_system/config/topology.yaml
+sync_detectors_on_start: true
