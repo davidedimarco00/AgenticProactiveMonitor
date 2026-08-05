@@ -36,21 +36,21 @@ class CoordinatorAgent(BaseAgent):
             incident_id = data["incident_id"]
             kind = msg.metadata.get("message_type")
             if kind == MessageType.EVIDENCE_READY.value:
-                await self.workspace.set_status(incident_id, IncidentStatus.REASONING)
+                await self.agent.workspace.set_status(incident_id, IncidentStatus.REASONING)
                 await self.send(message(self.agent.reasoning_jid, MessageType.REASON, incident_id))
             elif kind == MessageType.DIAGNOSIS_READY.value:
                 await self.send(message(self.agent.critic_jid, MessageType.REVIEW, incident_id))
             elif kind == MessageType.REVIEW_READY.value:
                 review = CriticReview.model_validate(data["review"])
                 if review.accepted:
-                    await self.workspace.set_status(incident_id, IncidentStatus.REMEDIATING)
+                    await self.agent.workspace.set_status(incident_id, IncidentStatus.REMEDIATING)
                     await self.send(message(self.agent.remediation_jid, MessageType.REMEDIATE, incident_id))
                 else:
-                    incident = await self.workspace.get(incident_id)
+                    incident = await self.agent.workspace.get(incident_id)
                     if incident.round >= self.agent.max_rounds or not review.required_checks:
-                        await self.workspace.set_status(incident_id, IncidentStatus.FAILED)
+                        await self.agent.workspace.set_status(incident_id, IncidentStatus.FAILED)
                     else:
-                        await self.workspace.begin_round(incident_id)
+                        await self.agent.workspace.begin_round(incident_id)
                         await self.send(
                             message(
                                 self.agent.evidence_jid,
@@ -61,13 +61,13 @@ class CoordinatorAgent(BaseAgent):
                         )
             elif kind == MessageType.REMEDIATION_READY.value:
                 report = data["report"]
-                await self.workspace.set_remediation(incident_id, report)
-                await self.workspace.set_status(
+                await self.agent.workspace.set_remediation(incident_id, report)
+                await self.agent.workspace.set_status(
                     incident_id,
                     IncidentStatus.RESOLVED if report.get("executed") else IncidentStatus.FAILED,
                 )
             elif kind == MessageType.FAILURE.value:
-                await self.workspace.set_status(incident_id, IncidentStatus.FAILED)
+                await self.agent.workspace.set_status(incident_id, IncidentStatus.FAILED)
                 self.agent.log.error(
                     "Incident %s failed in %s: %s",
                     incident_id,
@@ -91,10 +91,10 @@ class EvidenceAgent(BaseAgent):
             data = body(msg)
             incident_id = data["incident_id"]
             try:
-                incident = await self.workspace.get(incident_id)
+                incident = await self.agent.workspace.get(incident_id)
                 checks = [DiagnosticCheck.model_validate(item) for item in data.get("checks", [])]
                 report = await self.agent.service.collect(incident, checks)
-                await self.workspace.add_evidence(incident.incident_id, report)
+                await self.agent.workspace.add_evidence(incident.incident_id, report)
                 await self.send(
                     message(self.agent.coordinator_jid, MessageType.EVIDENCE_READY, incident.incident_id)
                 )
@@ -124,9 +124,9 @@ class ReasoningAgent(BaseAgent):
                 return
             incident_id = body(msg)["incident_id"]
             try:
-                incident = await self.workspace.get(incident_id)
+                incident = await self.agent.workspace.get(incident_id)
                 diagnosis = await self.agent.service.diagnose(incident)
-                await self.workspace.set_diagnosis(incident.incident_id, diagnosis)
+                await self.agent.workspace.set_diagnosis(incident.incident_id, diagnosis)
                 await self.send(
                     message(self.agent.coordinator_jid, MessageType.DIAGNOSIS_READY, incident.incident_id)
                 )
@@ -156,9 +156,9 @@ class CriticAgent(BaseAgent):
                 return
             incident_id = body(msg)["incident_id"]
             try:
-                incident = await self.workspace.get(incident_id)
+                incident = await self.agent.workspace.get(incident_id)
                 review = await self.agent.service.review(incident)
-                await self.workspace.set_review(incident.incident_id, review)
+                await self.agent.workspace.set_review(incident.incident_id, review)
                 await self.send(
                     message(
                         self.agent.coordinator_jid,
@@ -193,7 +193,7 @@ class RemediationAgent(BaseAgent):
                 return
             incident_id = body(msg)["incident_id"]
             try:
-                incident = await self.workspace.get(incident_id)
+                incident = await self.agent.workspace.get(incident_id)
                 report = await self.agent.service.execute(incident)
                 await self.send(
                     message(
