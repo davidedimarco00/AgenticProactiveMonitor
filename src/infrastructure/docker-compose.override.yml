@@ -30,6 +30,25 @@ services:
         "sh /create-index-templates.sh && sh /create-anomaly-detectors.sh",
       ]
 
+  opensearch-dashboards-init:
+    image: curlimages/curl:8.10.1
+    container_name: agentic-opensearch-dashboards-init
+    environment:
+      - OPENSEARCH_URL=http://opensearch:9200
+      - DASHBOARDS_URL=http://opensearch-dashboards:5601
+      - DASHBOARDS_WAIT_SECONDS=180
+    volumes:
+      - ./opensearch-dashboards/init/create-index-patterns.sh:/create-index-patterns.sh:ro
+    command: ["sh", "/create-index-patterns.sh"]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      opensearch-dashboards:
+        condition: service_started
+    networks:
+      - monitoring-net
+    restart: "no"
+
   xmpp-init:
     image: docker:27-cli
     container_name: agentic-xmpp-init
