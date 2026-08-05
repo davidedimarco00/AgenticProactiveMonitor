@@ -1,0 +1,24 @@
+opensearch:
+  url: http://opensearch:9200
+  username: null
+  password: null
+  verify_ssl: false
+
+detectors:
+  enabled: true
+  interval_minutes: 1
+  metrics:
+    - cpu.usage_active
+    - mem.used_percent
+    - disk.used_percent
+
+topology:
+  machine-01:
+    role: application-server
+    dependencies: [machine-03]
+  machine-03:
+    role: api-gateway
+    dependencies: [machine-04]
+  machine-04:
+    role: worker-node
+    dependencies: []
