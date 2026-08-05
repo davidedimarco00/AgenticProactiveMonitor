@@ -100,6 +100,14 @@ JSON
       return 1
       ;;
   esac
+
+  verify_status="$(curl -sS -o "${response_file}" -w "%{http_code}" \
+    "${DASHBOARDS_URL}/api/saved_objects/index-pattern/${object_id}" || true)"
+  if [ "${verify_status}" != "200" ]; then
+    echo "Dashboards did not persist index pattern ${title} (HTTP ${verify_status})." >&2
+    cat "${response_file}" >&2 || true
+    return 1
+  fi
 }
 
 wait_for_service "OpenSearch" "${OPENSEARCH_URL}/_cluster/health"
