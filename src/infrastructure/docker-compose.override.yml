@@ -84,8 +84,8 @@ services:
       - monitoring-net
     restart: "no"
 
-  # Create CPU and memory detectors only after the complete telemetry contract
-  # has been validated against real documents from all five machines.
+  # Create CPU and memory HCAD detectors only after enough real Telegraf
+  # samples are available and the complete telemetry contract is valid.
   opensearch-detectors-init:
     image: curlimages/curl:8.10.1
     container_name: agentic-opensearch-detectors-init
@@ -94,7 +94,7 @@ services:
       - OPENSEARCH_USERNAME=
       - OPENSEARCH_PASSWORD=
       - DETECTOR_WAIT_SECONDS=180
-      - DETECTOR_MIN_DOCUMENTS=5
+      - DETECTOR_MIN_DOCUMENTS=20
     volumes:
       - ./opensearch/init/create-anomaly-detectors.sh:/create-anomaly-detectors.sh:ro
     command: ["sh", "/create-anomaly-detectors.sh"]
