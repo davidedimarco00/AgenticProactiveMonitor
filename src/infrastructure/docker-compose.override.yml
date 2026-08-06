@@ -15,8 +15,8 @@ services:
       - OPENSEARCH_HOSTS=["http://opensearch:9200"]
       - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
 
-  # Phase 1: install templates and create the physical bootstrap indexes before
-  # any monitored machine is allowed to send telemetry. This prevents dynamic
+  # Install templates and create the physical bootstrap indexes before any
+  # monitored machine is allowed to send telemetry. This prevents dynamic
   # mappings from winning the startup race.
   opensearch-init:
     environment:
@@ -50,41 +50,9 @@ services:
       opensearch-init:
         condition: service_completed_successfully
 
-  # Laboratory-only cold-start accelerator. OpenSearch RCF normally needs about
-  # 32 one-minute feature vectors for every entity. This service creates a
-  # bounded historical baseline with the same structure as native Telegraf
-  # documents, while the machines continue to provide the real live metrics.
-  opensearch-ad-warmup:
-    image: curlimages/curl:8.10.1
-    container_name: agentic-opensearch-ad-warmup
-    environment:
-      - OPENSEARCH_URL=http://opensearch:9200
-      - AD_WARMUP_ENABLED=${AD_WARMUP_ENABLED:-true}
-      - AD_WARMUP_MINUTES=${AD_WARMUP_MINUTES:-60}
-      - AD_WARMUP_END_OFFSET_MINUTES=${AD_WARMUP_END_OFFSET_MINUTES:-3}
-    volumes:
-      - ./opensearch/init/seed-anomaly-warmup-data.sh:/seed-anomaly-warmup-data.sh:ro
-    command: ["sh", "/seed-anomaly-warmup-data.sh"]
-    depends_on:
-      opensearch-init:
-        condition: service_completed_successfully
-      machine-01:
-        condition: service_started
-      machine-02:
-        condition: service_started
-      machine-03:
-        condition: service_started
-      machine-04:
-        condition: service_started
-      machine-05:
-        condition: service_started
-    networks:
-      - monitoring-net
-    restart: "no"
-
-  # Phase 2: wait for real Telegraf samples, then create and start the CPU and
-  # memory high-cardinality detectors. API-created detectors are immediately
-  # visible in the OpenSearch Dashboards Anomaly Detection application.
+  # Wait for real Telegraf samples, then create and start the CPU and memory
+  # single-entity detectors. This reproduces the detector configuration already
+  # validated in the laboratory and avoids the long HCAD per-entity cold start.
   opensearch-detectors-init:
     image: curlimages/curl:8.10.1
     container_name: agentic-opensearch-detectors-init
@@ -98,7 +66,7 @@ services:
       - ./opensearch/init/create-anomaly-detectors.sh:/create-anomaly-detectors.sh:ro
     command: ["sh", "/create-anomaly-detectors.sh"]
     depends_on:
-      opensearch-ad-warmup:
+      opensearch-init:
         condition: service_completed_successfully
       machine-01:
         condition: service_started
