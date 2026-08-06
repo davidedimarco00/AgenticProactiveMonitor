@@ -12,7 +12,7 @@ x-monitored-machine: &monitored-machine
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-3.7.0}
+    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-3.6.0}
     container_name: agentic-opensearch
     environment:
       cluster.name: agentic-monitor-cluster
@@ -41,7 +41,7 @@ services:
       start_period: 30s
 
   opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:${OPENSEARCH_DASHBOARDS_VERSION:-3.7.0}
+    image: opensearchproject/opensearch-dashboards:${OPENSEARCH_DASHBOARDS_VERSION:-3.6.0}
     container_name: agentic-opensearch-dashboards
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
@@ -129,6 +129,33 @@ services:
       LATENCY_MIN: 50
       LATENCY_MAX: 1300
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
+
+  opensearch-dashboards-init:
+    image: curlimages/curl:8.10.1
+    container_name: agentic-opensearch-dashboards-init
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+      DASHBOARDS_URL: http://opensearch-dashboards:5601
+      DASHBOARDS_WAIT_SECONDS: ${DASHBOARDS_WAIT_SECONDS:-300}
+    volumes:
+      - ./opensearch-dashboards/init/create-index-patterns.sh:/create-index-patterns.sh:ro
+    command: ["sh", "/create-index-patterns.sh"]
+    depends_on:
+      opensearch-dashboards:
+        condition: service_started
+      machine-01:
+        condition: service_healthy
+      machine-02:
+        condition: service_healthy
+      machine-03:
+        condition: service_healthy
+      machine-04:
+        condition: service_healthy
+      machine-05:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+    restart: "no"
 
   opensearch-detectors-init:
     image: curlimages/curl:8.10.1
