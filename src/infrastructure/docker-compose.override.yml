@@ -15,24 +15,73 @@ services:
       - OPENSEARCH_HOSTS=["http://opensearch:9200"]
       - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
 
+  # Phase 1: install templates and create the physical bootstrap indexes before
+  # any monitored machine is allowed to send telemetry. This prevents dynamic
+  # mappings from winning the startup race.
   opensearch-init:
     environment:
       - OPENSEARCH_URL=http://opensearch:9200
       - OPENSEARCH_USERNAME=
       - OPENSEARCH_PASSWORD=
+    command: ["sh", "/create-index-templates.sh"]
+
+  machine-01:
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+
+  machine-02:
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+
+  machine-03:
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+
+  machine-04:
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+
+  machine-05:
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+
+  # Phase 2: wait for real Telegraf samples, then create and start the CPU and
+  # memory high-cardinality detectors. API-created detectors are immediately
+  # visible in the OpenSearch Dashboards Anomaly Detection application.
+  opensearch-detectors-init:
+    image: curlimages/curl:8.10.1
+    container_name: agentic-opensearch-detectors-init
+    environment:
+      - OPENSEARCH_URL=http://opensearch:9200
+      - OPENSEARCH_USERNAME=
+      - OPENSEARCH_PASSWORD=
       - DETECTOR_WAIT_SECONDS=180
+      - DETECTOR_MIN_DOCUMENTS=5
     volumes:
       - ./opensearch/init/create-anomaly-detectors.sh:/create-anomaly-detectors.sh:ro
-    command:
-      [
-        "sh",
-        "-c",
-        "sh /create-index-templates.sh && sh /create-anomaly-detectors.sh",
-      ]
+    command: ["sh", "/create-anomaly-detectors.sh"]
+    depends_on:
+      opensearch-init:
+        condition: service_completed_successfully
+      machine-01:
+        condition: service_started
+      machine-02:
+        condition: service_started
+      machine-03:
+        condition: service_started
+      machine-04:
+        condition: service_started
+      machine-05:
+        condition: service_started
+    networks:
+      - monitoring-net
+    restart: "no"
 
-  # Creates the physical bootstrap indexes and the two Dashboards index patterns.
-  # It is intentionally independent from detector provisioning, so Discover is
-  # available even when the Anomaly Detection initializer is still running.
   opensearch-dashboards-init:
     image: curlimages/curl:8.10.1
     container_name: agentic-opensearch-dashboards-init
@@ -44,8 +93,8 @@ services:
       - ./opensearch-dashboards/init/create-index-patterns.sh:/create-index-patterns.sh:ro
     command: ["sh", "/create-index-patterns.sh"]
     depends_on:
-      opensearch:
-        condition: service_healthy
+      opensearch-init:
+        condition: service_completed_successfully
       opensearch-dashboards:
         condition: service_started
     networks:
@@ -83,7 +132,7 @@ services:
       - XMPP_CRITIC_PASSWORD=${XMPP_CRITIC_PASSWORD:-critic}
       - XMPP_REMEDIATION_PASSWORD=${XMPP_REMEDIATION_PASSWORD:-remediation}
     depends_on:
-      opensearch-init:
+      opensearch-detectors-init:
         condition: service_completed_successfully
       xmpp-init:
         condition: service_completed_successfully
