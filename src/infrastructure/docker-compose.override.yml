@@ -48,9 +48,8 @@ services:
       opensearch-init:
         condition: service_completed_successfully
 
-  # Validate real Telegraf and Fluent Bit documents before creating any
-  # consumer. The job fails explicitly if mappings, nested paths, timestamps,
-  # tags, or five-host coverage do not match the observability contract.
+  # Validate real Telegraf and Fluent Bit documents only after all monitored
+  # machines pass their collector/workload health checks.
   opensearch-telemetry-init:
     image: python:3.12-alpine
     container_name: agentic-opensearch-telemetry-init
@@ -72,15 +71,15 @@ services:
       opensearch-init:
         condition: service_completed_successfully
       machine-01:
-        condition: service_started
+        condition: service_healthy
       machine-02:
-        condition: service_started
+        condition: service_healthy
       machine-03:
-        condition: service_started
+        condition: service_healthy
       machine-04:
-        condition: service_started
+        condition: service_healthy
       machine-05:
-        condition: service_started
+        condition: service_healthy
     networks:
       - monitoring-net
     restart: "no"
@@ -162,3 +161,13 @@ services:
         condition: service_completed_successfully
       xmpp-init:
         condition: service_completed_successfully
+      machine-01:
+        condition: service_healthy
+      machine-02:
+        condition: service_healthy
+      machine-03:
+        condition: service_healthy
+      machine-04:
+        condition: service_healthy
+      machine-05:
+        condition: service_healthy
