@@ -2,9 +2,19 @@
 set -eu
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
+OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-}"
+OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
+
+os_curl() {
+  if [ -n "${OPENSEARCH_USERNAME}" ]; then
+    curl -k -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" "$@"
+  else
+    curl -k "$@"
+  fi
+}
 
 echo "Waiting for OpenSearch..."
-until curl -fsS "${OPENSEARCH_URL}/_cluster/health" >/dev/null; do
+until os_curl -fsS "${OPENSEARCH_URL}/_cluster/health" >/dev/null; do
   echo "OpenSearch is not ready yet..."
   sleep 3
 done
@@ -12,7 +22,7 @@ done
 echo "OpenSearch is available."
 
 echo "Creating metrics index template for the native Telegraf OpenSearch format..."
-curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/metrics-template" \
+os_curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/metrics-template" \
   -H "Content-Type: application/json" \
   -d '{
     "index_patterns": ["metrics-*"],
@@ -23,6 +33,18 @@ curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/metrics-template" \
       },
       "mappings": {
         "dynamic": true,
+        "dynamic_templates": [
+          {
+            "telegraf_tags_as_keywords": {
+              "path_match": "tag.*",
+              "match_mapping_type": "string",
+              "mapping": {
+                "type": "keyword",
+                "ignore_above": 256
+              }
+            }
+          }
+        ],
         "properties": {
           "@timestamp": {"type": "date"},
           "measurement_name": {"type": "keyword"},
@@ -42,46 +64,39 @@ curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/metrics-template" \
           },
           "cpu": {
             "type": "object",
+            "dynamic": true,
             "properties": {
-              "usage_system": {"type": "float"},
-              "usage_user": {"type": "float"},
-              "usage_idle": {"type": "float"},
               "usage_active": {"type": "float"}
             }
           },
           "mem": {
             "type": "object",
-            "properties": {
-              "total": {"type": "long"},
-              "available": {"type": "long"},
-              "used": {"type": "long"},
-              "used_percent": {"type": "float"},
-              "available_percent": {"type": "float"}
-            }
-          },
-          "system": {
-            "type": "object",
             "dynamic": true,
             "properties": {
-              "load1": {"type": "float"},
-              "load5": {"type": "float"},
-              "load15": {"type": "float"}
+              "used_percent": {"type": "float"}
             }
-          }
+          },
+          "disk": {"type": "object", "dynamic": true},
+          "diskio": {"type": "object", "dynamic": true},
+          "net": {"type": "object", "dynamic": true},
+          "system": {"type": "object", "dynamic": true},
+          "swap": {"type": "object", "dynamic": true},
+          "processes": {"type": "object", "dynamic": true},
+          "kernel": {"type": "object", "dynamic": true}
         }
       }
     },
     "priority": 200,
-    "version": 2,
+    "version": 3,
     "_meta": {
-      "description": "Native Telegraf OpenSearch document mapping"
+      "description": "Complete native Telegraf metrics mapping for the thesis monitoring lab"
     }
   }' >/dev/null
 
 echo "Metrics index template created."
 
 echo "Creating logs index template..."
-curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/logs-template" \
+os_curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/logs-template" \
   -H "Content-Type: application/json" \
   -d '{
     "index_patterns": ["logs-*"],
@@ -116,28 +131,30 @@ curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/logs-template" \
         }
       }
     },
-    "priority": 100
+    "priority": 100,
+    "version": 2,
+    "_meta": {
+      "description": "Fluent Bit application and system log mapping for the thesis monitoring lab"
+    }
   }' >/dev/null
 
 echo "Logs index template created."
 
-# Older versions of this project mapped the top-level `cpu` property as a
-# keyword. The Telegraf OpenSearch output actually writes `cpu` as an object,
-# so those indexes reject all CPU documents. In this synthetic thesis lab it is
-# safe to remove only the incompatible metrics indexes and let Telegraf rebuild
-# them automatically using the corrected template.
-for INDEX in $(curl -fsS "${OPENSEARCH_URL}/_cat/indices/metrics-*?h=index" 2>/dev/null || true); do
-  MAPPING="$(curl -sS "${OPENSEARCH_URL}/${INDEX}/_mapping/field/cpu" || true)"
+# Older versions of this project mapped the top-level cpu property as a
+# keyword. Telegraf writes cpu as an object, so those indexes reject CPU data.
+# Only incompatible synthetic-lab metric indexes are removed.
+for INDEX in $(os_curl -fsS "${OPENSEARCH_URL}/_cat/indices/metrics-*?h=index" 2>/dev/null || true); do
+  MAPPING="$(os_curl -sS "${OPENSEARCH_URL}/${INDEX}/_mapping/field/cpu" || true)"
   if echo "${MAPPING}" | grep -q '"type":"keyword"'; then
     echo "Deleting incompatible metrics index ${INDEX} (cpu was mapped as keyword)..."
-    curl -fsS -X DELETE "${OPENSEARCH_URL}/${INDEX}" >/dev/null
+    os_curl -fsS -X DELETE "${OPENSEARCH_URL}/${INDEX}" >/dev/null
   fi
 done
 
-# Materialise both wildcard families immediately. Real daily indexes are then
-# created automatically by Telegraf and Fluent Bit.
+# Materialise both wildcard families immediately. Daily indexes are then
+# created by Telegraf and Fluent Bit with the templates already installed.
 for INDEX in metrics-bootstrap logs-bootstrap; do
-  STATUS="$(curl -sS -o "/tmp/${INDEX}.json" -w "%{http_code}" \
+  STATUS="$(os_curl -sS -o "/tmp/${INDEX}.json" -w "%{http_code}" \
     -X PUT "${OPENSEARCH_URL}/${INDEX}" \
     -H "Content-Type: application/json" -d '{}')"
   case "${STATUS}" in
