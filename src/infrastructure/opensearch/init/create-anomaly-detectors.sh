@@ -6,20 +6,16 @@ OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-}"
 OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
 CONFIG_INDEX="agentic-detector-config"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-180}"
-MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-5}"
+MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-20}"
 
-# This is the detector configuration that previously completed initialization
-# successfully in the laboratory: metrics-*, SINGLE_ENTITY, 5-minute buckets,
-# shingle size 8, 40 historical points, and recency emphasis 2560.
-DETECTION_INTERVAL_MINUTES=5
+DETECTION_INTERVAL_MINUTES=1
 WINDOW_DELAY_MINUTES=1
-SHINGLE_SIZE=8
-HISTORY=40
-RECENCY_EMPHASIS=2560
+SHINGLE_SIZE=4
+CATEGORY_FIELD="tag.host_id"
 
-CPU_DETECTOR_KEY="cpu-single-entity-v3"
+CPU_DETECTOR_KEY="cpu-native-telegraf-v4"
 CPU_DETECTOR_NAME="thesis-cpu-anomaly-detector"
-MEMORY_DETECTOR_KEY="memory-single-entity-v3"
+MEMORY_DETECTOR_KEY="memory-native-telegraf-v2"
 MEMORY_DETECTOR_NAME="thesis-memory-anomaly-detector"
 
 os_curl() {
@@ -54,6 +50,25 @@ wait_for_plugin() {
   return 1
 }
 
+enable_hcad_cold_start_interpolation() {
+  status="$(os_curl -sS -o /tmp/ad-settings.json -w "%{http_code}" \
+    -X PUT "${OPENSEARCH_URL}/_cluster/settings" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "persistent": {
+        "plugins.anomaly_detection.hcad_cold_start_interpolation.enabled": true
+      }
+    }' || true)"
+
+  if [ "$status" != "200" ]; then
+    echo "Unable to enable HCAD cold-start interpolation (HTTP ${status})." >&2
+    cat /tmp/ad-settings.json >&2 || true
+    return 1
+  fi
+
+  echo "HCAD cold-start interpolation is enabled."
+}
+
 create_config_index() {
   status="$(os_curl -sS -o /tmp/config-index.json -w "%{http_code}" \
     -X PUT "${OPENSEARCH_URL}/${CONFIG_INDEX}" \
@@ -67,11 +82,10 @@ create_config_index() {
           "measurement_name": {"type": "keyword"},
           "metric_type": {"type": "keyword"},
           "source_field": {"type": "keyword"},
+          "category_field": {"type": "keyword"},
           "detector_type": {"type": "keyword"},
           "status": {"type": "keyword"},
           "shingle_size": {"type": "integer"},
-          "history": {"type": "integer"},
-          "recency_emphasis": {"type": "integer"},
           "detection_interval_minutes": {"type": "integer"}
         }
       }
@@ -104,7 +118,7 @@ telemetry_document_count() {
   status="$(os_curl -sS -o /tmp/telemetry-count.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/metrics-*/_count" \
     -H "Content-Type: application/json" \
-    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"term\":{\"tag.metric_type\":\"${metric_type}\"}},{\"exists\":{\"field\":\"${source_field}\"}}]}}}" || true)"
+    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"term\":{\"tag.metric_type\":\"${metric_type}\"}},{\"exists\":{\"field\":\"${source_field}\"}},{\"exists\":{\"field\":\"${CATEGORY_FIELD}\"}}]}}}" || true)"
 
   if [ "$status" != "200" ]; then
     echo 0
@@ -150,17 +164,9 @@ stored_detector_id() {
   fi
 }
 
-detector_exists() {
+remove_detector_id() {
   detector_id="$1"
-  status="$(os_curl -sS -o /tmp/detector-get.json -w "%{http_code}" \
-    "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}" || true)"
-  [ "$status" = "200" ]
-}
-
-remove_detector_by_key() {
-  key="$1"
   label="$2"
-  detector_id="$(stored_detector_id "$key" || true)"
 
   [ -n "$detector_id" ] || return 0
 
@@ -181,10 +187,43 @@ remove_detector_by_key() {
       return 1
       ;;
   esac
+}
+
+remove_detector_by_key() {
+  key="$1"
+  label="$2"
+  detector_id="$(stored_detector_id "$key" || true)"
+
+  if [ -n "$detector_id" ]; then
+    remove_detector_id "$detector_id" "$label"
+  fi
 
   os_curl -sS -X DELETE \
     "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
     >/dev/null 2>&1 || true
+}
+
+remove_detectors_by_name() {
+  name="$1"
+
+  status="$(os_curl -sS -o /tmp/detector-search.json -w "%{http_code}" \
+    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search?pretty" \
+    -H "Content-Type: application/json" \
+    -d "{\"size\":100,\"_source\":false,\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" || true)"
+
+  if [ "$status" = "404" ]; then
+    return 0
+  fi
+
+  if [ "$status" != "200" ]; then
+    echo "Unable to search existing detectors named ${name} (HTTP ${status})." >&2
+    cat /tmp/detector-search.json >&2 || true
+    return 1
+  fi
+
+  for detector_id in $(sed -n 's/^[[:space:]]*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/detector-search.json); do
+    remove_detector_id "$detector_id" "$name"
+  done
 }
 
 write_detector_payload() {
@@ -203,8 +242,6 @@ write_detector_payload() {
   "indices": ["metrics-*"],
   "shingle_size": ${SHINGLE_SIZE},
   "schema_version": 0,
-  "recency_emphasis": ${RECENCY_EMPHASIS},
-  "history": ${HISTORY},
   "feature_attributes": [
     {
       "feature_name": "${feature_name}",
@@ -221,7 +258,8 @@ write_detector_payload() {
       "filter": [
         {"term": {"measurement_name": "${measurement}"}},
         {"term": {"tag.metric_type": "${metric_type}"}},
-        {"exists": {"field": "${source_field}"}}
+        {"exists": {"field": "${source_field}"}},
+        {"exists": {"field": "${CATEGORY_FIELD}"}}
       ]
     }
   },
@@ -230,7 +268,8 @@ write_detector_payload() {
   },
   "window_delay": {
     "period": {"interval": ${WINDOW_DELAY_MINUTES}, "unit": "Minutes"}
-  }
+  },
+  "category_field": ["${CATEGORY_FIELD}"]
 }
 JSON
 }
@@ -246,6 +285,12 @@ validate_detector_payload() {
   if [ "$validation_status" != "200" ]; then
     echo "Detector validation failed for ${name} (HTTP ${validation_status})." >&2
     cat /tmp/detector-validation.json >&2 || true
+    return 1
+  fi
+
+  if grep -q '"detector"' /tmp/detector-validation.json; then
+    echo "Detector validation reported a blocking issue for ${name}." >&2
+    cat /tmp/detector-validation.json >&2
     return 1
   fi
 
@@ -300,7 +345,7 @@ create_detector() {
   os_curl -fsS -X PUT \
     "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
     -H "Content-Type: application/json" \
-    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"metric_type\":\"${metric_type}\",\"source_field\":\"${source_field}\",\"detector_type\":\"SINGLE_ENTITY\",\"status\":\"created\",\"shingle_size\":${SHINGLE_SIZE},\"history\":${HISTORY},\"recency_emphasis\":${RECENCY_EMPHASIS},\"detection_interval_minutes\":${DETECTION_INTERVAL_MINUTES}}" \
+    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"metric_type\":\"${metric_type}\",\"source_field\":\"${source_field}\",\"category_field\":\"${CATEGORY_FIELD}\",\"detector_type\":\"MULTI_ENTITY\",\"status\":\"created\",\"shingle_size\":${SHINGLE_SIZE},\"detection_interval_minutes\":${DETECTION_INTERVAL_MINUTES}}" \
     >/dev/null
 
   printf '%s' "$detector_id"
@@ -357,15 +402,9 @@ provision_detector() {
   source_field="$6"
   feature_name="$7"
 
-  detector_id="$(stored_detector_id "$key" || true)"
-
-  if [ -n "$detector_id" ] && detector_exists "$detector_id"; then
-    echo "Reusing ${name} (${detector_id})."
-  else
-    detector_id="$(create_detector \
-      "$key" "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name")"
-    echo "Created ${name} (${detector_id}) with the validated cold-start configuration."
-  fi
+  detector_id="$(create_detector \
+    "$key" "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name")"
+  echo "Created ${name} (${detector_id}) as MULTI_ENTITY grouped by ${CATEGORY_FIELD}."
 
   start_detector "$detector_id" "$name"
   show_profile "$detector_id" "$name"
@@ -373,24 +412,36 @@ provision_detector() {
 
 wait_for_plugin
 create_config_index
+enable_hcad_cold_start_interpolation
 wait_for_telemetry "CPU" "cpu" "cpu" "cpu.usage_active"
 wait_for_telemetry "memory" "mem" "memory" "mem.used_percent"
 
-# Remove all previous detector revisions before provisioning the validated v3
-# definitions. Detector configuration cannot be safely changed while running.
-remove_detector_by_key "cpu-native-telegraf-v1" "legacy CPU"
-remove_detector_by_key "cpu-native-telegraf-v2" "legacy CPU"
-remove_detector_by_key "cpu-native-telegraf-v3" "HCAD CPU"
-remove_detector_by_key "memory-native-telegraf-v1" "HCAD memory"
-remove_detector_by_key "cpu-single-entity-v1" "unfiltered CPU"
-remove_detector_by_key "memory-single-entity-v1" "unfiltered memory"
-remove_detector_by_key "cpu-single-entity-v2" "one-minute CPU"
-remove_detector_by_key "memory-single-entity-v2" "one-minute memory"
+# Delete stale detectors even when their previous registry document is missing.
+remove_detectors_by_name "$CPU_DETECTOR_NAME"
+remove_detectors_by_name "$MEMORY_DETECTOR_NAME"
+
+for key in \
+  cpu-native-telegraf-v1 \
+  cpu-native-telegraf-v2 \
+  cpu-native-telegraf-v3 \
+  cpu-single-entity-v1 \
+  cpu-single-entity-v2 \
+  cpu-single-entity-v3; do
+  remove_detector_by_key "$key" "previous CPU"
+done
+
+for key in \
+  memory-native-telegraf-v1 \
+  memory-single-entity-v1 \
+  memory-single-entity-v2 \
+  memory-single-entity-v3; do
+  remove_detector_by_key "$key" "previous memory"
+done
 
 provision_detector \
   "$CPU_DETECTOR_KEY" \
   "$CPU_DETECTOR_NAME" \
-  "CPU usage detector over native Telegraf cpu documents" \
+  "CPU usage detector grouped by monitored machine" \
   "cpu" \
   "cpu" \
   "cpu.usage_active" \
@@ -399,10 +450,10 @@ provision_detector \
 provision_detector \
   "$MEMORY_DETECTOR_KEY" \
   "$MEMORY_DETECTOR_NAME" \
-  "Memory usage detector over native Telegraf mem documents" \
+  "Memory usage detector grouped by monitored machine" \
   "mem" \
   "memory" \
   "mem.used_percent" \
   "average_memory_used_percent"
 
-echo "CPU and memory detector provisioning completed successfully."
+echo "CPU and memory HCAD detector provisioning completed successfully."
