@@ -2,11 +2,24 @@
 set -eu
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
+OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-}"
+OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
 CONFIG_INDEX="agentic-detector-config"
-OLD_DETECTOR_KEY="cpu-native-telegraf-v1"
-DETECTOR_KEY="cpu-native-telegraf-v2"
-DETECTOR_NAME="thesis-cpu-anomaly-detector"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-180}"
+MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-5}"
+
+CPU_DETECTOR_KEY="cpu-native-telegraf-v3"
+CPU_DETECTOR_NAME="thesis-cpu-anomaly-detector"
+MEMORY_DETECTOR_KEY="memory-native-telegraf-v1"
+MEMORY_DETECTOR_NAME="thesis-memory-anomaly-detector"
+
+os_curl() {
+  if [ -n "${OPENSEARCH_USERNAME}" ]; then
+    curl -k -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" "$@"
+  else
+    curl -k "$@"
+  fi
+}
 
 json_string_value() {
   key="$1"
@@ -16,7 +29,7 @@ json_string_value() {
 wait_for_plugin() {
   elapsed=0
   while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
-    status="$(curl -sS -o /tmp/ad-stats.json -w "%{http_code}" \
+    status="$(os_curl -sS -o /tmp/ad-stats.json -w "%{http_code}" \
       "${OPENSEARCH_URL}/_plugins/_anomaly_detection/stats" || true)"
     if [ "$status" = "200" ]; then
       echo "OpenSearch Anomaly Detection plugin is available."
@@ -32,10 +45,23 @@ wait_for_plugin() {
 }
 
 create_config_index() {
-  status="$(curl -sS -o /tmp/config-index.json -w "%{http_code}" \
+  status="$(os_curl -sS -o /tmp/config-index.json -w "%{http_code}" \
     -X PUT "${OPENSEARCH_URL}/${CONFIG_INDEX}" \
     -H "Content-Type: application/json" \
-    -d '{"settings":{"number_of_shards":1,"number_of_replicas":0},"mappings":{"properties":{"detector_id":{"type":"keyword"},"name":{"type":"keyword"},"source_field":{"type":"keyword"},"category_field":{"type":"keyword"},"status":{"type":"keyword"},"shingle_size":{"type":"integer"}}}}' || true)"
+    -d '{
+      "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+      "mappings": {
+        "properties": {
+          "detector_id": {"type": "keyword"},
+          "name": {"type": "keyword"},
+          "measurement_name": {"type": "keyword"},
+          "source_field": {"type": "keyword"},
+          "category_field": {"type": "keyword"},
+          "status": {"type": "keyword"},
+          "shingle_size": {"type": "integer"}
+        }
+      }
+    }' || true)"
   case "$status" in
     200|201) echo "Created ${CONFIG_INDEX}." ;;
     400)
@@ -51,7 +77,7 @@ create_config_index() {
 }
 
 enable_fast_hcad_cold_start() {
-  status="$(curl -sS -o /tmp/ad-settings.json -w "%{http_code}" \
+  status="$(os_curl -sS -o /tmp/ad-settings.json -w "%{http_code}" \
     -X PUT "${OPENSEARCH_URL}/_cluster/settings" \
     -H "Content-Type: application/json" \
     -d '{"persistent":{"plugins.anomaly_detection.hcad_cold_start_interpolation.enabled":true}}' || true)"
@@ -64,35 +90,48 @@ enable_fast_hcad_cold_start() {
   fi
 }
 
-cpu_document_count() {
-  status="$(curl -sS -o /tmp/cpu-count.json -w "%{http_code}" \
+telemetry_document_count() {
+  measurement="$1"
+  metric_type="$2"
+  source_field="$3"
+
+  status="$(os_curl -sS -o /tmp/telemetry-count.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/metrics-*/_count" \
     -H "Content-Type: application/json" \
-    -d '{"query":{"bool":{"filter":[{"term":{"measurement_name":"cpu"}},{"exists":{"field":"cpu.usage_active"}},{"exists":{"field":"tag.host_id"}}]}}}' || true)"
-  if [ "$status" != "200" ]; then echo 0; return; fi
-  sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' /tmp/cpu-count.json | head -n 1
+    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"term\":{\"tag.metric_type\":\"${metric_type}\"}},{\"exists\":{\"field\":\"${source_field}\"}},{\"exists\":{\"field\":\"tag.host_id\"}}]}}}" || true)"
+  if [ "$status" != "200" ]; then
+    echo 0
+    return
+  fi
+  sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' /tmp/telemetry-count.json | head -n 1
 }
 
-wait_for_cpu_documents() {
+wait_for_telemetry() {
+  label="$1"
+  measurement="$2"
+  metric_type="$3"
+  source_field="$4"
   elapsed=0
+
   while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
-    count="$(cpu_document_count)"
+    count="$(telemetry_document_count "$measurement" "$metric_type" "$source_field")"
     count="${count:-0}"
-    if [ "$count" -ge 20 ]; then
-      echo "Found ${count} valid CPU documents."
+    if [ "$count" -ge "$MIN_DOCUMENTS" ]; then
+      echo "Found ${count} valid ${label} documents."
       return 0
     fi
-    echo "Waiting for CPU telemetry (${count}/20 documents)..."
+    echo "Waiting for ${label} telemetry (${count}/${MIN_DOCUMENTS} documents)..."
     sleep 5
     elapsed=$((elapsed + 5))
   done
-  echo "Not enough CPU telemetry arrived within ${WAIT_SECONDS}s." >&2
+
+  echo "Not enough ${label} telemetry arrived within ${WAIT_SECONDS}s." >&2
   return 1
 }
 
 stored_detector_id() {
   key="$1"
-  status="$(curl -sS -o /tmp/stored-detector.json -w "%{http_code}" \
+  status="$(os_curl -sS -o /tmp/stored-detector.json -w "%{http_code}" \
     "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}" || true)"
   if [ "$status" = "200" ]; then
     json_string_value detector_id </tmp/stored-detector.json
@@ -101,19 +140,22 @@ stored_detector_id() {
 
 detector_exists() {
   detector_id="$1"
-  status="$(curl -sS -o /tmp/detector-get.json -w "%{http_code}" \
+  status="$(os_curl -sS -o /tmp/detector-get.json -w "%{http_code}" \
     "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}" || true)"
   [ "$status" = "200" ]
 }
 
-remove_detector() {
-  detector_id="$1"
+remove_detector_by_key() {
+  key="$1"
   label="$2"
+  detector_id="$(stored_detector_id "$key" || true)"
   [ -n "$detector_id" ] || return 0
-  curl -sS -X POST \
+
+  os_curl -sS -X POST \
     "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_stop" \
     >/dev/null 2>&1 || true
-  status="$(curl -sS -o /tmp/detector-delete.json -w "%{http_code}" \
+
+  status="$(os_curl -sS -o /tmp/detector-delete.json -w "%{http_code}" \
     -X DELETE "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}" || true)"
   case "$status" in
     200|404) echo "Removed ${label} detector ${detector_id}." ;;
@@ -123,34 +165,36 @@ remove_detector() {
       return 1
       ;;
   esac
-}
 
-migrate_old_detector() {
-  old_id="$(stored_detector_id "$OLD_DETECTOR_KEY" || true)"
-  if [ -n "$old_id" ]; then
-    remove_detector "$old_id" "old initializing"
-    curl -sS -X DELETE \
-      "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${OLD_DETECTOR_KEY}?refresh=true" \
-      >/dev/null 2>&1 || true
-  fi
+  os_curl -sS -X DELETE \
+    "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
+    >/dev/null 2>&1 || true
 }
 
 create_detector() {
-  cat >/tmp/cpu-detector.json <<'JSON'
+  key="$1"
+  name="$2"
+  description="$3"
+  measurement="$4"
+  metric_type="$5"
+  source_field="$6"
+  feature_name="$7"
+
+  cat >/tmp/detector.json <<JSON
 {
-  "name": "thesis-cpu-anomaly-detector",
-  "description": "Fast cold-start CPU anomaly detector for the five thesis-lab machines",
+  "name": "${name}",
+  "description": "${description}",
   "time_field": "@timestamp",
   "indices": ["metrics-*"],
   "shingle_size": 4,
   "schema_version": 0,
   "feature_attributes": [
     {
-      "feature_name": "average_cpu_usage_active",
+      "feature_name": "${feature_name}",
       "feature_enabled": true,
       "aggregation_query": {
-        "average_cpu_usage_active": {
-          "avg": {"field": "cpu.usage_active"}
+        "${feature_name}": {
+          "avg": {"field": "${source_field}"}
         }
       }
     }
@@ -158,8 +202,9 @@ create_detector() {
   "filter_query": {
     "bool": {
       "filter": [
-        {"term": {"measurement_name": "cpu"}},
-        {"exists": {"field": "cpu.usage_active"}},
+        {"term": {"measurement_name": "${measurement}"}},
+        {"term": {"tag.metric_type": "${metric_type}"}},
+        {"exists": {"field": "${source_field}"}},
         {"exists": {"field": "tag.host_id"}}
       ]
     }
@@ -174,36 +219,36 @@ create_detector() {
 }
 JSON
 
-  validation_status="$(curl -sS -o /tmp/cpu-detector-validation.json -w "%{http_code}" \
+  validation_status="$(os_curl -sS -o /tmp/detector-validation.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_validate/detector" \
     -H "Content-Type: application/json" \
-    --data-binary @/tmp/cpu-detector.json || true)"
+    --data-binary @/tmp/detector.json || true)"
   if [ "$validation_status" != "200" ]; then
-    echo "CPU detector validation failed (HTTP ${validation_status})." >&2
-    cat /tmp/cpu-detector-validation.json >&2 || true
+    echo "Detector validation failed for ${name} (HTTP ${validation_status})." >&2
+    cat /tmp/detector-validation.json >&2 || true
     return 1
   fi
 
-  status="$(curl -sS -o /tmp/cpu-detector-create.json -w "%{http_code}" \
+  status="$(os_curl -sS -o /tmp/detector-create.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors" \
     -H "Content-Type: application/json" \
-    --data-binary @/tmp/cpu-detector.json || true)"
+    --data-binary @/tmp/detector.json || true)"
   case "$status" in
     200|201) ;;
     *)
-      echo "Unable to create ${DETECTOR_NAME} (HTTP ${status})." >&2
-      cat /tmp/cpu-detector-create.json >&2 || true
+      echo "Unable to create ${name} (HTTP ${status})." >&2
+      cat /tmp/detector-create.json >&2 || true
       return 1
       ;;
   esac
 
-  detector_id="$(json_string_value _id </tmp/cpu-detector-create.json)"
-  [ -n "$detector_id" ] || { cat /tmp/cpu-detector-create.json >&2; return 1; }
+  detector_id="$(json_string_value _id </tmp/detector-create.json)"
+  [ -n "$detector_id" ] || { cat /tmp/detector-create.json >&2; return 1; }
 
-  curl -fsS -X PUT \
-    "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${DETECTOR_KEY}?refresh=true" \
+  os_curl -fsS -X PUT \
+    "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
     -H "Content-Type: application/json" \
-    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${DETECTOR_NAME}\",\"source_field\":\"cpu.usage_active\",\"category_field\":\"tag.host_id\",\"status\":\"created\",\"shingle_size\":4}" \
+    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"source_field\":\"${source_field}\",\"category_field\":\"tag.host_id\",\"status\":\"created\",\"shingle_size\":4}" \
     >/dev/null
 
   printf '%s' "$detector_id"
@@ -211,49 +256,84 @@ JSON
 
 start_detector() {
   detector_id="$1"
-  status="$(curl -sS -o /tmp/cpu-detector-start.json -w "%{http_code}" \
+  name="$2"
+  status="$(os_curl -sS -o /tmp/detector-start.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start" || true)"
   case "$status" in
-    200|201) echo "Started ${DETECTOR_NAME} (${detector_id})." ;;
+    200|201) echo "Started ${name} (${detector_id})." ;;
     400)
-      if grep -Eqi 'already|running|scheduled|enabled' /tmp/cpu-detector-start.json; then
-        echo "${DETECTOR_NAME} is already running or scheduled."
+      if grep -Eqi 'already|running|scheduled|enabled' /tmp/detector-start.json; then
+        echo "${name} is already running or scheduled."
       else
-        cat /tmp/cpu-detector-start.json >&2
+        cat /tmp/detector-start.json >&2
         return 1
       fi
       ;;
-    *) cat /tmp/cpu-detector-start.json >&2 || true; return 1 ;;
+    *) cat /tmp/detector-start.json >&2 || true; return 1 ;;
   esac
 }
 
 show_profile() {
   detector_id="$1"
-  sleep 3
-  status="$(curl -sS -o /tmp/cpu-detector-profile.json -w "%{http_code}" \
+  name="$2"
+  sleep 2
+  status="$(os_curl -sS -o /tmp/detector-profile.json -w "%{http_code}" \
     "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_profile?_all=true&pretty" || true)"
   if [ "$status" = "200" ]; then
-    echo "Initial detector profile:"
-    cat /tmp/cpu-detector-profile.json
+    echo "Initial profile for ${name}:"
+    cat /tmp/detector-profile.json
   else
-    echo "Detector profile is not available yet (HTTP ${status})."
+    echo "Detector profile for ${name} is not available yet (HTTP ${status})."
   fi
+}
+
+provision_detector() {
+  key="$1"
+  name="$2"
+  description="$3"
+  measurement="$4"
+  metric_type="$5"
+  source_field="$6"
+  feature_name="$7"
+
+  detector_id="$(stored_detector_id "$key" || true)"
+  if [ -n "$detector_id" ] && detector_exists "$detector_id"; then
+    echo "Reusing ${name} (${detector_id})."
+  else
+    detector_id="$(create_detector "$key" "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name")"
+    echo "Created ${name} (${detector_id}) with shingle size 4."
+  fi
+
+  start_detector "$detector_id" "$name"
+  show_profile "$detector_id" "$name"
 }
 
 wait_for_plugin
 create_config_index
 enable_fast_hcad_cold_start
-wait_for_cpu_documents
-migrate_old_detector
+wait_for_telemetry "CPU" "cpu" "cpu" "cpu.usage_active"
+wait_for_telemetry "memory" "mem" "memory" "mem.used_percent"
 
-detector_id="$(stored_detector_id "$DETECTOR_KEY" || true)"
-if [ -n "$detector_id" ] && detector_exists "$detector_id"; then
-  echo "Reusing ${DETECTOR_NAME} (${detector_id})."
-else
-  detector_id="$(create_detector)"
-  echo "Created ${DETECTOR_NAME} (${detector_id}) with shingle size 4."
-fi
+# Migrate detector definitions created by earlier infrastructure revisions.
+remove_detector_by_key "cpu-native-telegraf-v1" "legacy CPU"
+remove_detector_by_key "cpu-native-telegraf-v2" "legacy CPU"
 
-start_detector "$detector_id"
-show_profile "$detector_id"
-echo "CPU anomaly detector provisioning completed successfully."
+provision_detector \
+  "$CPU_DETECTOR_KEY" \
+  "$CPU_DETECTOR_NAME" \
+  "CPU usage anomaly detector grouped by monitored machine" \
+  "cpu" \
+  "cpu" \
+  "cpu.usage_active" \
+  "average_cpu_usage_active"
+
+provision_detector \
+  "$MEMORY_DETECTOR_KEY" \
+  "$MEMORY_DETECTOR_NAME" \
+  "Memory usage anomaly detector grouped by monitored machine" \
+  "mem" \
+  "memory" \
+  "mem.used_percent" \
+  "average_memory_used_percent"
+
+echo "CPU and memory anomaly detector provisioning completed successfully."
