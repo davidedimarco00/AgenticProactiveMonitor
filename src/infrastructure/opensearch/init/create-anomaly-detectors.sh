@@ -31,15 +31,22 @@ json_string_value() {
   sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1
 }
 
+is_valid_detector_id() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_-]+$'
+}
+
 wait_for_plugin() {
   elapsed=0
+
   while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
     status="$(os_curl -sS -o /tmp/ad-stats.json -w "%{http_code}" \
       "${OPENSEARCH_URL}/_plugins/_anomaly_detection/stats" || true)"
+
     if [ "$status" = "200" ]; then
       echo "OpenSearch Anomaly Detection plugin is available."
       return 0
     fi
+
     echo "Waiting for the OpenSearch Anomaly Detection plugin..."
     sleep 3
     elapsed=$((elapsed + 3))
@@ -74,7 +81,10 @@ create_config_index() {
     -X PUT "${OPENSEARCH_URL}/${CONFIG_INDEX}" \
     -H "Content-Type: application/json" \
     -d '{
-      "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+      "settings": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0
+      },
       "mappings": {
         "properties": {
           "detector_id": {"type": "keyword"},
@@ -104,6 +114,7 @@ create_config_index() {
       fi
       ;;
     *)
+      echo "Unable to create ${CONFIG_INDEX} (HTTP ${status})." >&2
       cat /tmp/config-index.json >&2 || true
       return 1
       ;;
@@ -169,6 +180,11 @@ remove_detector_id() {
   label="$2"
 
   [ -n "$detector_id" ] || return 0
+
+  if ! is_valid_detector_id "$detector_id"; then
+    echo "Ignoring invalid stored detector ID for ${label}: ${detector_id}" >&2
+    return 0
+  fi
 
   os_curl -sS -X POST \
     "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_stop" \
@@ -264,10 +280,16 @@ write_detector_payload() {
     }
   },
   "detection_interval": {
-    "period": {"interval": ${DETECTION_INTERVAL_MINUTES}, "unit": "Minutes"}
+    "period": {
+      "interval": ${DETECTION_INTERVAL_MINUTES},
+      "unit": "Minutes"
+    }
   },
   "window_delay": {
-    "period": {"interval": ${WINDOW_DELAY_MINUTES}, "unit": "Minutes"}
+    "period": {
+      "interval": ${WINDOW_DELAY_MINUTES},
+      "unit": "Minutes"
+    }
   },
   "category_field": ["${CATEGORY_FIELD}"]
 }
@@ -299,9 +321,13 @@ validate_detector_payload() {
     -H "Content-Type: application/json" \
     --data-binary @/tmp/detector.json || true)"
 
+  # Model validation may return advisory warnings, such as sparse historical
+  # buckets. They must remain visible in the logs but must never be written to
+  # stdout because create_detector is called inside command substitution and
+  # stdout is reserved exclusively for the detector ID.
   if [ "$model_validation_status" = "200" ]; then
-    echo "Model validation for ${name}:"
-    cat /tmp/detector-model-validation.json
+    echo "Model validation for ${name}:" >&2
+    cat /tmp/detector-model-validation.json >&2
   else
     echo "Model validation endpoint returned HTTP ${model_validation_status} for ${name}." >&2
     cat /tmp/detector-model-validation.json >&2 || true
@@ -337,10 +363,12 @@ create_detector() {
   esac
 
   detector_id="$(json_string_value _id </tmp/detector-create.json)"
-  [ -n "$detector_id" ] || {
-    cat /tmp/detector-create.json >&2
+
+  if [ -z "$detector_id" ] || ! is_valid_detector_id "$detector_id"; then
+    echo "OpenSearch returned an invalid detector ID for ${name}: ${detector_id}" >&2
+    cat /tmp/detector-create.json >&2 || true
     return 1
-  }
+  fi
 
   os_curl -fsS -X PUT \
     "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
@@ -348,6 +376,7 @@ create_detector() {
     -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"metric_type\":\"${metric_type}\",\"source_field\":\"${source_field}\",\"category_field\":\"${CATEGORY_FIELD}\",\"detector_type\":\"MULTI_ENTITY\",\"status\":\"created\",\"shingle_size\":${SHINGLE_SIZE},\"detection_interval_minutes\":${DETECTION_INTERVAL_MINUTES}}" \
     >/dev/null
 
+  # Do not print anything else to stdout from this function.
   printf '%s' "$detector_id"
 }
 
@@ -355,6 +384,12 @@ start_detector() {
   detector_id="$1"
   name="$2"
 
+  if ! is_valid_detector_id "$detector_id"; then
+    echo "Refusing to start ${name}: invalid detector ID ${detector_id}" >&2
+    return 1
+  fi
+
+  rm -f /tmp/detector-start.json
   status="$(os_curl -sS -o /tmp/detector-start.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start" || true)"
 
@@ -363,14 +398,17 @@ start_detector() {
       echo "Started ${name} (${detector_id})."
       ;;
     400)
-      if grep -Eqi 'already|running|scheduled|enabled' /tmp/detector-start.json; then
+      if [ -f /tmp/detector-start.json ] && \
+        grep -Eqi 'already|running|scheduled|enabled' /tmp/detector-start.json; then
         echo "${name} is already running or scheduled."
       else
-        cat /tmp/detector-start.json >&2
+        echo "Unable to start ${name} (${detector_id}); HTTP ${status}." >&2
+        cat /tmp/detector-start.json >&2 || true
         return 1
       fi
       ;;
     *)
+      echo "Unable to start ${name} (${detector_id}); HTTP ${status:-unknown}." >&2
       cat /tmp/detector-start.json >&2 || true
       return 1
       ;;
@@ -404,8 +442,13 @@ provision_detector() {
 
   detector_id="$(create_detector \
     "$key" "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name")"
-  echo "Created ${name} (${detector_id}) as MULTI_ENTITY grouped by ${CATEGORY_FIELD}."
 
+  if ! is_valid_detector_id "$detector_id"; then
+    echo "Provisioning returned an invalid detector ID for ${name}: ${detector_id}" >&2
+    return 1
+  fi
+
+  echo "Created ${name} (${detector_id}) as MULTI_ENTITY grouped by ${CATEGORY_FIELD}."
   start_detector "$detector_id" "$name"
   show_profile "$detector_id" "$name"
 }
@@ -424,6 +467,7 @@ for key in \
   cpu-native-telegraf-v1 \
   cpu-native-telegraf-v2 \
   cpu-native-telegraf-v3 \
+  cpu-native-telegraf-v4 \
   cpu-single-entity-v1 \
   cpu-single-entity-v2 \
   cpu-single-entity-v3; do
@@ -432,6 +476,7 @@ done
 
 for key in \
   memory-native-telegraf-v1 \
+  memory-native-telegraf-v2 \
   memory-single-entity-v1 \
   memory-single-entity-v2 \
   memory-single-entity-v3; do
