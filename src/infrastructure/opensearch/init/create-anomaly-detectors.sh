@@ -8,9 +8,18 @@ CONFIG_INDEX="agentic-detector-config"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-180}"
 MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-5}"
 
-CPU_DETECTOR_KEY="cpu-single-entity-v2"
+# This is the detector configuration that previously completed initialization
+# successfully in the laboratory: metrics-*, SINGLE_ENTITY, 5-minute buckets,
+# shingle size 8, 40 historical points, and recency emphasis 2560.
+DETECTION_INTERVAL_MINUTES=5
+WINDOW_DELAY_MINUTES=1
+SHINGLE_SIZE=8
+HISTORY=40
+RECENCY_EMPHASIS=2560
+
+CPU_DETECTOR_KEY="cpu-single-entity-v3"
 CPU_DETECTOR_NAME="thesis-cpu-anomaly-detector"
-MEMORY_DETECTOR_KEY="memory-single-entity-v2"
+MEMORY_DETECTOR_KEY="memory-single-entity-v3"
 MEMORY_DETECTOR_NAME="thesis-memory-anomaly-detector"
 
 os_curl() {
@@ -60,7 +69,10 @@ create_config_index() {
           "source_field": {"type": "keyword"},
           "detector_type": {"type": "keyword"},
           "status": {"type": "keyword"},
-          "shingle_size": {"type": "integer"}
+          "shingle_size": {"type": "integer"},
+          "history": {"type": "integer"},
+          "recency_emphasis": {"type": "integer"},
+          "detection_interval_minutes": {"type": "integer"}
         }
       }
     }' || true)"
@@ -175,14 +187,13 @@ remove_detector_by_key() {
     >/dev/null 2>&1 || true
 }
 
-create_detector() {
-  key="$1"
-  name="$2"
-  description="$3"
-  measurement="$4"
-  metric_type="$5"
-  source_field="$6"
-  feature_name="$7"
+write_detector_payload() {
+  name="$1"
+  description="$2"
+  measurement="$3"
+  metric_type="$4"
+  source_field="$5"
+  feature_name="$6"
 
   cat >/tmp/detector.json <<JSON
 {
@@ -190,8 +201,10 @@ create_detector() {
   "description": "${description}",
   "time_field": "@timestamp",
   "indices": ["metrics-*"],
-  "shingle_size": 4,
+  "shingle_size": ${SHINGLE_SIZE},
   "schema_version": 0,
+  "recency_emphasis": ${RECENCY_EMPHASIS},
+  "history": ${HISTORY},
   "feature_attributes": [
     {
       "feature_name": "${feature_name}",
@@ -213,13 +226,17 @@ create_detector() {
     }
   },
   "detection_interval": {
-    "period": {"interval": 1, "unit": "Minutes"}
+    "period": {"interval": ${DETECTION_INTERVAL_MINUTES}, "unit": "Minutes"}
   },
   "window_delay": {
-    "period": {"interval": 1, "unit": "Minutes"}
+    "period": {"interval": ${WINDOW_DELAY_MINUTES}, "unit": "Minutes"}
   }
 }
 JSON
+}
+
+validate_detector_payload() {
+  name="$1"
 
   validation_status="$(os_curl -sS -o /tmp/detector-validation.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_validate/detector" \
@@ -231,6 +248,33 @@ JSON
     cat /tmp/detector-validation.json >&2 || true
     return 1
   fi
+
+  model_validation_status="$(os_curl -sS -o /tmp/detector-model-validation.json -w "%{http_code}" \
+    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_validate/model" \
+    -H "Content-Type: application/json" \
+    --data-binary @/tmp/detector.json || true)"
+
+  if [ "$model_validation_status" = "200" ]; then
+    echo "Model validation for ${name}:"
+    cat /tmp/detector-model-validation.json
+  else
+    echo "Model validation endpoint returned HTTP ${model_validation_status} for ${name}." >&2
+    cat /tmp/detector-model-validation.json >&2 || true
+  fi
+}
+
+create_detector() {
+  key="$1"
+  name="$2"
+  description="$3"
+  measurement="$4"
+  metric_type="$5"
+  source_field="$6"
+  feature_name="$7"
+
+  write_detector_payload \
+    "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name"
+  validate_detector_payload "$name"
 
   status="$(os_curl -sS -o /tmp/detector-create.json -w "%{http_code}" \
     -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors" \
@@ -256,7 +300,7 @@ JSON
   os_curl -fsS -X PUT \
     "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
     -H "Content-Type: application/json" \
-    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"metric_type\":\"${metric_type}\",\"source_field\":\"${source_field}\",\"detector_type\":\"SINGLE_ENTITY\",\"status\":\"created\",\"shingle_size\":4}" \
+    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"metric_type\":\"${metric_type}\",\"source_field\":\"${source_field}\",\"detector_type\":\"SINGLE_ENTITY\",\"status\":\"created\",\"shingle_size\":${SHINGLE_SIZE},\"history\":${HISTORY},\"recency_emphasis\":${RECENCY_EMPHASIS},\"detection_interval_minutes\":${DETECTION_INTERVAL_MINUTES}}" \
     >/dev/null
 
   printf '%s' "$detector_id"
@@ -320,7 +364,7 @@ provision_detector() {
   else
     detector_id="$(create_detector \
       "$key" "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name")"
-    echo "Created ${name} (${detector_id}) as SINGLE_ENTITY with exact Telegraf filter."
+    echo "Created ${name} (${detector_id}) with the validated cold-start configuration."
   fi
 
   start_detector "$detector_id" "$name"
@@ -332,14 +376,16 @@ create_config_index
 wait_for_telemetry "CPU" "cpu" "cpu" "cpu.usage_active"
 wait_for_telemetry "memory" "mem" "memory" "mem.used_percent"
 
-# Detector filters and category fields cannot be changed while preserving the
-# old detector definition. Remove all earlier revisions before provisioning v2.
+# Remove all previous detector revisions before provisioning the validated v3
+# definitions. Detector configuration cannot be safely changed while running.
 remove_detector_by_key "cpu-native-telegraf-v1" "legacy CPU"
 remove_detector_by_key "cpu-native-telegraf-v2" "legacy CPU"
 remove_detector_by_key "cpu-native-telegraf-v3" "HCAD CPU"
 remove_detector_by_key "memory-native-telegraf-v1" "HCAD memory"
 remove_detector_by_key "cpu-single-entity-v1" "unfiltered CPU"
 remove_detector_by_key "memory-single-entity-v1" "unfiltered memory"
+remove_detector_by_key "cpu-single-entity-v2" "one-minute CPU"
+remove_detector_by_key "memory-single-entity-v2" "one-minute memory"
 
 provision_detector \
   "$CPU_DETECTOR_KEY" \
