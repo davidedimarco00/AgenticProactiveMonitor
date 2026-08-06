@@ -8,9 +8,9 @@ CONFIG_INDEX="agentic-detector-config"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-180}"
 MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-5}"
 
-CPU_DETECTOR_KEY="cpu-single-entity-v1"
+CPU_DETECTOR_KEY="cpu-single-entity-v2"
 CPU_DETECTOR_NAME="thesis-cpu-anomaly-detector"
-MEMORY_DETECTOR_KEY="memory-single-entity-v1"
+MEMORY_DETECTOR_KEY="memory-single-entity-v2"
 MEMORY_DETECTOR_NAME="thesis-memory-anomaly-detector"
 
 os_curl() {
@@ -56,6 +56,7 @@ create_config_index() {
           "detector_id": {"type": "keyword"},
           "name": {"type": "keyword"},
           "measurement_name": {"type": "keyword"},
+          "metric_type": {"type": "keyword"},
           "source_field": {"type": "keyword"},
           "detector_type": {"type": "keyword"},
           "status": {"type": "keyword"},
@@ -179,8 +180,9 @@ create_detector() {
   name="$2"
   description="$3"
   measurement="$4"
-  source_field="$5"
-  feature_name="$6"
+  metric_type="$5"
+  source_field="$6"
+  feature_name="$7"
 
   cat >/tmp/detector.json <<JSON
 {
@@ -202,7 +204,13 @@ create_detector() {
     }
   ],
   "filter_query": {
-    "match_all": {"boost": 1.0}
+    "bool": {
+      "filter": [
+        {"term": {"measurement_name": "${measurement}"}},
+        {"term": {"tag.metric_type": "${metric_type}"}},
+        {"exists": {"field": "${source_field}"}}
+      ]
+    }
   },
   "detection_interval": {
     "period": {"interval": 1, "unit": "Minutes"}
@@ -248,7 +256,7 @@ JSON
   os_curl -fsS -X PUT \
     "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
     -H "Content-Type: application/json" \
-    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"source_field\":\"${source_field}\",\"detector_type\":\"SINGLE_ENTITY\",\"status\":\"created\",\"shingle_size\":4}" \
+    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"metric_type\":\"${metric_type}\",\"source_field\":\"${source_field}\",\"detector_type\":\"SINGLE_ENTITY\",\"status\":\"created\",\"shingle_size\":4}" \
     >/dev/null
 
   printf '%s' "$detector_id"
@@ -301,8 +309,9 @@ provision_detector() {
   name="$2"
   description="$3"
   measurement="$4"
-  source_field="$5"
-  feature_name="$6"
+  metric_type="$5"
+  source_field="$6"
+  feature_name="$7"
 
   detector_id="$(stored_detector_id "$key" || true)"
 
@@ -310,8 +319,8 @@ provision_detector() {
     echo "Reusing ${name} (${detector_id})."
   else
     detector_id="$(create_detector \
-      "$key" "$name" "$description" "$measurement" "$source_field" "$feature_name")"
-    echo "Created ${name} (${detector_id}) as SINGLE_ENTITY with shingle size 4."
+      "$key" "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name")"
+    echo "Created ${name} (${detector_id}) as SINGLE_ENTITY with exact Telegraf filter."
   fi
 
   start_detector "$detector_id" "$name"
@@ -323,28 +332,31 @@ create_config_index
 wait_for_telemetry "CPU" "cpu" "cpu" "cpu.usage_active"
 wait_for_telemetry "memory" "mem" "memory" "mem.used_percent"
 
-# Remove all detector definitions from the previous HCAD revisions. The
-# category field cannot be changed after detector creation, so they must be
-# deleted and recreated as single-entity detectors.
+# Detector filters and category fields cannot be changed while preserving the
+# old detector definition. Remove all earlier revisions before provisioning v2.
 remove_detector_by_key "cpu-native-telegraf-v1" "legacy CPU"
 remove_detector_by_key "cpu-native-telegraf-v2" "legacy CPU"
 remove_detector_by_key "cpu-native-telegraf-v3" "HCAD CPU"
 remove_detector_by_key "memory-native-telegraf-v1" "HCAD memory"
+remove_detector_by_key "cpu-single-entity-v1" "unfiltered CPU"
+remove_detector_by_key "memory-single-entity-v1" "unfiltered memory"
 
 provision_detector \
   "$CPU_DETECTOR_KEY" \
   "$CPU_DETECTOR_NAME" \
-  "Fast single-entity CPU detector based on the validated laboratory configuration" \
+  "CPU usage detector over native Telegraf cpu documents" \
+  "cpu" \
   "cpu" \
   "cpu.usage_active" \
-  "avg_cpu_used_percent"
+  "average_cpu_usage_active"
 
 provision_detector \
   "$MEMORY_DETECTOR_KEY" \
   "$MEMORY_DETECTOR_NAME" \
-  "Fast single-entity memory detector based on the validated laboratory configuration" \
+  "Memory usage detector over native Telegraf mem documents" \
   "mem" \
+  "memory" \
   "mem.used_percent" \
-  "avg_memory_used_percent"
+  "average_memory_used_percent"
 
-echo "CPU and memory SINGLE_ENTITY detector provisioning completed successfully."
+echo "CPU and memory detector provisioning completed successfully."
