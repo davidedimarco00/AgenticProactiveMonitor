@@ -2,11 +2,13 @@
 
 This folder currently contains only the components required to collect telemetry and run OpenSearch anomaly detection:
 
-- OpenSearch 2.18.0 and OpenSearch Dashboards;
+- OpenSearch 3.7.0 and OpenSearch Dashboards 3.7.0;
 - five monitored Linux containers;
 - Telegraf for system metrics;
 - Fluent Bit for application and system logs;
 - one CPU detector and one memory detector.
+
+OpenSearch 3.7.0 is the latest official GA release verified on 2026-08-06. The version is explicitly pinned instead of using the floating `latest` Docker tag so that local runs remain reproducible.
 
 Qdrant, Ollama, Open WebUI, XMPP, SPADE agents, remediation services, duplicate validators, and dashboard bootstrap scripts are intentionally excluded from this phase.
 
@@ -32,6 +34,7 @@ From `src/infrastructure`:
 cp .env.example .env
 docker compose down -v --remove-orphans
 docker compose build --no-cache
+docker compose pull
 docker compose up -d
 ```
 
@@ -51,6 +54,18 @@ The expected final state is:
 - `opensearch`, `opensearch-dashboards`, and all five machines are running and healthy;
 - `opensearch-init` exited with code `0`;
 - `opensearch-detectors-init` exited with code `0`.
+
+## Check installed version
+
+```powershell
+curl.exe "http://localhost:9200"
+```
+
+The response must contain:
+
+```json
+"number": "3.7.0"
+```
 
 ## Check indexes
 
