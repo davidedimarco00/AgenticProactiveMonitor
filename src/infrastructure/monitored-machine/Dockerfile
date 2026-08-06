@@ -47,6 +47,16 @@ COPY parsers.conf /etc/fluent-bit/parsers.conf
 COPY entrypoint.sh /entrypoint.sh
 
 RUN mkdir -p /var/log/machine \
+    && touch /var/log/machine/app.log /var/log/machine/system.log \
     && chmod +x /entrypoint.sh
+
+# A container is healthy only when both collectors are alive and the workload
+# has started producing both application and system log records.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=12 \
+  CMD pgrep -x telegraf >/dev/null \
+      && pgrep -f '[f]luent-bit' >/dev/null \
+      && test -s /var/log/machine/app.log \
+      && test -s /var/log/machine/system.log \
+      || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
