@@ -21,7 +21,7 @@ done
 
 echo "OpenSearch is available."
 
-echo "Creating metrics index template for the native Telegraf OpenSearch format..."
+echo "Creating metrics index template for native Telegraf OpenSearch documents..."
 os_curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/metrics-template" \
   -H "Content-Type: application/json" \
   -d '{
@@ -57,6 +57,9 @@ os_curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/metrics-template" \
               "machine_role": {"type": "keyword"},
               "metric_type": {"type": "keyword"},
               "cpu": {"type": "keyword"},
+              "path": {"type": "keyword"},
+              "device": {"type": "keyword"},
+              "interface": {"type": "keyword"},
               "environment": {"type": "keyword"},
               "project": {"type": "keyword"},
               "monitored_by": {"type": "keyword"}
@@ -66,30 +69,81 @@ os_curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/metrics-template" \
             "type": "object",
             "dynamic": true,
             "properties": {
-              "usage_active": {"type": "float"}
+              "usage_active": {"type": "float"},
+              "usage_idle": {"type": "float"},
+              "usage_user": {"type": "float"},
+              "usage_system": {"type": "float"},
+              "usage_iowait": {"type": "float"},
+              "usage_irq": {"type": "float"},
+              "usage_softirq": {"type": "float"},
+              "usage_steal": {"type": "float"},
+              "usage_guest": {"type": "float"},
+              "usage_guest_nice": {"type": "float"},
+              "usage_nice": {"type": "float"}
             }
           },
           "mem": {
             "type": "object",
             "dynamic": true,
             "properties": {
+              "total": {"type": "long"},
+              "available": {"type": "long"},
+              "used": {"type": "long"},
+              "free": {"type": "long"},
+              "cached": {"type": "long"},
+              "buffered": {"type": "long"},
+              "active": {"type": "long"},
+              "inactive": {"type": "long"},
+              "used_percent": {"type": "float"},
+              "available_percent": {"type": "float"}
+            }
+          },
+          "disk": {
+            "type": "object",
+            "dynamic": true,
+            "properties": {
+              "total": {"type": "long"},
+              "free": {"type": "long"},
+              "used": {"type": "long"},
+              "used_percent": {"type": "float"},
+              "inodes_total": {"type": "long"},
+              "inodes_free": {"type": "long"},
+              "inodes_used": {"type": "long"},
+              "inodes_used_percent": {"type": "float"}
+            }
+          },
+          "diskio": {"type": "object", "dynamic": true},
+          "net": {"type": "object", "dynamic": true},
+          "system": {
+            "type": "object",
+            "dynamic": true,
+            "properties": {
+              "load1": {"type": "float"},
+              "load5": {"type": "float"},
+              "load15": {"type": "float"},
+              "uptime": {"type": "long"},
+              "n_users": {"type": "long"}
+            }
+          },
+          "swap": {
+            "type": "object",
+            "dynamic": true,
+            "properties": {
+              "total": {"type": "long"},
+              "free": {"type": "long"},
+              "used": {"type": "long"},
               "used_percent": {"type": "float"}
             }
           },
-          "disk": {"type": "object", "dynamic": true},
-          "diskio": {"type": "object", "dynamic": true},
-          "net": {"type": "object", "dynamic": true},
-          "system": {"type": "object", "dynamic": true},
-          "swap": {"type": "object", "dynamic": true},
           "processes": {"type": "object", "dynamic": true},
           "kernel": {"type": "object", "dynamic": true}
         }
       }
     },
     "priority": 200,
-    "version": 3,
+    "version": 4,
     "_meta": {
-      "description": "Complete native Telegraf metrics mapping for the thesis monitoring lab"
+      "description": "Native Telegraf document contract for all configured infrastructure inputs"
     }
   }' >/dev/null
 
@@ -132,17 +186,16 @@ os_curl -fsS -X PUT "${OPENSEARCH_URL}/_index_template/logs-template" \
       }
     },
     "priority": 100,
-    "version": 2,
+    "version": 3,
     "_meta": {
-      "description": "Fluent Bit application and system log mapping for the thesis monitoring lab"
+      "description": "Fluent Bit application and system log contract"
     }
   }' >/dev/null
 
 echo "Logs index template created."
 
-# Older versions of this project mapped the top-level cpu property as a
-# keyword. Telegraf writes cpu as an object, so those indexes reject CPU data.
-# Only incompatible synthetic-lab metric indexes are removed.
+# Remove only indexes from older revisions that are structurally incompatible.
+# Real daily indexes with the native object structure are preserved.
 for INDEX in $(os_curl -fsS "${OPENSEARCH_URL}/_cat/indices/metrics-*?h=index" 2>/dev/null || true); do
   MAPPING="$(os_curl -sS "${OPENSEARCH_URL}/${INDEX}/_mapping/field/cpu" || true)"
   if echo "${MAPPING}" | grep -q '"type":"keyword"'; then
@@ -151,29 +204,21 @@ for INDEX in $(os_curl -fsS "${OPENSEARCH_URL}/_cat/indices/metrics-*?h=index" 2
   fi
 done
 
-# Materialise both wildcard families immediately. Daily indexes are then
-# created by Telegraf and Fluent Bit with the templates already installed.
+# Empty bootstrap indexes were useful before collectors started, but they make
+# Discover and field discovery less clear. The new startup sequence waits for
+# real Telegraf and Fluent Bit documents instead.
 for INDEX in metrics-bootstrap logs-bootstrap; do
-  STATUS="$(os_curl -sS -o "/tmp/${INDEX}.json" -w "%{http_code}" \
-    -X PUT "${OPENSEARCH_URL}/${INDEX}" \
-    -H "Content-Type: application/json" -d '{}')"
+  STATUS="$(os_curl -sS -o "/tmp/${INDEX}-delete.json" -w "%{http_code}" \
+    -X DELETE "${OPENSEARCH_URL}/${INDEX}" || true)"
   case "${STATUS}" in
-    200|201) echo "Created ${INDEX}." ;;
-    400)
-      if grep -q 'resource_already_exists_exception' "/tmp/${INDEX}.json"; then
-        echo "${INDEX} already exists."
-      else
-        echo "Unable to create ${INDEX} (HTTP 400)." >&2
-        cat "/tmp/${INDEX}.json" >&2
-        exit 1
-      fi
-      ;;
+    200) echo "Removed legacy empty index ${INDEX}." ;;
+    404) echo "${INDEX} is not present." ;;
     *)
-      echo "Unable to create ${INDEX} (HTTP ${STATUS})." >&2
-      cat "/tmp/${INDEX}.json" >&2
+      echo "Unable to remove ${INDEX} (HTTP ${STATUS})." >&2
+      cat "/tmp/${INDEX}-delete.json" >&2 || true
       exit 1
       ;;
   esac
 done
 
-echo "OpenSearch index templates and bootstrap indexes are ready."
+echo "OpenSearch index templates are ready."
