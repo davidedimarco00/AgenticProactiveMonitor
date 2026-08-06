@@ -23,6 +23,10 @@ $InitializerServices = @(
     "opensearch-detectors-init"
 )
 
+$StatusServices = @("opensearch", "opensearch-dashboards") +
+    $MachineServices +
+    $InitializerServices
+
 function Invoke-DockerCommand {
     param(
         [Parameter(Mandatory = $true)]
@@ -48,7 +52,7 @@ function Wait-ComposeOneShot {
     $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 
     while ((Get-Date) -lt $Deadline) {
-        $ContainerId = (& docker compose ps -q $Service 2>$null | Out-String).Trim()
+        $ContainerId = (& docker compose ps -a -q $Service 2>$null | Out-String).Trim()
 
         if ($ContainerId) {
             $State = (& docker inspect --format "{{.State.Status}}" $ContainerId | Out-String).Trim()
@@ -57,7 +61,7 @@ function Wait-ComposeOneShot {
                 $ExitCode = [int]((& docker inspect --format "{{.State.ExitCode}}" $ContainerId | Out-String).Trim())
 
                 if ($ExitCode -ne 0) {
-                    Write-Host "" 
+                    Write-Host ""
                     Write-Host "Logs for failed service $Service" -ForegroundColor Red
                     & docker compose logs --tail 300 $Service
                     throw "$Service exited with code $ExitCode"
@@ -112,17 +116,13 @@ Invoke-DockerCommand -Arguments @(
 Wait-ComposeOneShot -Service "opensearch-dashboards-init" -TimeoutSeconds $InitializerTimeoutSeconds
 Wait-ComposeOneShot -Service "opensearch-detectors-init" -TimeoutSeconds $InitializerTimeoutSeconds
 
-Write-Host "" 
+Write-Host ""
 Write-Host "Observability infrastructure restarted successfully." -ForegroundColor Green
 Write-Host "OpenSearch and its data volume were preserved." -ForegroundColor Green
-Write-Host "" 
+Write-Host ""
 
-& docker compose ps -a `
-    opensearch `
-    opensearch-dashboards `
-    @MachineServices `
-    @InitializerServices
+& docker compose ps -a @StatusServices
 
-Write-Host "" 
+Write-Host ""
 Write-Host "Open http://localhost:5601, press Ctrl+F5, select Last 15 minutes," -ForegroundColor Yellow
 Write-Host "and use DQL: measurement_name: cpu AND cpu.usage_active:*" -ForegroundColor Yellow
