@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Validate the telemetry contract used by OpenSearch and anomaly detectors.
+"""Validate the complete native Telegraf telemetry contract.
 
-The script does not create or transform telemetry. It waits for real Telegraf
-samples and verifies the exact document structure, mappings, field capabilities,
-and host coverage required by the CPU and memory detectors.
+The script does not create or transform telemetry. It waits for real samples and
+verifies document nesting, tags, mappings, field capabilities, and five-host
+coverage before Dashboards and anomaly detectors are provisioned.
 """
 
 from __future__ import annotations
@@ -33,29 +33,25 @@ EXPECTED_HOSTS = tuple(
 
 
 @dataclass(frozen=True)
-class MetricContract:
-    label: str
+class MeasurementContract:
     measurement: str
     metric_type: str
-    field: str
-    accepted_types: frozenset[str]
+    detector_field: str | None = None
+    accepted_types: frozenset[str] = frozenset()
 
 
-CONTRACTS = (
-    MetricContract(
-        label="CPU",
-        measurement="cpu",
-        metric_type="cpu",
-        field="cpu.usage_active",
-        accepted_types=frozenset({"float", "double", "half_float", "scaled_float"}),
-    ),
-    MetricContract(
-        label="memory",
-        measurement="mem",
-        metric_type="memory",
-        field="mem.used_percent",
-        accepted_types=frozenset({"float", "double", "half_float", "scaled_float"}),
-    ),
+FLOAT_TYPES = frozenset({"float", "double", "half_float", "scaled_float"})
+
+MEASUREMENT_CONTRACTS = (
+    MeasurementContract("cpu", "cpu", "cpu.usage_active", FLOAT_TYPES),
+    MeasurementContract("mem", "memory", "mem.used_percent", FLOAT_TYPES),
+    MeasurementContract("disk", "disk"),
+    MeasurementContract("diskio", "diskio"),
+    MeasurementContract("net", "network"),
+    MeasurementContract("system", "system"),
+    MeasurementContract("swap", "swap"),
+    MeasurementContract("processes", "processes"),
+    MeasurementContract("kernel", "kernel"),
 )
 
 
@@ -143,33 +139,35 @@ def require_field(
             raise ValidationError(f"Field {field_name!r} is not aggregatable")
 
 
-def metric_query(contract: MetricContract) -> dict[str, Any]:
+def measurement_query(contract: MeasurementContract) -> dict[str, Any]:
+    filters: list[dict[str, Any]] = [
+        {"term": {"measurement_name": contract.measurement}},
+        {"term": {"tag.metric_type": contract.metric_type}},
+        {"range": {"@timestamp": {"gte": LOOKBACK}}},
+    ]
+    if contract.detector_field:
+        filters.append({"exists": {"field": contract.detector_field}})
+
+    aggregations: dict[str, Any] = {
+        "hosts": {
+            "terms": {
+                "field": "tag.host_id",
+                "size": max(20, len(EXPECTED_HOSTS)),
+            },
+            "aggs": {"latest_sample": {"max": {"field": "@timestamp"}}},
+        }
+    }
+    if contract.detector_field:
+        aggregations["hosts"]["aggs"]["average_value"] = {
+            "avg": {"field": contract.detector_field}
+        }
+
     return {
         "size": 1,
         "track_total_hits": True,
-        "query": {
-            "bool": {
-                "filter": [
-                    {"term": {"measurement_name": contract.measurement}},
-                    {"term": {"tag.metric_type": contract.metric_type}},
-                    {"exists": {"field": contract.field}},
-                    {"range": {"@timestamp": {"gte": LOOKBACK}}},
-                ]
-            }
-        },
+        "query": {"bool": {"filter": filters}},
         "sort": [{"@timestamp": {"order": "desc"}}],
-        "aggs": {
-            "hosts": {
-                "terms": {
-                    "field": "tag.host_id",
-                    "size": max(20, len(EXPECTED_HOSTS)),
-                },
-                "aggs": {
-                    "latest_sample": {"max": {"field": "@timestamp"}},
-                    "average_value": {"avg": {"field": contract.field}},
-                },
-            }
-        },
+        "aggs": aggregations,
     }
 
 
@@ -180,39 +178,62 @@ def extract_total_hits(response: dict[str, Any]) -> int:
     return int(total)
 
 
-def validate_sample_structure(contract: MetricContract, source: dict[str, Any]) -> None:
+def nested_value(source: dict[str, Any], field_name: str) -> Any:
+    current: Any = source
+    for component in field_name.split("."):
+        if not isinstance(current, dict) or component not in current:
+            raise ValidationError(f"Document does not contain {field_name}")
+        current = current[component]
+    return current
+
+
+def validate_sample_structure(
+    contract: MeasurementContract, source: dict[str, Any]
+) -> None:
     if source.get("measurement_name") != contract.measurement:
         raise ValidationError(
-            f"Latest {contract.label} document has measurement_name="
+            f"Latest {contract.measurement} document has measurement_name="
             f"{source.get('measurement_name')!r}"
         )
 
     tag = source.get("tag")
     if not isinstance(tag, dict):
-        raise ValidationError(f"Latest {contract.label} document has no tag object")
+        raise ValidationError(
+            f"Latest {contract.measurement} document has no tag object"
+        )
 
     if tag.get("metric_type") != contract.metric_type:
         raise ValidationError(
-            f"Latest {contract.label} document has tag.metric_type="
-            f"{tag.get('metric_type')!r}"
+            f"Latest {contract.measurement} document has tag.metric_type="
+            f"{tag.get('metric_type')!r}; expected {contract.metric_type!r}"
         )
 
-    current: Any = source
-    for component in contract.field.split("."):
-        if not isinstance(current, dict) or component not in current:
-            raise ValidationError(
-                f"Latest {contract.label} document does not contain {contract.field}"
-            )
-        current = current[component]
-
-    if not isinstance(current, (int, float)) or isinstance(current, bool):
+    host_id = tag.get("host_id")
+    if host_id not in EXPECTED_HOSTS:
         raise ValidationError(
-            f"Latest {contract.label} value {contract.field} is not numeric: {current!r}"
+            f"Latest {contract.measurement} document has invalid tag.host_id={host_id!r}"
         )
 
+    measurement_object = source.get(contract.measurement)
+    if not isinstance(measurement_object, dict) or not measurement_object:
+        raise ValidationError(
+            f"Latest {contract.measurement} document does not contain a non-empty "
+            f"{contract.measurement} object"
+        )
 
-def validate_contract(contract: MetricContract) -> bool:
-    response = request_json("POST", "/metrics-*/_search", metric_query(contract))
+    if contract.detector_field:
+        value = nested_value(source, contract.detector_field)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValidationError(
+                f"Latest {contract.measurement} value {contract.detector_field} "
+                f"is not numeric: {value!r}"
+            )
+
+
+def validate_measurement(contract: MeasurementContract) -> bool:
+    response = request_json(
+        "POST", "/metrics-*/_search", measurement_query(contract)
+    )
     total = extract_total_hits(response)
     hits = response.get("hits", {}).get("hits", [])
     buckets = response.get("aggregations", {}).get("hosts", {}).get("buckets", [])
@@ -221,14 +242,14 @@ def validate_contract(contract: MetricContract) -> bool:
 
     if total <= 0 or not hits:
         print(
-            f"Waiting for recent {contract.label} documents containing {contract.field}...",
-            flush=True,
+            f"Waiting for recent {contract.measurement} documents...", flush=True
         )
         return False
 
     if missing_hosts:
         print(
-            f"Waiting for {contract.label} telemetry from: {', '.join(missing_hosts)}",
+            f"Waiting for {contract.measurement} telemetry from: "
+            f"{', '.join(missing_hosts)}",
             flush=True,
         )
         return False
@@ -236,9 +257,14 @@ def validate_contract(contract: MetricContract) -> bool:
     source = hits[0].get("_source", {})
     validate_sample_structure(contract, source)
 
+    field_description = (
+        f"; detector_field={contract.detector_field}"
+        if contract.detector_field
+        else ""
+    )
     print(
-        f"{contract.label}: {total} recent documents; "
-        f"hosts={','.join(sorted(observed_hosts))}; field={contract.field}",
+        f"{contract.measurement}: {total} recent documents; "
+        f"hosts={','.join(sorted(observed_hosts))}{field_description}",
         flush=True,
     )
     return True
@@ -250,7 +276,11 @@ def validate_mapping_contract() -> None:
         "measurement_name",
         "tag.host_id",
         "tag.metric_type",
-        *(contract.field for contract in CONTRACTS),
+        *(
+            contract.detector_field
+            for contract in MEASUREMENT_CONTRACTS
+            if contract.detector_field
+        ),
     ]
     capabilities = field_caps(required_fields)
 
@@ -259,8 +289,13 @@ def validate_mapping_contract() -> None:
     require_field(capabilities, "tag.host_id", frozenset({"keyword"}))
     require_field(capabilities, "tag.metric_type", frozenset({"keyword"}))
 
-    for contract in CONTRACTS:
-        require_field(capabilities, contract.field, contract.accepted_types)
+    for contract in MEASUREMENT_CONTRACTS:
+        if contract.detector_field:
+            require_field(
+                capabilities,
+                contract.detector_field,
+                contract.accepted_types,
+            )
 
     print("Field capabilities match the detector schema.", flush=True)
 
@@ -273,10 +308,15 @@ def main() -> int:
         while time.monotonic() < deadline:
             try:
                 validate_mapping_contract()
-                if all(validate_contract(contract) for contract in CONTRACTS):
+                results = [
+                    validate_measurement(contract)
+                    for contract in MEASUREMENT_CONTRACTS
+                ]
+                if all(results):
                     print(
-                        "Telemetry schema validation completed successfully: "
-                        "native Telegraf documents, mappings, and five-host coverage match.",
+                        "Telemetry schema validation completed successfully: all "
+                        "configured Telegraf measurements use the native nested "
+                        "document structure on all five machines.",
                         flush=True,
                     )
                     return 0
