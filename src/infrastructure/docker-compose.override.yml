@@ -48,9 +48,9 @@ services:
       opensearch-init:
         condition: service_completed_successfully
 
-  # Validate the real native Telegraf documents before creating any consumer.
-  # This fails explicitly if mappings, field types, nested paths, or host
-  # coverage do not match the CPU and memory detector contract.
+  # Validate real Telegraf and Fluent Bit documents before creating any
+  # consumer. The job fails explicitly if mappings, nested paths, timestamps,
+  # tags, or five-host coverage do not match the observability contract.
   opensearch-telemetry-init:
     image: python:3.12-alpine
     container_name: agentic-opensearch-telemetry-init
@@ -61,7 +61,13 @@ services:
       - TELEMETRY_EXPECTED_HOSTS=machine-01,machine-02,machine-03,machine-04,machine-05
     volumes:
       - ./opensearch/init/validate-telemetry-schema.py:/validate-telemetry-schema.py:ro
-    command: ["python", "/validate-telemetry-schema.py"]
+      - ./opensearch/init/validate-log-schema.py:/validate-log-schema.py:ro
+    command:
+      [
+        "sh",
+        "-c",
+        "python /validate-telemetry-schema.py && python /validate-log-schema.py",
+      ]
     depends_on:
       opensearch-init:
         condition: service_completed_successfully
@@ -79,8 +85,8 @@ services:
       - monitoring-net
     restart: "no"
 
-  # Create CPU and memory detectors only after the telemetry contract has been
-  # validated against real documents from all five machines.
+  # Create CPU and memory detectors only after the complete telemetry contract
+  # has been validated against real documents from all five machines.
   opensearch-detectors-init:
     image: curlimages/curl:8.10.1
     container_name: agentic-opensearch-detectors-init
