@@ -2,254 +2,100 @@
 set -eu
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
-OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-}"
-OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
-CONFIG_INDEX="agentic-detector-config"
-WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-180}"
+WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-300}"
 MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-20}"
-
-DETECTION_INTERVAL_MINUTES=1
-WINDOW_DELAY_MINUTES=1
-SHINGLE_SIZE=4
+INDEX_PATTERN="metrics-machine-*"
 CATEGORY_FIELD="tag.host_id"
 
-CPU_DETECTOR_KEY="cpu-native-telegraf-v4"
-CPU_DETECTOR_NAME="thesis-cpu-anomaly-detector"
-MEMORY_DETECTOR_KEY="memory-native-telegraf-v2"
-MEMORY_DETECTOR_NAME="thesis-memory-anomaly-detector"
+CPU_NAME="infrastructure-cpu-usage"
+MEMORY_NAME="infrastructure-memory-usage"
 
-os_curl() {
-  if [ -n "${OPENSEARCH_USERNAME}" ]; then
-    curl -k -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" "$@"
-  else
-    curl -k "$@"
-  fi
-}
-
-json_string_value() {
-  key="$1"
-  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1
+request() {
+  curl -fsS "$@"
 }
 
 wait_for_plugin() {
   elapsed=0
-  while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
-    status="$(os_curl -sS -o /tmp/ad-stats.json -w "%{http_code}" \
-      "${OPENSEARCH_URL}/_plugins/_anomaly_detection/stats" || true)"
-    if [ "$status" = "200" ]; then
-      echo "OpenSearch Anomaly Detection plugin is available."
-      return 0
+  until request "${OPENSEARCH_URL}/_plugins/_anomaly_detection/stats" >/dev/null 2>&1; do
+    if [ "$elapsed" -ge "$WAIT_SECONDS" ]; then
+      echo "Anomaly Detection plugin was not ready after ${WAIT_SECONDS}s." >&2
+      exit 1
     fi
-    echo "Waiting for the OpenSearch Anomaly Detection plugin..."
     sleep 3
     elapsed=$((elapsed + 3))
   done
-
-  echo "Anomaly Detection plugin did not become available." >&2
-  cat /tmp/ad-stats.json >&2 || true
-  return 1
 }
 
-enable_hcad_cold_start_interpolation() {
-  status="$(os_curl -sS -o /tmp/ad-settings.json -w "%{http_code}" \
-    -X PUT "${OPENSEARCH_URL}/_cluster/settings" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "persistent": {
-        "plugins.anomaly_detection.hcad_cold_start_interpolation.enabled": true
-      }
-    }' || true)"
-
-  if [ "$status" != "200" ]; then
-    echo "Unable to enable HCAD cold-start interpolation (HTTP ${status})." >&2
-    cat /tmp/ad-settings.json >&2 || true
-    return 1
-  fi
-
-  echo "HCAD cold-start interpolation is enabled."
-}
-
-create_config_index() {
-  status="$(os_curl -sS -o /tmp/config-index.json -w "%{http_code}" \
-    -X PUT "${OPENSEARCH_URL}/${CONFIG_INDEX}" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-      "mappings": {
-        "properties": {
-          "detector_id": {"type": "keyword"},
-          "name": {"type": "keyword"},
-          "measurement_name": {"type": "keyword"},
-          "metric_type": {"type": "keyword"},
-          "source_field": {"type": "keyword"},
-          "category_field": {"type": "keyword"},
-          "detector_type": {"type": "keyword"},
-          "status": {"type": "keyword"},
-          "shingle_size": {"type": "integer"},
-          "detection_interval_minutes": {"type": "integer"}
-        }
-      }
-    }' || true)"
-
-  case "$status" in
-    200|201)
-      echo "Created ${CONFIG_INDEX}."
-      ;;
-    400)
-      if grep -q resource_already_exists_exception /tmp/config-index.json; then
-        echo "${CONFIG_INDEX} already exists."
-      else
-        cat /tmp/config-index.json >&2
-        return 1
-      fi
-      ;;
-    *)
-      cat /tmp/config-index.json >&2 || true
-      return 1
-      ;;
-  esac
-}
-
-telemetry_document_count() {
+metric_count() {
   measurement="$1"
-  metric_type="$2"
-  source_field="$3"
-
-  status="$(os_curl -sS -o /tmp/telemetry-count.json -w "%{http_code}" \
-    -X POST "${OPENSEARCH_URL}/metrics-*/_count" \
+  field="$2"
+  request -X POST "${OPENSEARCH_URL}/${INDEX_PATTERN}/_count" \
     -H "Content-Type: application/json" \
-    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"term\":{\"tag.metric_type\":\"${metric_type}\"}},{\"exists\":{\"field\":\"${source_field}\"}},{\"exists\":{\"field\":\"${CATEGORY_FIELD}\"}}]}}}" || true)"
-
-  if [ "$status" != "200" ]; then
-    echo 0
-    return
-  fi
-
-  sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
-    /tmp/telemetry-count.json | head -n 1
+    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"exists\":{\"field\":\"${field}\"}},{\"exists\":{\"field\":\"${CATEGORY_FIELD}\"}}]}}}" \
+    | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    | head -n 1
 }
 
-wait_for_telemetry() {
+wait_for_metric() {
   label="$1"
   measurement="$2"
-  metric_type="$3"
-  source_field="$4"
+  field="$3"
   elapsed=0
 
   while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
-    count="$(telemetry_document_count "$measurement" "$metric_type" "$source_field")"
+    count="$(metric_count "$measurement" "$field" 2>/dev/null || echo 0)"
     count="${count:-0}"
-
     if [ "$count" -ge "$MIN_DOCUMENTS" ]; then
-      echo "Found ${count} valid ${label} documents."
+      echo "${label}: ${count} valid documents available."
       return 0
     fi
-
-    echo "Waiting for ${label} telemetry (${count}/${MIN_DOCUMENTS} documents)..."
+    echo "Waiting for ${label} documents (${count}/${MIN_DOCUMENTS})..."
     sleep 5
     elapsed=$((elapsed + 5))
   done
 
-  echo "Not enough ${label} telemetry arrived within ${WAIT_SECONDS}s." >&2
-  return 1
+  echo "Not enough ${label} documents arrived." >&2
+  exit 1
 }
 
-stored_detector_id() {
-  key="$1"
-  status="$(os_curl -sS -o /tmp/stored-detector.json -w "%{http_code}" \
-    "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}" || true)"
-
-  if [ "$status" = "200" ]; then
-    json_string_value detector_id </tmp/stored-detector.json
-  fi
-}
-
-remove_detector_id() {
-  detector_id="$1"
-  label="$2"
-
-  [ -n "$detector_id" ] || return 0
-
-  os_curl -sS -X POST \
-    "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_stop" \
-    >/dev/null 2>&1 || true
-
-  status="$(os_curl -sS -o /tmp/detector-delete.json -w "%{http_code}" \
-    -X DELETE "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}" || true)"
-
-  case "$status" in
-    200|404)
-      echo "Removed ${label} detector ${detector_id}."
-      ;;
-    *)
-      echo "Unable to remove detector ${detector_id} (HTTP ${status})." >&2
-      cat /tmp/detector-delete.json >&2 || true
-      return 1
-      ;;
-  esac
-}
-
-remove_detector_by_key() {
-  key="$1"
-  label="$2"
-  detector_id="$(stored_detector_id "$key" || true)"
-
-  if [ -n "$detector_id" ]; then
-    remove_detector_id "$detector_id" "$label"
-  fi
-
-  os_curl -sS -X DELETE \
-    "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
-    >/dev/null 2>&1 || true
-}
-
-remove_detectors_by_name() {
+find_detector_ids() {
   name="$1"
-
-  status="$(os_curl -sS -o /tmp/detector-search.json -w "%{http_code}" \
-    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search?pretty" \
+  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search?pretty" \
     -H "Content-Type: application/json" \
-    -d "{\"size\":100,\"_source\":false,\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" || true)"
+    -d "{\"size\":100,\"_source\":false,\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" \
+    | sed -n 's/^[[:space:]]*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
 
-  if [ "$status" = "404" ]; then
-    return 0
-  fi
-
-  if [ "$status" != "200" ]; then
-    echo "Unable to search existing detectors named ${name} (HTTP ${status})." >&2
-    cat /tmp/detector-search.json >&2 || true
-    return 1
-  fi
-
-  for detector_id in $(sed -n 's/^[[:space:]]*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/detector-search.json); do
-    remove_detector_id "$detector_id" "$name"
+delete_existing_detector() {
+  name="$1"
+  for detector_id in $(find_detector_ids "$name" 2>/dev/null || true); do
+    curl -sS -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_stop" >/dev/null 2>&1 || true
+    curl -sS -X DELETE "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}" >/dev/null 2>&1 || true
+    echo "Removed previous detector ${name} (${detector_id})."
   done
 }
 
-write_detector_payload() {
+create_detector() {
   name="$1"
   description="$2"
   measurement="$3"
-  metric_type="$4"
-  source_field="$5"
-  feature_name="$6"
+  field="$4"
+  feature="$5"
 
   cat >/tmp/detector.json <<JSON
 {
   "name": "${name}",
   "description": "${description}",
   "time_field": "@timestamp",
-  "indices": ["metrics-*"],
-  "shingle_size": ${SHINGLE_SIZE},
+  "indices": ["${INDEX_PATTERN}"],
+  "shingle_size": 4,
   "schema_version": 0,
   "feature_attributes": [
     {
-      "feature_name": "${feature_name}",
+      "feature_name": "${feature}",
       "feature_enabled": true,
       "aggregation_query": {
-        "${feature_name}": {
-          "avg": {"field": "${source_field}"}
-        }
+        "${feature}": {"avg": {"field": "${field}"}}
       }
     }
   ],
@@ -257,203 +103,66 @@ write_detector_payload() {
     "bool": {
       "filter": [
         {"term": {"measurement_name": "${measurement}"}},
-        {"term": {"tag.metric_type": "${metric_type}"}},
-        {"exists": {"field": "${source_field}"}},
+        {"exists": {"field": "${field}"}},
         {"exists": {"field": "${CATEGORY_FIELD}"}}
       ]
     }
   },
   "detection_interval": {
-    "period": {"interval": ${DETECTION_INTERVAL_MINUTES}, "unit": "Minutes"}
+    "period": {"interval": 1, "unit": "Minutes"}
   },
   "window_delay": {
-    "period": {"interval": ${WINDOW_DELAY_MINUTES}, "unit": "Minutes"}
+    "period": {"interval": 1, "unit": "Minutes"}
   },
   "category_field": ["${CATEGORY_FIELD}"]
 }
 JSON
-}
 
-validate_detector_payload() {
-  name="$1"
-
-  validation_status="$(os_curl -sS -o /tmp/detector-validation.json -w "%{http_code}" \
-    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_validate/detector" \
+  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_validate/detector" \
     -H "Content-Type: application/json" \
-    --data-binary @/tmp/detector.json || true)"
+    --data-binary @/tmp/detector.json >/tmp/detector-validation.json
 
-  if [ "$validation_status" != "200" ]; then
-    echo "Detector validation failed for ${name} (HTTP ${validation_status})." >&2
-    cat /tmp/detector-validation.json >&2 || true
-    return 1
+  response="$(request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors" \
+    -H "Content-Type: application/json" \
+    --data-binary @/tmp/detector.json)"
+
+  detector_id="$(printf '%s' "$response" | sed -n 's/.*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -z "$detector_id" ]; then
+    echo "Unable to read the detector ID for ${name}." >&2
+    printf '%s\n' "$response" >&2
+    exit 1
   fi
 
-  if grep -q '"detector"' /tmp/detector-validation.json; then
-    echo "Detector validation reported a blocking issue for ${name}." >&2
-    cat /tmp/detector-validation.json >&2
-    return 1
-  fi
-
-  model_validation_status="$(os_curl -sS -o /tmp/detector-model-validation.json -w "%{http_code}" \
-    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_validate/model" \
-    -H "Content-Type: application/json" \
-    --data-binary @/tmp/detector.json || true)"
-
-  if [ "$model_validation_status" = "200" ]; then
-    echo "Model validation for ${name}:"
-    cat /tmp/detector-model-validation.json
-  else
-    echo "Model validation endpoint returned HTTP ${model_validation_status} for ${name}." >&2
-    cat /tmp/detector-model-validation.json >&2 || true
-  fi
-}
-
-create_detector() {
-  key="$1"
-  name="$2"
-  description="$3"
-  measurement="$4"
-  metric_type="$5"
-  source_field="$6"
-  feature_name="$7"
-
-  write_detector_payload \
-    "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name"
-  validate_detector_payload "$name"
-
-  status="$(os_curl -sS -o /tmp/detector-create.json -w "%{http_code}" \
-    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors" \
-    -H "Content-Type: application/json" \
-    --data-binary @/tmp/detector.json || true)"
-
-  case "$status" in
-    200|201)
-      ;;
-    *)
-      echo "Unable to create ${name} (HTTP ${status})." >&2
-      cat /tmp/detector-create.json >&2 || true
-      return 1
-      ;;
-  esac
-
-  detector_id="$(json_string_value _id </tmp/detector-create.json)"
-  [ -n "$detector_id" ] || {
-    cat /tmp/detector-create.json >&2
-    return 1
-  }
-
-  os_curl -fsS -X PUT \
-    "${OPENSEARCH_URL}/${CONFIG_INDEX}/_doc/${key}?refresh=true" \
-    -H "Content-Type: application/json" \
-    -d "{\"detector_id\":\"${detector_id}\",\"name\":\"${name}\",\"measurement_name\":\"${measurement}\",\"metric_type\":\"${metric_type}\",\"source_field\":\"${source_field}\",\"category_field\":\"${CATEGORY_FIELD}\",\"detector_type\":\"MULTI_ENTITY\",\"status\":\"created\",\"shingle_size\":${SHINGLE_SIZE},\"detection_interval_minutes\":${DETECTION_INTERVAL_MINUTES}}" \
-    >/dev/null
-
-  printf '%s' "$detector_id"
-}
-
-start_detector() {
-  detector_id="$1"
-  name="$2"
-
-  status="$(os_curl -sS -o /tmp/detector-start.json -w "%{http_code}" \
-    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start" || true)"
-
-  case "$status" in
-    200|201)
-      echo "Started ${name} (${detector_id})."
-      ;;
-    400)
-      if grep -Eqi 'already|running|scheduled|enabled' /tmp/detector-start.json; then
-        echo "${name} is already running or scheduled."
-      else
-        cat /tmp/detector-start.json >&2
-        return 1
-      fi
-      ;;
-    *)
-      cat /tmp/detector-start.json >&2 || true
-      return 1
-      ;;
-  esac
-}
-
-show_profile() {
-  detector_id="$1"
-  name="$2"
-
-  sleep 3
-  status="$(os_curl -sS -o /tmp/detector-profile.json -w "%{http_code}" \
-    "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_profile?_all=true&pretty" || true)"
-
-  if [ "$status" = "200" ]; then
-    echo "Initial profile for ${name}:"
-    cat /tmp/detector-profile.json
-  else
-    echo "Detector profile for ${name} is not available yet (HTTP ${status})."
-  fi
-}
-
-provision_detector() {
-  key="$1"
-  name="$2"
-  description="$3"
-  measurement="$4"
-  metric_type="$5"
-  source_field="$6"
-  feature_name="$7"
-
-  detector_id="$(create_detector \
-    "$key" "$name" "$description" "$measurement" "$metric_type" "$source_field" "$feature_name")"
-  echo "Created ${name} (${detector_id}) as MULTI_ENTITY grouped by ${CATEGORY_FIELD}."
-
-  start_detector "$detector_id" "$name"
-  show_profile "$detector_id" "$name"
+  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start" >/dev/null
+  echo "Created and started ${name} (${detector_id})."
 }
 
 wait_for_plugin
-create_config_index
-enable_hcad_cold_start_interpolation
-wait_for_telemetry "CPU" "cpu" "cpu" "cpu.usage_active"
-wait_for_telemetry "memory" "mem" "memory" "mem.used_percent"
 
-# Delete stale detectors even when their previous registry document is missing.
-remove_detectors_by_name "$CPU_DETECTOR_NAME"
-remove_detectors_by_name "$MEMORY_DETECTOR_NAME"
+# This setting shortens the HCAD cold-start phase in the local thesis lab.
+curl -sS -X PUT "${OPENSEARCH_URL}/_cluster/settings" \
+  -H "Content-Type: application/json" \
+  -d '{"persistent":{"plugins.anomaly_detection.hcad_cold_start_interpolation.enabled":true}}' \
+  >/dev/null || true
 
-for key in \
-  cpu-native-telegraf-v1 \
-  cpu-native-telegraf-v2 \
-  cpu-native-telegraf-v3 \
-  cpu-single-entity-v1 \
-  cpu-single-entity-v2 \
-  cpu-single-entity-v3; do
-  remove_detector_by_key "$key" "previous CPU"
-done
+wait_for_metric CPU cpu cpu.usage_active
+wait_for_metric memory mem mem.used_percent
 
-for key in \
-  memory-native-telegraf-v1 \
-  memory-single-entity-v1 \
-  memory-single-entity-v2 \
-  memory-single-entity-v3; do
-  remove_detector_by_key "$key" "previous memory"
-done
+delete_existing_detector "$CPU_NAME"
+delete_existing_detector "$MEMORY_NAME"
 
-provision_detector \
-  "$CPU_DETECTOR_KEY" \
-  "$CPU_DETECTOR_NAME" \
-  "CPU usage detector grouped by monitored machine" \
-  "cpu" \
-  "cpu" \
-  "cpu.usage_active" \
-  "average_cpu_usage_active"
+create_detector \
+  "$CPU_NAME" \
+  "Average active CPU usage grouped by monitored machine" \
+  cpu \
+  cpu.usage_active \
+  average_cpu_usage_active
 
-provision_detector \
-  "$MEMORY_DETECTOR_KEY" \
-  "$MEMORY_DETECTOR_NAME" \
-  "Memory usage detector grouped by monitored machine" \
-  "mem" \
-  "memory" \
-  "mem.used_percent" \
-  "average_memory_used_percent"
+create_detector \
+  "$MEMORY_NAME" \
+  "Average memory usage grouped by monitored machine" \
+  mem \
+  mem.used_percent \
+  average_memory_used_percent
 
-echo "CPU and memory HCAD detector provisioning completed successfully."
+echo "CPU and memory anomaly detectors are ready."
