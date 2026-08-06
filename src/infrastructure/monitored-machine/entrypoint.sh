@@ -122,9 +122,8 @@ while true; do
     MESSAGE=$(generate_normal_message)
   fi
 
-  # UTC with an explicit numeric offset matches the Fluent Bit %z parser and
-  # OpenSearch date mapping without relying on local container time zones.
-  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S+0000")
+  # RFC3339 UTC is parsed deterministically by Fluent Bit and OpenSearch.
+  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   UPTIME_SECONDS=$(cut -d. -f1 /proc/uptime)
   LOAD_AVERAGE=$(awk '{print $1}' /proc/loadavg)
 
