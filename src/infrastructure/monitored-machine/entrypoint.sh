@@ -26,7 +26,7 @@ echo "=================================================="
 # START TELEGRAF
 #############################
 echo "Starting Telegraf..."
-  
+
 telegraf \
   --config /etc/telegraf/telegraf.conf &
 
@@ -122,7 +122,11 @@ while true; do
     MESSAGE=$(generate_normal_message)
   fi
 
-  TIMESTAMP=$(date -Iseconds)
+  # UTC with an explicit numeric offset matches the Fluent Bit %z parser and
+  # OpenSearch date mapping without relying on local container time zones.
+  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S+0000")
+  UPTIME_SECONDS=$(cut -d. -f1 /proc/uptime)
+  LOAD_AVERAGE=$(awk '{print $1}' /proc/loadavg)
 
   echo "{
     \"timestamp\":\"${TIMESTAMP}\",
@@ -146,8 +150,8 @@ while true; do
     \"component\":\"system-simulator\",
     \"level\":\"INFO\",
     \"message\":\"Synthetic system heartbeat\",
-    \"uptime_seconds\":$(cut -d. -f1 /proc/uptime),
-    \"load_average\":\"$(cat /proc/loadavg | awk '{print $1}')\"
+    \"uptime_seconds\":${UPTIME_SECONDS},
+    \"load_average\":${LOAD_AVERAGE}
   }" | jq -c . >> "${SYSTEM_LOG_FILE}"
 
   sleep "${LOG_INTERVAL}"
