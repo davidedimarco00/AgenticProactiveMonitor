@@ -12,7 +12,7 @@ x-monitored-machine: &monitored-machine
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-2.18.0}
+    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-3.7.0}
     container_name: agentic-opensearch
     environment:
       cluster.name: agentic-monitor-cluster
@@ -41,7 +41,7 @@ services:
       start_period: 30s
 
   opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:${OPENSEARCH_DASHBOARDS_VERSION:-2.18.0}
+    image: opensearchproject/opensearch-dashboards:${OPENSEARCH_DASHBOARDS_VERSION:-3.7.0}
     container_name: agentic-opensearch-dashboards
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
