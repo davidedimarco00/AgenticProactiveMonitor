@@ -34,7 +34,11 @@ services:
     networks:
       - monitoring-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -91,11 +95,11 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
-      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-768}
+      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
       QDRANT_DISTANCE: ${QDRANT_DISTANCE:-Cosine}
       QDRANT_WAIT_SECONDS: ${QDRANT_WAIT_SECONDS:-120}
     volumes:
-      - ./qdrant/init/create-collection.sh:/create-collection.sh:ro
+      - ./knowledge_base/qdrant/init/create-collection.sh:/create-collection.sh:ro
     command: ["sh", "/create-collection.sh"]
     depends_on:
       qdrant:
@@ -130,9 +134,10 @@ services:
     container_name: agentic-ollama-models-init
     environment:
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-llama3.2:3b}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      OLLAMA_WAIT_SECONDS: ${OLLAMA_WAIT_SECONDS:-300}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e2b}
+      OLLAMA_TOOL_MODEL: ${OLLAMA_TOOL_MODEL:-qwen3.5:4b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
+      OLLAMA_WAIT_SECONDS: ${OLLAMA_WAIT_SECONDS:-600}
     volumes:
       - ./ollama/init/pull-models.sh:/pull-models.sh:ro
     entrypoint: ["/bin/sh", "/pull-models.sh"]
@@ -161,6 +166,31 @@ services:
     networks:
       - monitoring-net
     restart: unless-stopped
+
+  knowledge-base-ui:
+    build:
+      context: ./knowledge_base/web
+    container_name: agentic-knowledge-base-ui
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
+
+      MAX_UPLOAD_MB: ${KNOWLEDGE_BASE_MAX_UPLOAD_MB:-25}
+
+      CHUNK_SIZE_WORDS: ${KNOWLEDGE_BASE_CHUNK_SIZE_WORDS:-220}
+      CHUNK_OVERLAP_WORDS: ${KNOWLEDGE_BASE_CHUNK_OVERLAP_WORDS:-40}
+
+      SEARCH_LIMIT: ${KNOWLEDGE_BASE_SEARCH_LIMIT:-5}
+
+      FLASK_SECRET_KEY: ${KNOWLEDGE_BASE_SECRET_KEY:-change-this-flask-secret}
+
+    ports:
+      - "127.0.0.1:${KNOWLEDGE_BASE_UI_PORT:-5000}:5000"
+    networks:
+      - monitoring-net
 
   xmpp:
     image: prosodyim/prosody:${PROSODY_VERSION:-13.0}

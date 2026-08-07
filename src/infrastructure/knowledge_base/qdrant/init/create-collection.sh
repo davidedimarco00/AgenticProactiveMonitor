@@ -3,7 +3,7 @@ set -eu
 
 qdrant_url="${QDRANT_URL:-http://qdrant:6333}"
 collection="${QDRANT_COLLECTION:-thesis-knowledge-base}"
-vector_size="${QDRANT_VECTOR_SIZE:-768}"
+vector_size="${QDRANT_VECTOR_SIZE:-384}"
 distance="${QDRANT_DISTANCE:-Cosine}"
 wait_seconds="${QDRANT_WAIT_SECONDS:-120}"
 elapsed=0
