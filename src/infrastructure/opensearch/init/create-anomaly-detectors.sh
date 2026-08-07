@@ -5,16 +5,6 @@ OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-300}"
 MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-20}"
 HOSTS="${DETECTOR_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}"
-INDEX_PATTERN="metrics-machine-*"
-CATEGORY_FIELD="tag.host_id"
-
-CPU_NAME="CPU_ANOMALY"
-MEMORY_NAME="RAM_ANOMALY"
-
-# Names used by the first infrastructure-clean-baseline revision. They are
-# removed once so that Dashboards exposes only the canonical detector names.
-LEGACY_CPU_NAME="infrastructure-cpu-usage"
-LEGACY_MEMORY_NAME="infrastructure-memory-usage"
 
 request() {
   curl -fsS "$@"
@@ -38,10 +28,11 @@ metric_count() {
   host="$1"
   measurement="$2"
   field="$3"
+  index_pattern="metrics-${host}-*"
 
-  request -X POST "${OPENSEARCH_URL}/${INDEX_PATTERN}/_count" \
+  request -X POST "${OPENSEARCH_URL}/${index_pattern}/_count" \
     -H "Content-Type: application/json" \
-    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"term\":{\"${CATEGORY_FIELD}\":\"${host}\"}},{\"exists\":{\"field\":\"${field}\"}}]}}}" \
+    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"exists\":{\"field\":\"${field}\"}}]}}}" \
     | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
     | head -n 1
 }
@@ -82,7 +73,7 @@ find_detector_ids() {
   name="$1"
   request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search?pretty" \
     -H "Content-Type: application/json" \
-    -d "{\"size\":100,\"_source\":false,\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" \
+    -d "{\"size\":100,\"_source\":false,\"query\":{\"term\":{\"name\":\"${name}\"}}}" \
     | sed -n 's/^[[:space:]]*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
@@ -94,9 +85,6 @@ stop_detector() {
 
 start_detector() {
   detector_id="$1"
-  # Starting an already running detector can return a non-2xx response on some
-  # OpenSearch versions. The detector already being active is an acceptable
-  # idempotent outcome, so the request is intentionally tolerant here.
   curl -sS -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start" \
     >/dev/null 2>&1 || true
 }
@@ -112,40 +100,31 @@ remove_detectors_by_name() {
   name="$1"
   for detector_id in $(find_detector_ids "$name" 2>/dev/null || true); do
     delete_detector_id "$detector_id"
-    echo "Removed legacy or duplicate detector ${name} (${detector_id})."
+    echo "Removed obsolete detector ${name} (${detector_id})."
   done
 }
 
 create_detector() {
   name="$1"
   description="$2"
-  measurement="$3"
-  field="$4"
-  feature="$5"
+  host="$3"
+  measurement="$4"
+  field="$5"
+  feature_name="$6"
+  aggregation_name="$7"
+  index_pattern="metrics-${host}-*"
 
   cat >/tmp/detector.json <<JSON
 {
   "name": "${name}",
   "description": "${description}",
   "time_field": "@timestamp",
-  "indices": ["${INDEX_PATTERN}"],
-  "shingle_size": 4,
-  "schema_version": 0,
-  "feature_attributes": [
-    {
-      "feature_name": "${feature}",
-      "feature_enabled": true,
-      "aggregation_query": {
-        "${feature}": {"avg": {"field": "${field}"}}
-      }
-    }
-  ],
+  "indices": ["${index_pattern}"],
   "filter_query": {
     "bool": {
       "filter": [
         {"term": {"measurement_name": "${measurement}"}},
-        {"exists": {"field": "${field}"}},
-        {"exists": {"field": "${CATEGORY_FIELD}"}}
+        {"exists": {"field": "${field}"}}
       ]
     }
   },
@@ -155,7 +134,19 @@ create_detector() {
   "window_delay": {
     "period": {"interval": 1, "unit": "Minutes"}
   },
-  "category_field": ["${CATEGORY_FIELD}"]
+  "shingle_size": 8,
+  "schema_version": 0,
+  "feature_attributes": [
+    {
+      "feature_name": "${feature_name}",
+      "feature_enabled": true,
+      "aggregation_query": {
+        "${aggregation_name}": {
+          "avg": {"field": "${field}"}
+        }
+      }
+    }
+  ]
 }
 JSON
 
@@ -175,32 +166,32 @@ JSON
   fi
 
   start_detector "$detector_id"
-  echo "Created and started ${name} (${detector_id})."
+  echo "Created and started ${name} (${detector_id}) on ${index_pattern}."
 }
 
 ensure_detector() {
   name="$1"
   description="$2"
-  measurement="$3"
-  field="$4"
-  feature="$5"
+  host="$3"
+  measurement="$4"
+  field="$5"
+  feature_name="$6"
+  aggregation_name="$7"
 
   ids="$(find_detector_ids "$name" 2>/dev/null || true)"
 
   if [ -z "$ids" ]; then
-    create_detector "$name" "$description" "$measurement" "$field" "$feature"
+    create_detector "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
     return 0
   fi
 
-  # Preserve the first detector and its learned model across Docker restarts.
-  # Any accidental duplicates are removed.
   set -- $ids
   detector_id="$1"
   shift
 
   for duplicate_id in "$@"; do
     delete_detector_id "$duplicate_id"
-    echo "Removed duplicate ${name} detector (${duplicate_id})."
+    echo "Removed duplicate detector ${name} (${duplicate_id})."
   done
 
   start_detector "$detector_id"
@@ -208,33 +199,34 @@ ensure_detector() {
 }
 
 wait_for_plugin
-
-# High-cardinality detectors use tag.host_id as the entity dimension. Enabling
-# cold-start interpolation shortens initialization in the local thesis lab.
-curl -sS -X PUT "${OPENSEARCH_URL}/_cluster/settings" \
-  -H "Content-Type: application/json" \
-  -d '{"persistent":{"plugins.anomaly_detection.hcad_cold_start_interpolation.enabled":true}}' \
-  >/dev/null || true
-
 wait_for_metric_on_all_hosts CPU cpu cpu.usage_active
 wait_for_metric_on_all_hosts RAM mem mem.used_percent
 
-# One-time cleanup of names used before the observability baseline was frozen.
-remove_detectors_by_name "$LEGACY_CPU_NAME"
-remove_detectors_by_name "$LEGACY_MEMORY_NAME"
+# Remove the multi-entity/HCAD detectors used by the previous baseline.
+# The new architecture intentionally uses one single-entity detector per host.
+remove_detectors_by_name "CPU_ANOMALY"
+remove_detectors_by_name "RAM_ANOMALY"
+remove_detectors_by_name "infrastructure-cpu-usage"
+remove_detectors_by_name "infrastructure-memory-usage"
 
-ensure_detector \
-  "$CPU_NAME" \
-  "Average active CPU usage grouped by monitored machine" \
-  cpu \
-  cpu.usage_active \
-  average_cpu_usage_active
+for host in $HOSTS; do
+  ensure_detector \
+    "CPU_ANOMALY_${host}" \
+    "Active CPU usage anomaly detector for ${host}" \
+    "$host" \
+    cpu \
+    cpu.usage_active \
+    CPU_ANOMALY \
+    cpu_anomaly
 
-ensure_detector \
-  "$MEMORY_NAME" \
-  "Average memory usage grouped by monitored machine" \
-  mem \
-  mem.used_percent \
-  average_memory_used_percent
+  ensure_detector \
+    "RAM_ANOMALY_${host}" \
+    "Memory usage anomaly detector for ${host}" \
+    "$host" \
+    mem \
+    mem.used_percent \
+    RAM_ANOMALY \
+    ram_anomaly
+done
 
-echo "CPU_ANOMALY and RAM_ANOMALY are ready."
+echo "Single-entity CPU and RAM anomaly detectors are ready for all monitored hosts."
