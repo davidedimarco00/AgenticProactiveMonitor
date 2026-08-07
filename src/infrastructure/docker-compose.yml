@@ -181,7 +181,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5)\" || exit 1",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:5000/health'', timeout=5)" || exit 1',
         ]
       interval: 15s
       timeout: 10s
@@ -239,6 +239,29 @@ services:
       timeout: 10s
       retries: 10
       start_period: 15s
+    restart: unless-stopped
+
+  mcp-server:
+    build:
+      context: ../mcp_server
+      dockerfile: Dockerfile
+
+    container_name: agentic-mcp-server
+
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_PATH: /mcp
+
+      OPENSEARCH_URL: http://opensearch:9200
+      QDRANT_URL: http://qdrant:6333
+
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    networks:
+      - monitoring-net
+
     restart: unless-stopped
 
   machine-01:
