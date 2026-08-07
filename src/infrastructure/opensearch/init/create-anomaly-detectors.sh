@@ -80,7 +80,7 @@ wait_for_metric_on_all_hosts() {
 
 find_detector_ids() {
   name="$1"
-  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search" \
+  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search?pretty" \
     -H "Content-Type: application/json" \
     -d "{\"size\":100,\"_source\":false,\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" \
     | sed -n 's/^[[:space:]]*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
