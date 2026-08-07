@@ -154,23 +154,22 @@ services:
       - monitoring-net
     restart: "no"
 
-  knowledge-base-ingest:
+  knowledge-base-web:
     build:
-      context: ./knowledge_base/ingestion
-    container_name: agentic-knowledge-base-ingest
+      context: ./knowledge_base/web
+    container_name: agentic-knowledge-base-web
     environment:
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
       OLLAMA_URL: http://ollama:11434
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
-      KNOWLEDGE_BASE_CHUNK_SIZE: ${KNOWLEDGE_BASE_CHUNK_SIZE:-1200}
-      KNOWLEDGE_BASE_CHUNK_OVERLAP: ${KNOWLEDGE_BASE_CHUNK_OVERLAP:-200}
-      KNOWLEDGE_BASE_EMBED_BATCH_SIZE: ${KNOWLEDGE_BASE_EMBED_BATCH_SIZE:-16}
-      KNOWLEDGE_BASE_REQUEST_TIMEOUT: ${KNOWLEDGE_BASE_REQUEST_TIMEOUT:-120}
-      RAG_TOP_K: ${RAG_TOP_K:-5}
-    volumes:
-      - ./knowledge_base/documents:/documents:ro
-    command: ["ingest", "/documents"]
+      MAX_UPLOAD_MB: ${KNOWLEDGE_BASE_MAX_UPLOAD_MB:-25}
+      CHUNK_SIZE_WORDS: ${KNOWLEDGE_BASE_CHUNK_SIZE_WORDS:-220}
+      CHUNK_OVERLAP_WORDS: ${KNOWLEDGE_BASE_CHUNK_OVERLAP_WORDS:-40}
+      SEARCH_LIMIT: ${KNOWLEDGE_BASE_SEARCH_LIMIT:-5}
+      FLASK_SECRET_KEY: ${KNOWLEDGE_BASE_FLASK_SECRET_KEY:-change-this-flask-secret}
+    ports:
+      - "127.0.0.1:${KNOWLEDGE_BASE_UI_PORT:-5000}:5000"
     depends_on:
       qdrant-init:
         condition: service_completed_successfully
@@ -178,7 +177,17 @@ services:
         condition: service_completed_successfully
     networks:
       - monitoring-net
-    restart: "no"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5)\" || exit 1",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_VERSION:-v0.9.5}
