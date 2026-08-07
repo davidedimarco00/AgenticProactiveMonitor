@@ -326,6 +326,7 @@ services:
       OPENSEARCH_URL: http://opensearch:9200
       DETECTOR_WAIT_SECONDS: ${DETECTOR_WAIT_SECONDS:-300}
       DETECTOR_MIN_DOCUMENTS: ${DETECTOR_MIN_DOCUMENTS:-20}
+      DETECTOR_HOSTS: ${DETECTOR_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}
     volumes:
       - ./opensearch/init/create-anomaly-detectors.sh:/create-anomaly-detectors.sh:ro
     command: ["sh", "/create-anomaly-detectors.sh"]
