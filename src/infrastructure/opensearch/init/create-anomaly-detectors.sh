@@ -73,7 +73,7 @@ find_detector_ids() {
   name="$1"
   request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search?pretty" \
     -H "Content-Type: application/json" \
-    -d "{\"size\":100,\"_source\":false,\"query\":{\"term\":{\"name\":\"${name}\"}}}" \
+    -d "{\"size\":100,\"_source\":false,\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" \
     | sed -n 's/^[[:space:]]*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
@@ -203,7 +203,6 @@ wait_for_metric_on_all_hosts CPU cpu cpu.usage_active
 wait_for_metric_on_all_hosts RAM mem mem.used_percent
 
 # Remove the multi-entity/HCAD detectors used by the previous baseline.
-# The new architecture intentionally uses one single-entity detector per host.
 remove_detectors_by_name "CPU_ANOMALY"
 remove_detectors_by_name "RAM_ANOMALY"
 remove_detectors_by_name "infrastructure-cpu-usage"
@@ -211,7 +210,7 @@ remove_detectors_by_name "infrastructure-memory-usage"
 
 for host in $HOSTS; do
   ensure_detector \
-    "CPU_ANOMALY_${host}" \
+    "CPU-${host}" \
     "Active CPU usage anomaly detector for ${host}" \
     "$host" \
     cpu \
@@ -220,7 +219,7 @@ for host in $HOSTS; do
     cpu_anomaly
 
   ensure_detector \
-    "RAM_ANOMALY_${host}" \
+    "RAM-${host}" \
     "Memory usage anomaly detector for ${host}" \
     "$host" \
     mem \
