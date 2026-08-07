@@ -111,41 +111,28 @@ services:
   ollama:
     image: ollama/ollama:${OLLAMA_VERSION:-0.32.5}
     container_name: agentic-ollama
-
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
       OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
-
-      # Force NVIDIA CUDA backend
       OLLAMA_LLM_LIBRARY: cuda_v13
       CUDA_VISIBLE_DEVICES: "0"
-
-      # Disable experimental Vulkan backend
       OLLAMA_VULKAN: "0"
       GGML_VK_VISIBLE_DEVICES: "-1"
-
-      # Temporary: useful until GPU detection is confirmed
       OLLAMA_DEBUG: "1"
-
     gpus: all
-
     ports:
       - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
-
     volumes:
       - ollama-data:/root/.ollama
-
     networks:
       - monitoring-net
-
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 10s
       retries: 30
       start_period: 20s
-
     restart: unless-stopped
 
   ollama-models-init:
@@ -167,45 +154,58 @@ services:
       - monitoring-net
     restart: "no"
 
+  knowledge-base-ingest:
+    build:
+      context: ./knowledge_base/ingestion
+    container_name: agentic-knowledge-base-ingest
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
+      KNOWLEDGE_BASE_CHUNK_SIZE: ${KNOWLEDGE_BASE_CHUNK_SIZE:-1200}
+      KNOWLEDGE_BASE_CHUNK_OVERLAP: ${KNOWLEDGE_BASE_CHUNK_OVERLAP:-200}
+      KNOWLEDGE_BASE_EMBED_BATCH_SIZE: ${KNOWLEDGE_BASE_EMBED_BATCH_SIZE:-16}
+      KNOWLEDGE_BASE_REQUEST_TIMEOUT: ${KNOWLEDGE_BASE_REQUEST_TIMEOUT:-120}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+    volumes:
+      - ./knowledge_base/documents:/documents:ro
+    command: ["ingest", "/documents"]
+    depends_on:
+      qdrant-init:
+        condition: service_completed_successfully
+      ollama-models-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring-net
+    restart: "no"
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_VERSION:-v0.9.5}
     container_name: agentic-open-webui
-
     environment:
-      # LLM backend
       OLLAMA_BASE_URL: http://ollama:11434
-
-      # RAG embedding through Ollama
       RAG_EMBEDDING_ENGINE: ollama
       RAG_OLLAMA_BASE_URL: http://ollama:11434
       RAG_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
       RAG_TOP_K: ${RAG_TOP_K:-5}
-
-      # Vector database
       VECTOR_DB: qdrant
       QDRANT_URI: http://qdrant:6333
       QDRANT_TIMEOUT: 10
-
-      # Open WebUI
       WEBUI_AUTH: ${OPEN_WEBUI_AUTH:-true}
       WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-change-this-secret-before-first-start}
       ENABLE_SIGNUP: ${OPEN_WEBUI_ENABLE_SIGNUP:-true}
-
     ports:
       - "127.0.0.1:${OPEN_WEBUI_PORT:-3000}:8080"
-
     volumes:
       - open-webui-data:/app/backend/data
-
     depends_on:
       ollama-models-init:
         condition: service_completed_successfully
       qdrant:
         condition: service_started
-
     networks:
       - monitoring-net
-
     restart: unless-stopped
 
   xmpp:
