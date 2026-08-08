@@ -24,8 +24,8 @@ class FakeOllama:
                 hypotheses=[preferred],
                 preferred_hypothesis=preferred,
                 required_checks=[
-                    DiagnosticCheck(action="shutdown_host", target="machine-03"),
-                    DiagnosticCheck(action="query_logs", target="machine-04"),
+                    DiagnosticCheck(action="shutdown_host", target="processing-service"),
+                    DiagnosticCheck(action="query_logs", target="data-service"),
                 ],
                 explanation="The dependency may be the root cause.",
                 root_cause_summary="Possible downstream latency",
@@ -34,27 +34,35 @@ class FakeOllama:
             accepted=True,
             confidence=0.40,
             reason="Weak evidence",
-            required_checks=[DiagnosticCheck(action="query_metrics", target="machine-04")],
+            required_checks=[
+                DiagnosticCheck(action="query_metrics", target="data-service")
+            ],
         )
 
 
 def incident() -> IncidentContext:
     return IncidentContext(
         detector_id="d1",
-        host_id="machine-03",
+        host_id="processing-service",
         metric_name="cpu.usage_active",
         anomaly_score=0.91,
         round=1,
-        evidence=[{"hosts": ["machine-03", "machine-04"], "metrics": {}, "logs": {}}],
+        evidence=[
+            {
+                "hosts": ["processing-service", "data-service"],
+                "metrics": {},
+                "logs": {},
+            }
+        ],
     )
 
 
 @pytest.mark.asyncio
 async def test_reasoning_normalises_targets_and_filters_unsafe_checks():
     result = await ReasoningService(FakeOllama()).diagnose(incident())
-    assert result.preferred_hypothesis.component == "machine-03"
+    assert result.preferred_hypothesis.component == "processing-service"
     assert [check.action for check in result.required_checks] == ["query_logs"]
-    assert result.required_checks[0].target == "machine-04"
+    assert result.required_checks[0].target == "data-service"
 
 
 @pytest.mark.asyncio
