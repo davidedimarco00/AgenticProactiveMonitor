@@ -1,132 +1,188 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import time
-import uuid
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from pathlib import Path
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
+from common.logging_utils import new_request_id, write_log
+
 SERVICE_NAME = "processing-service"
-HOST_ID = os.getenv("HOST_ID", SERVICE_NAME)
-MACHINE_ROLE = os.getenv("MACHINE_ROLE", SERVICE_NAME)
-LOG_FILE = Path(os.getenv("APP_LOG_FILE", "/var/log/machine/app.log"))
-PROCESSING_MULTIPLIER = float(os.getenv("PROCESSING_MULTIPLIER", "2"))
-PROCESSING_DELAY_MS = int(os.getenv("PROCESSING_DELAY_MS", "50"))
+DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data-service:8000").rstrip("/")
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
 
 
-def utc_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+class NoteWrite(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=10000)
 
 
-def write_log(
-    *,
-    level: str,
-    event_type: str,
-    message: str,
-    request_id: str | None = None,
-    **fields: object,
-) -> None:
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+async def forward_request(
+    method: str,
+    path: str,
+    request_id: str,
+    payload: dict[str, object] | None = None,
+) -> httpx.Response:
+    start = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.request(
+                method,
+                f"{DATA_SERVICE_URL}{path}",
+                headers={"X-Request-ID": request_id},
+                json=payload,
+            )
+    except httpx.RequestError as exc:
+        latency_ms = round((time.perf_counter() - start) * 1000, 3)
+        write_log(
+            service=SERVICE_NAME,
+            level="ERROR",
+            event_type="data_service_unavailable",
+            message="Unable to contact data service",
+            request_id=request_id,
+            downstream="data-service",
+            latency_ms=latency_ms,
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(status_code=503, detail="data service unavailable") from exc
 
-    event = {
-        "timestamp": utc_timestamp(),
-        "host": HOST_ID,
-        "machine_role": MACHINE_ROLE,
-        "service": SERVICE_NAME,
-        "event_type": event_type,
-        "level": level,
-        "message": message,
-        **fields,
-    }
-
-    if request_id is not None:
-        event["request_id"] = request_id
-
-    with LOG_FILE.open("a", encoding="utf-8") as log_file:
-        log_file.write(json.dumps(event, separators=(",", ":")) + "\n")
-
-
-class ProcessRequest(BaseModel):
-    value: float = Field(description="Numeric value to process")
-    request_id: str | None = Field(
-        default=None,
-        description="Optional request identifier propagated across services",
-    )
-
-
-class ProcessResponse(BaseModel):
-    request_id: str
-    input_value: float
-    result: float
-    service: str
-    processing_time_ms: float
-
-
-@asynccontextmanager
-async def lifespan(_: FastAPI):
+    latency_ms = round((time.perf_counter() - start) * 1000, 3)
     write_log(
+        service=SERVICE_NAME,
+        level="INFO" if response.status_code < 500 else "ERROR",
+        event_type="downstream_request_completed",
+        message="Data service request completed",
+        request_id=request_id,
+        downstream="data-service",
+        method=method,
+        path=path,
+        status_code=response.status_code,
+        latency_ms=latency_ms,
+    )
+    return response
+
+
+def request_id_from(request: Request) -> str:
+    return request.headers.get("X-Request-ID") or new_request_id()
+
+
+def raise_for_downstream(response: httpx.Response) -> None:
+    if response.status_code >= 400:
+        detail = "downstream request failed"
+        try:
+            body = response.json()
+            detail = body.get("detail", detail)
+        except ValueError:
+            pass
+        raise HTTPException(status_code=response.status_code, detail=detail)
+
+
+app = FastAPI(title="Notes Service", version="0.1.0")
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    write_log(
+        service=SERVICE_NAME,
         level="INFO",
         event_type="service_started",
-        message="Processing service started",
-        multiplier=PROCESSING_MULTIPLIER,
-        configured_delay_ms=PROCESSING_DELAY_MS,
+        message="Notes processing service started",
+        data_service_url=DATA_SERVICE_URL,
     )
-    yield
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
     write_log(
+        service=SERVICE_NAME,
         level="INFO",
         event_type="service_stopped",
-        message="Processing service stopped",
+        message="Notes processing service stopped",
     )
-
-
-app = FastAPI(
-    title="Monitored Processing Service",
-    version="0.1.0",
-    lifespan=lifespan,
-)
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {
-        "status": "ok",
-        "service": SERVICE_NAME,
-        "host": HOST_ID,
-    }
+    request_id = new_request_id()
+    response = await forward_request("GET", "/health", request_id)
+    raise_for_downstream(response)
+    return {"status": "ok", "service": SERVICE_NAME, "data_service": "ok"}
 
 
-@app.post("/process", response_model=ProcessResponse)
-async def process(payload: ProcessRequest) -> ProcessResponse:
-    request_id = payload.request_id or str(uuid.uuid4())
-    start_time = time.perf_counter()
-
-    if PROCESSING_DELAY_MS > 0:
-        await asyncio.sleep(PROCESSING_DELAY_MS / 1000)
-
-    result = payload.value * PROCESSING_MULTIPLIER
-    processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
-
+@app.get("/notes")
+async def list_notes(request: Request) -> list[dict[str, object]]:
+    request_id = request_id_from(request)
+    response = await forward_request("GET", "/notes", request_id)
+    raise_for_downstream(response)
+    notes = response.json()
     write_log(
-        level="INFO",
-        event_type="request_processed",
-        message="Processing request completed",
-        request_id=request_id,
-        input_value=payload.value,
-        result=result,
-        multiplier=PROCESSING_MULTIPLIER,
-        latency_ms=processing_time_ms,
-    )
-
-    return ProcessResponse(
-        request_id=request_id,
-        input_value=payload.value,
-        result=result,
         service=SERVICE_NAME,
-        processing_time_ms=processing_time_ms,
+        level="INFO",
+        event_type="notes_listed",
+        message="Notes returned to caller",
+        request_id=request_id,
+        note_count=len(notes),
     )
+    return notes
+
+
+@app.get("/notes/{note_id}")
+async def get_note(note_id: int, request: Request) -> dict[str, object]:
+    request_id = request_id_from(request)
+    response = await forward_request("GET", f"/notes/{note_id}", request_id)
+    raise_for_downstream(response)
+    return response.json()
+
+
+@app.post("/notes", status_code=status.HTTP_201_CREATED)
+async def create_note(payload: NoteWrite, request: Request) -> dict[str, object]:
+    request_id = request_id_from(request)
+    response = await forward_request("POST", "/notes", request_id, payload.model_dump())
+    raise_for_downstream(response)
+    note = response.json()
+    write_log(
+        service=SERVICE_NAME,
+        level="INFO",
+        event_type="note_created",
+        message="Note creation completed",
+        request_id=request_id,
+        note_id=note.get("id"),
+    )
+    return note
+
+
+@app.put("/notes/{note_id}")
+async def update_note(note_id: int, payload: NoteWrite, request: Request) -> dict[str, object]:
+    request_id = request_id_from(request)
+    response = await forward_request(
+        "PUT", f"/notes/{note_id}", request_id, payload.model_dump()
+    )
+    raise_for_downstream(response)
+    note = response.json()
+    write_log(
+        service=SERVICE_NAME,
+        level="INFO",
+        event_type="note_updated",
+        message="Note update completed",
+        request_id=request_id,
+        note_id=note_id,
+    )
+    return note
+
+
+@app.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_note(note_id: int, request: Request) -> Response:
+    request_id = request_id_from(request)
+    response = await forward_request("DELETE", f"/notes/{note_id}", request_id)
+    raise_for_downstream(response)
+    write_log(
+        service=SERVICE_NAME,
+        level="INFO",
+        event_type="note_deleted",
+        message="Note deletion completed",
+        request_id=request_id,
+        note_id=note_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
