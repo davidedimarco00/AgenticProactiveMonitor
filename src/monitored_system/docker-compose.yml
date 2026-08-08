@@ -2,7 +2,8 @@ name: monitored-system
 
 x-monitored-service: &monitored-service
   build:
-    context: ./runtime
+    context: .
+    dockerfile: runtime/Dockerfile
   networks:
     - monitored-system-net
     - observability-net
@@ -37,13 +38,16 @@ services:
     <<: *monitored-service
     container_name: processing-service
     hostname: processing-service
+    ports:
+      - "8002:8000"
     environment:
       HOST_ID: processing-service
       MACHINE_ROLE: processing-service
-      LOG_LEVEL_PROFILE: unstable
-      LATENCY_MIN: 30
-      LATENCY_MAX: 900
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
+      WORKLOAD_MODE: application
+      APP_COMMAND: "cd /opt/monitored-system/processing-service && uvicorn app:app --host 0.0.0.0 --port 8000"
+      PROCESSING_MULTIPLIER: ${PROCESSING_MULTIPLIER:-2}
+      PROCESSING_DELAY_MS: ${PROCESSING_DELAY_MS:-50}
 
   data-service:
     <<: *monitored-service
