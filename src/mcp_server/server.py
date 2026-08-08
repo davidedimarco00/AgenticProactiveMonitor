@@ -1,6 +1,10 @@
 import os
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server import MCPServer
+
+from tools.opensearch_tools import register_opensearch_tools
+from tools.docker_tools import register_docker_tools
+from tools.qdrant_tools import register_qdrant_tools
 
 
 mcp = MCPServer(
@@ -23,6 +27,10 @@ def ping() -> dict:
         "service": "AgenticProactiveMonitor MCP",
     }
 
+
+register_opensearch_tools(mcp)
+register_docker_tools(mcp)
+register_qdrant_tools(mcp)
 
 if __name__ == "__main__":
     host = os.getenv("MCP_HOST", "127.0.0.1")
