@@ -1,15 +1,5 @@
 name: agentic-proactive-monitor-infrastructure
 
-x-monitored-machine: &monitored-machine
-  build:
-    context: ./monitored-machine
-  depends_on:
-    opensearch-init:
-      condition: service_completed_successfully
-  networks:
-    - monitoring-net
-  restart: unless-stopped
-
 services:
   opensearch:
     image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-3.6.0}
@@ -245,14 +235,11 @@ services:
     build:
       context: ../mcp_server
       dockerfile: Dockerfile
-
     container_name: agentic-mcp-server
-
     environment:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
       MCP_PATH: /mcp
-
       OPENSEARCH_URL: http://opensearch:9200
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
@@ -263,69 +250,8 @@ services:
     networks:
       - monitoring-net
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock #questo serve per far eseguire i comandi docker all'interno del container e anche degli altri
-
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
-
-  machine-01:
-    <<: *monitored-machine
-    container_name: machine-01
-    hostname: machine-01
-    environment:
-      HOST_ID: machine-01
-      MACHINE_ROLE: application-server
-      LOG_LEVEL_PROFILE: normal
-      LATENCY_MIN: 10
-      LATENCY_MAX: 500
-      LOG_INTERVAL: ${LOG_INTERVAL:-3}
-
-  machine-02:
-    <<: *monitored-machine
-    container_name: machine-02
-    hostname: machine-02
-    environment:
-      HOST_ID: machine-02
-      MACHINE_ROLE: database-server
-      LOG_LEVEL_PROFILE: normal
-      LATENCY_MIN: 20
-      LATENCY_MAX: 700
-      LOG_INTERVAL: ${LOG_INTERVAL:-3}
-
-  machine-03:
-    <<: *monitored-machine
-    container_name: machine-03
-    hostname: machine-03
-    environment:
-      HOST_ID: machine-03
-      MACHINE_ROLE: api-gateway
-      LOG_LEVEL_PROFILE: unstable
-      LATENCY_MIN: 30
-      LATENCY_MAX: 900
-      LOG_INTERVAL: ${LOG_INTERVAL:-3}
-
-  machine-04:
-    <<: *monitored-machine
-    container_name: machine-04
-    hostname: machine-04
-    environment:
-      HOST_ID: machine-04
-      MACHINE_ROLE: worker-node
-      LOG_LEVEL_PROFILE: normal
-      LATENCY_MIN: 40
-      LATENCY_MAX: 1100
-      LOG_INTERVAL: ${LOG_INTERVAL:-3}
-
-  machine-05:
-    <<: *monitored-machine
-    container_name: machine-05
-    hostname: machine-05
-    environment:
-      HOST_ID: machine-05
-      MACHINE_ROLE: edge-node
-      LOG_LEVEL_PROFILE: critical
-      LATENCY_MIN: 50
-      LATENCY_MAX: 1300
-      LOG_INTERVAL: ${LOG_INTERVAL:-3}
 
   opensearch-dashboards-init:
     image: curlimages/curl:${CURL_IMAGE_VERSION:-8.10.1}
@@ -334,22 +260,13 @@ services:
       OPENSEARCH_URL: http://opensearch:9200
       DASHBOARDS_URL: http://opensearch-dashboards:5601
       DASHBOARDS_WAIT_SECONDS: ${DASHBOARDS_WAIT_SECONDS:-300}
+      DASHBOARDS_INDEX_PATTERN_HOSTS: ${MONITORED_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}
     volumes:
       - ./opensearch-dashboards/init/create-index-patterns.sh:/create-index-patterns.sh:ro
     command: ["sh", "/create-index-patterns.sh"]
     depends_on:
       opensearch-dashboards:
         condition: service_started
-      machine-01:
-        condition: service_healthy
-      machine-02:
-        condition: service_healthy
-      machine-03:
-        condition: service_healthy
-      machine-04:
-        condition: service_healthy
-      machine-05:
-        condition: service_healthy
     networks:
       - monitoring-net
     restart: "no"
@@ -361,20 +278,12 @@ services:
       OPENSEARCH_URL: http://opensearch:9200
       DETECTOR_WAIT_SECONDS: ${DETECTOR_WAIT_SECONDS:-300}
       DETECTOR_MIN_DOCUMENTS: ${DETECTOR_MIN_DOCUMENTS:-20}
-      DETECTOR_HOSTS: ${DETECTOR_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}
+      DETECTOR_HOSTS: ${MONITORED_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}
     volumes:
       - ./opensearch/init/create-anomaly-detectors.sh:/create-anomaly-detectors.sh:ro
     command: ["sh", "/create-anomaly-detectors.sh"]
     depends_on:
-      machine-01:
-        condition: service_healthy
-      machine-02:
-        condition: service_healthy
-      machine-03:
-        condition: service_healthy
-      machine-04:
-        condition: service_healthy
-      machine-05:
+      opensearch:
         condition: service_healthy
     networks:
       - monitoring-net
@@ -382,6 +291,7 @@ services:
 
 networks:
   monitoring-net:
+    name: ${OBSERVABILITY_NETWORK_NAME:-agentic-monitoring-net}
     driver: bridge
 
 volumes:
