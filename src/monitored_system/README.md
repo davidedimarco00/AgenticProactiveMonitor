@@ -3,6 +3,32 @@
 This directory contains the standalone software environment observed by AgenticProactiveMonitor.
 It is intentionally separated from the agentic infrastructure and runs as its own Docker Compose project: `monitored-system`.
 
+## Project structure
+
+```text
+src/monitored_system/
+├── docker-compose.yml
+├── .env.example
+├── README.md
+├── infrastructure/
+│   ├── Dockerfile
+│   ├── entrypoint.sh
+│   ├── telegraf.conf
+│   ├── fluent-bit.conf
+│   └── parsers.conf
+└── src/
+    ├── processing-service/
+    │   ├── app.py
+    │   └── requirements.txt
+    ├── api-gateway/
+    ├── data-service/
+    ├── worker-service/
+    └── traffic-generator/
+```
+
+`infrastructure/` contains container runtime and observability configuration.
+`src/` contains only monitored application source code.
+
 ## Services
 
 - `traffic-generator`: generates requests for the monitored application flow.
@@ -50,7 +76,7 @@ Example request:
 ```
 
 The service multiplies the input value by `PROCESSING_MULTIPLIER` (default `2`) and returns the result together with a request identifier and processing time.
-`PROCESSING_DELAY_MS` can be used to configure a small artificial processing delay and will later be useful for controlled fault scenarios.
+`PROCESSING_DELAY_MS` configures an artificial processing delay that can later be used for controlled fault scenarios.
 
 ## Observability
 
@@ -61,18 +87,6 @@ Each monitored service contains Telegraf and Fluent Bit.
 - Real application services write structured JSON events to `/var/log/machine/app.log`.
 
 The monitored stack connects to the Docker network created by the agentic infrastructure only for observability traffic. The application services also have their own private `monitored-system-net`.
-
-## Docker projects
-
-The two environments are intentionally separate:
-
-```text
-agentic-proactive-monitor-infrastructure
-  -> OpenSearch, Qdrant, Ollama, XMPP, MCP, Dashboards, bootstrap services
-
-monitored-system
-  -> traffic-generator, api-gateway, processing-service, data-service, worker-service
-```
 
 ## Failure scenarios
 
