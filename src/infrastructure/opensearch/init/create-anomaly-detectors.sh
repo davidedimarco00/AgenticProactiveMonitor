@@ -4,7 +4,7 @@ set -eu
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-300}"
 MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-20}"
-HOSTS="${DETECTOR_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}"
+HOSTS="${DETECTOR_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}"
 
 request() {
   curl -fsS "$@"
