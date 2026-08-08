@@ -23,7 +23,13 @@ wait_for_opensearch
 
 cat >/tmp/metrics-template.json <<'JSON'
 {
-  "index_patterns": ["metrics-machine-*"],
+  "index_patterns": [
+    "metrics-traffic-generator-*",
+    "metrics-api-gateway-*",
+    "metrics-processing-service-*",
+    "metrics-data-service-*",
+    "metrics-worker-service-*"
+  ],
   "priority": 200,
   "template": {
     "settings": {
@@ -91,14 +97,20 @@ cat >/tmp/metrics-template.json <<'JSON'
     }
   },
   "_meta": {
-    "description": "Telegraf metrics, separated by monitored machine"
+    "description": "Telegraf metrics from the standalone monitored system"
   }
 }
 JSON
 
 cat >/tmp/logs-template.json <<'JSON'
 {
-  "index_patterns": ["logs-machine-*"],
+  "index_patterns": [
+    "logs-traffic-generator-*",
+    "logs-api-gateway-*",
+    "logs-processing-service-*",
+    "logs-data-service-*",
+    "logs-worker-service-*"
+  ],
   "priority": 100,
   "template": {
     "settings": {
@@ -133,12 +145,12 @@ cat >/tmp/logs-template.json <<'JSON'
     }
   },
   "_meta": {
-    "description": "Fluent Bit logs, separated by monitored machine"
+    "description": "Fluent Bit logs from the standalone monitored system"
   }
 }
 JSON
 
-put_template metrics-machine-template /tmp/metrics-template.json
-put_template logs-machine-template /tmp/logs-template.json
+put_template monitored-system-metrics-template /tmp/metrics-template.json
+put_template monitored-system-logs-template /tmp/logs-template.json
 
 echo "OpenSearch templates are ready."
