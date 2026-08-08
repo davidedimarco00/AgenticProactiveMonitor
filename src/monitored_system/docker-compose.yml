@@ -17,17 +17,22 @@ services:
     environment:
       HOST_ID: traffic-generator
       MACHINE_ROLE: traffic-generator
-      LOG_LEVEL_PROFILE: normal
-      LATENCY_MIN: 10
-      LATENCY_MAX: 500
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
+      WORKLOAD_MODE: application
+      APP_COMMAND: "cd /opt/monitored-system/src/traffic-generator && python3 generator.py"
+      TARGET_URL: http://api-gateway:5000
+      REQUEST_TIMEOUT_SECONDS: ${TRAFFIC_REQUEST_TIMEOUT_SECONDS:-5}
+      TRAFFIC_MIN_INTERVAL_SECONDS: ${TRAFFIC_MIN_INTERVAL_SECONDS:-2}
+      TRAFFIC_MAX_INTERVAL_SECONDS: ${TRAFFIC_MAX_INTERVAL_SECONDS:-5}
+    depends_on:
+      - api-gateway
 
   api-gateway:
     <<: *monitored-service
     container_name: api-gateway
     hostname: api-gateway
     ports:
-      - "8000:5000"
+      - "8080:5000"
     environment:
       HOST_ID: api-gateway
       MACHINE_ROLE: api-gateway
@@ -54,6 +59,8 @@ services:
       APP_COMMAND: "cd /opt/monitored-system/src/processing-service && uvicorn app:app --host 0.0.0.0 --port 8000"
       DATA_SERVICE_URL: http://data-service:8000
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-3}
+      FAULT_DELAY_FILE: /var/run/monitored-faults/processing-delay-ms
+      MAX_FAULT_DELAY_MS: ${MAX_FAULT_DELAY_MS:-30000}
     depends_on:
       - data-service
 
