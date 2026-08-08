@@ -8,6 +8,8 @@ x-monitored-service: &monitored-service
     - monitored-system-net
     - observability-net
   restart: unless-stopped
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
 
 services:
   traffic-generator:
@@ -78,6 +80,7 @@ services:
       APP_COMMAND: "cd /opt/monitored-system/src/data-service && uvicorn app:app --host 0.0.0.0 --port 8000"
       DATABASE_PATH: /var/lib/notes/notes.db
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - notes-data:/var/lib/notes
 
   worker-service:
