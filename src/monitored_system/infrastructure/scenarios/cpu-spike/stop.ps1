@@ -11,6 +11,6 @@ if ($running -ne "true") {
     throw "Container '$container' is not running."
 }
 
-docker exec $container sh -c "if [ -s $pidFile ]; then kill \$(cat $pidFile) 2>/dev/null || true; fi; rm -f $pidFile $remoteScript /tmp/monitored-cpu-spike.log"
+docker exec $container sh -c "if [ -s $pidFile ]; then xargs kill < $pidFile 2>/dev/null || true; fi; rm -f $pidFile $remoteScript /tmp/monitored-cpu-spike.log"
 
 Write-Host "Scenario stopped. CPU load should return to the normal baseline."
