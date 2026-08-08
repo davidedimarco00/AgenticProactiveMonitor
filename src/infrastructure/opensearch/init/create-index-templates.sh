@@ -60,7 +60,10 @@ cat >/tmp/metrics-template.json <<'JSON'
             "metric_type": {"type": "keyword"},
             "project": {"type": "keyword"},
             "environment": {"type": "keyword"},
-            "monitored_by": {"type": "keyword"}
+            "monitored_by": {"type": "keyword"},
+            "container_name": {"type": "keyword"},
+            "container_image": {"type": "keyword"},
+            "container_status": {"type": "keyword"}
           }
         },
         "cpu": {
@@ -86,6 +89,31 @@ cat >/tmp/metrics-template.json <<'JSON'
             "available_percent": {"type": "float"}
           }
         },
+        "docker_container_cpu": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "usage_percent": {"type": "float"},
+            "usage_total": {"type": "long"},
+            "usage_in_usermode": {"type": "long"},
+            "usage_in_kernelmode": {"type": "long"}
+          }
+        },
+        "docker_container_mem": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "usage": {"type": "long"},
+            "usage_percent": {"type": "float"},
+            "limit": {"type": "long"},
+            "rss": {"type": "long"},
+            "cache": {"type": "long"}
+          }
+        },
+        "docker_container_net": {"type": "object", "dynamic": true},
+        "docker_container_blkio": {"type": "object", "dynamic": true},
+        "docker_container_status": {"type": "object", "dynamic": true},
+        "docker_container_health": {"type": "object", "dynamic": true},
         "disk": {"type": "object", "dynamic": true},
         "diskio": {"type": "object", "dynamic": true},
         "net": {"type": "object", "dynamic": true},
