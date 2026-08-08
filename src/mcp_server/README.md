@@ -1,8 +1,8 @@
 # MCP Server
 
-This module provides the **Model Context Protocol (MCP) server** used by the Agentic Proactive Monitor project.
+This module provides the **Model Context Protocol (MCP) server** used by AgenticProactiveMonitor.
 
-Its purpose is to expose controlled, read-only diagnostic tools that can later be invoked autonomously by SPADE agents and local LLMs during incident investigation.
+Its purpose is to expose controlled diagnostic tools that can be invoked by SPADE agents and local LLMs during incident investigation.
 
 ## Architecture
 
@@ -16,14 +16,16 @@ Diagnostic Agent / LLM
    |              |
 OpenSearch      Docker
    |              |
-Metrics/Logs   Live Host State
+Metrics/Logs   Live Service State
    |
    +------------ Qdrant / Ollama
                   |
              Knowledge Base
 ```
 
-The server uses **Streamable HTTP** and is available locally at:
+The MCP server belongs to the **agentic infrastructure**. The containers inspected through Docker belong to the separate **monitored-system** Compose project.
+
+The server uses Streamable HTTP and is available locally at:
 
 ```text
 http://127.0.0.1:8000/mcp
@@ -33,55 +35,38 @@ http://127.0.0.1:8000/mcp
 
 ### OpenSearch
 
-- `get_metrics()`
-  Retrieves CPU or memory metrics for a monitored machine.
-
-- `get_logs()`
-  Retrieves recent logs using time, level and source filters.
-
-- `search_logs()`
-  Performs full-text searches on application and system logs.
+- `get_metrics()` retrieves CPU or memory metrics for a monitored service.
+- `get_logs()` retrieves recent logs using time, level and source filters.
+- `search_logs()` performs full-text searches on application and system logs.
 
 ### Docker Live Diagnostics
 
-- `get_processes()`
-  Retrieves running processes ordered by CPU usage.
-
-- `get_runtime_stats()`
-  Retrieves container-specific CPU, memory, PID and uptime statistics.
-
-- `get_disk_usage()`
-  Retrieves filesystem pressure, inode usage and container writable-layer size.
-
-- `get_network_connections()`
-  Retrieves TCP/UDP sockets and active network connections.
+- `get_processes()` retrieves running processes ordered by CPU usage.
+- `get_runtime_stats()` retrieves container CPU, memory, PID and uptime statistics.
+- `get_disk_usage()` retrieves filesystem, inode and writable-layer usage.
+- `get_network_connections()` retrieves TCP/UDP sockets and active connections.
 
 ### Knowledge Base / RAG
 
-- `search_knowledge()`
-  Embeds a query using Ollama (`ibm/granite-embedding:30m`) and retrieves the most relevant chunks from Qdrant collection `thesis-knowledge-base`.
+- `search_knowledge()` embeds a query using Ollama and retrieves relevant chunks from the Qdrant knowledge base.
 
-## Security Design
+## Allowed Monitored Targets
 
-The MCP server does **not** expose a generic shell or arbitrary Docker command.
-
-Allowed monitored targets are restricted to:
+Docker access is restricted to the five containers of the standalone monitored system:
 
 ```text
-machine-01
-machine-02
-machine-03
-machine-04
-machine-05
+traffic-generator
+api-gateway
+processing-service
+data-service
+worker-service
 ```
 
-Docker diagnostic commands are fixed inside the MCP implementation.
-
-Current tools are read-only.
+The MCP server does not expose a generic shell. Diagnostic commands are fixed in the implementation and the current tools are read-only.
 
 ## Docker Integration
 
-The MCP container accesses:
+The MCP container accesses the agentic infrastructure through internal service names:
 
 ```text
 OpenSearch -> http://opensearch:9200
@@ -95,8 +80,4 @@ Docker live diagnostics use:
 /var/run/docker.sock
 ```
 
-## Current Status
-
-The MCP infrastructure has been validated using MCP Inspector.
-
-All current diagnostic and RAG tools are operational and ready to be integrated with the SPADE Diagnostic Agent and LLM reasoning layer.
+Because the monitored containers have explicit names, the MCP server can inspect them even though they belong to the separate `monitored-system` Compose project.
