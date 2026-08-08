@@ -276,9 +276,8 @@ services:
     container_name: agentic-opensearch-detectors-init
     environment:
       OPENSEARCH_URL: http://opensearch:9200
-      DETECTOR_WAIT_SECONDS: ${DETECTOR_WAIT_SECONDS:-900}
-      DETECTOR_MIN_DOCUMENTS: ${DETECTOR_MIN_DOCUMENTS:-6}
-      DETECTOR_FORCE_RECREATE: ${DETECTOR_FORCE_RECREATE:-false}
+      DETECTOR_WAIT_SECONDS: ${DETECTOR_WAIT_SECONDS:-3600}
+      DETECTOR_REQUIRED_INTERVALS: ${DETECTOR_REQUIRED_INTERVALS:-40}
       DETECTOR_HOSTS: ${MONITORED_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}
     volumes:
       - ./opensearch/init/create-anomaly-detectors.sh:/create-anomaly-detectors.sh:ro
