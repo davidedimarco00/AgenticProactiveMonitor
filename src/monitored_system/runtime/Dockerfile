@@ -1,6 +1,7 @@
 FROM ubuntu:22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
 
 #############################
 # BASE PACKAGES
@@ -17,6 +18,8 @@ RUN apt-get update && apt-get install -y \
     iproute2 \
     dnsutils \
     jq \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 #############################
@@ -39,12 +42,21 @@ RUN curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor > /us
     && rm -rf /var/lib/apt/lists/*
 
 #############################
-# CONFIGURATION
+# PYTHON APPLICATIONS
 #############################
-COPY telegraf.conf /etc/telegraf/telegraf.conf
-COPY fluent-bit.conf /etc/fluent-bit/fluent-bit.conf
-COPY parsers.conf /etc/fluent-bit/parsers.conf
-COPY entrypoint.sh /entrypoint.sh
+COPY processing-service/requirements.txt /tmp/processing-service-requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/processing-service-requirements.txt \
+    && rm /tmp/processing-service-requirements.txt
+
+COPY processing-service /opt/monitored-system/processing-service
+
+#############################
+# OBSERVABILITY CONFIGURATION
+#############################
+COPY runtime/telegraf.conf /etc/telegraf/telegraf.conf
+COPY runtime/fluent-bit.conf /etc/fluent-bit/fluent-bit.conf
+COPY runtime/parsers.conf /etc/fluent-bit/parsers.conf
+COPY runtime/entrypoint.sh /entrypoint.sh
 
 RUN mkdir -p /var/log/machine \
     && touch /var/log/machine/app.log /var/log/machine/system.log \
