@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -12,11 +14,44 @@ from common.logging_utils import new_request_id, write_log
 SERVICE_NAME = "processing-service"
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data-service:8000").rstrip("/")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
+FAULT_DELAY_FILE = Path(
+    os.getenv("FAULT_DELAY_FILE", "/var/run/monitored-faults/processing-delay-ms")
+)
+MAX_FAULT_DELAY_MS = int(os.getenv("MAX_FAULT_DELAY_MS", "30000"))
 
 
 class NoteWrite(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     content: str = Field(min_length=1, max_length=10000)
+
+
+def configured_fault_delay_ms() -> int:
+    if not FAULT_DELAY_FILE.exists():
+        return 0
+
+    try:
+        delay_ms = int(FAULT_DELAY_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+
+    return max(0, min(delay_ms, MAX_FAULT_DELAY_MS))
+
+
+async def apply_fault_delay(request_id: str) -> None:
+    delay_ms = configured_fault_delay_ms()
+    if delay_ms <= 0:
+        return
+
+    write_log(
+        service=SERVICE_NAME,
+        level="WARN",
+        event_type="fault_delay_applied",
+        message="Controlled processing delay applied",
+        request_id=request_id,
+        fault_type="high_latency",
+        delay_ms=delay_ms,
+    )
+    await asyncio.sleep(delay_ms / 1000)
 
 
 async def forward_request(
@@ -25,6 +60,8 @@ async def forward_request(
     request_id: str,
     payload: dict[str, object] | None = None,
 ) -> httpx.Response:
+    await apply_fault_delay(request_id)
+
     start = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
@@ -79,7 +116,7 @@ def raise_for_downstream(response: httpx.Response) -> None:
         raise HTTPException(status_code=response.status_code, detail=detail)
 
 
-app = FastAPI(title="Notes Service", version="0.1.0")
+app = FastAPI(title="Notes Service", version="0.2.0")
 
 
 @app.on_event("startup")
@@ -90,6 +127,7 @@ def on_startup() -> None:
         event_type="service_started",
         message="Notes processing service started",
         data_service_url=DATA_SERVICE_URL,
+        fault_delay_file=str(FAULT_DELAY_FILE),
     )
 
 
@@ -104,8 +142,8 @@ def on_shutdown() -> None:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    request_id = new_request_id()
+async def health(request: Request) -> dict[str, str]:
+    request_id = request_id_from(request)
     response = await forward_request("GET", "/health", request_id)
     raise_for_downstream(response)
     return {"status": "ok", "service": SERVICE_NAME, "data_service": "ok"}
