@@ -277,7 +277,7 @@ services:
     environment:
       OPENSEARCH_URL: http://opensearch:9200
       DETECTOR_WAIT_SECONDS: ${DETECTOR_WAIT_SECONDS:-900}
-      DETECTOR_MIN_DOCUMENTS: ${DETECTOR_MIN_DOCUMENTS:-60}
+      DETECTOR_MIN_DOCUMENTS: ${DETECTOR_MIN_DOCUMENTS:-6}
       DETECTOR_FORCE_RECREATE: ${DETECTOR_FORCE_RECREATE:-false}
       DETECTOR_HOSTS: ${MONITORED_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}
     volumes:
