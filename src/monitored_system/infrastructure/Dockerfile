@@ -48,11 +48,13 @@ RUN curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor > /us
 COPY src/api-gateway/requirements.txt /tmp/api-gateway-requirements.txt
 COPY src/processing-service/requirements.txt /tmp/processing-service-requirements.txt
 COPY src/data-service/requirements.txt /tmp/data-service-requirements.txt
+COPY src/traffic-generator/requirements.txt /tmp/traffic-generator-requirements.txt
 
 RUN pip3 install --no-cache-dir \
       -r /tmp/api-gateway-requirements.txt \
       -r /tmp/processing-service-requirements.txt \
       -r /tmp/data-service-requirements.txt \
+      -r /tmp/traffic-generator-requirements.txt \
     && rm /tmp/*-requirements.txt
 
 COPY src /opt/monitored-system/src
@@ -65,7 +67,7 @@ COPY infrastructure/fluent-bit.conf /etc/fluent-bit/fluent-bit.conf
 COPY infrastructure/parsers.conf /etc/fluent-bit/parsers.conf
 COPY infrastructure/entrypoint.sh /entrypoint.sh
 
-RUN mkdir -p /var/log/machine /var/lib/notes \
+RUN mkdir -p /var/log/machine /var/lib/notes /var/run/monitored-faults \
     && touch /var/log/machine/app.log /var/log/machine/system.log \
     && chmod +x /entrypoint.sh
 
