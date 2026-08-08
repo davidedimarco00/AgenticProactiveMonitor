@@ -33,7 +33,14 @@ def main() -> None:
 
     while running and allocated_mb < args.total_mb:
         allocation_mb = min(args.step_mb, args.total_mb - allocated_mb)
-        blocks.append(bytearray(allocation_mb * 1024 * 1024))
+        block = bytearray(allocation_mb * 1024 * 1024)
+
+        # Touch one byte per memory page so the allocation becomes resident RAM
+        # instead of remaining only lazily mapped virtual memory.
+        for offset in range(0, len(block), 4096):
+            block[offset] = 1
+
+        blocks.append(block)
         allocated_mb += allocation_mb
         time.sleep(args.step_seconds)
 
