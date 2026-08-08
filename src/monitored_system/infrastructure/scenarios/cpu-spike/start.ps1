@@ -18,8 +18,8 @@ if ($running -ne "true") {
     throw "Container '$container' is not running."
 }
 
-$alreadyActive = docker exec $container sh -c "test -s $pidFile && kill -0 \$(cat $pidFile) 2>/dev/null && echo active || true"
-if ($alreadyActive -eq "active") {
+docker exec $container sh -c "test -s $pidFile" 2>$null
+if ($LASTEXITCODE -eq 0) {
     throw "CPU spike scenario is already active. Run stop.ps1 first."
 }
 
