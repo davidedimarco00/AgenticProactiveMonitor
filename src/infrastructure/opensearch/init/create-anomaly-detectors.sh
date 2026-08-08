@@ -8,7 +8,7 @@ HOSTS="${DETECTOR_HOSTS:-traffic-generator api-gateway processing-service data-s
 
 DETECTION_INTERVAL_MINUTES=1
 WINDOW_DELAY_MINUTES=1
-SHINGLE_SIZE=8
+SHINGLE_SIZE=4
 LOOKBACK_MINUTES=$((REQUIRED_INTERVALS + WINDOW_DELAY_MINUTES + 10))
 
 request() {
@@ -96,10 +96,9 @@ create_detector() {
   name="$1"
   description="$2"
   host="$3"
-  measurement="$4"
-  field="$5"
-  feature_name="$6"
-  aggregation_name="$7"
+  field="$4"
+  feature_name="$5"
+  aggregation_name="$6"
   index_pattern="metrics-${host}-*"
 
   cat >/tmp/detector.json <<JSON
@@ -109,32 +108,34 @@ create_detector() {
   "time_field": "@timestamp",
   "indices": ["${index_pattern}"],
   "filter_query": {
-    "bool": {
-      "filter": [
-        {"term": {"measurement_name": "${measurement}"}},
-        {"exists": {"field": "${field}"}}
-      ]
-    }
+    "match_all": {}
   },
-  "detection_interval": {
-    "period": {"interval": ${DETECTION_INTERVAL_MINUTES}, "unit": "Minutes"}
-  },
-  "window_delay": {
-    "period": {"interval": ${WINDOW_DELAY_MINUTES}, "unit": "Minutes"}
-  },
-  "shingle_size": ${SHINGLE_SIZE},
-  "schema_version": 0,
   "feature_attributes": [
     {
       "feature_name": "${feature_name}",
       "feature_enabled": true,
       "aggregation_query": {
         "${aggregation_name}": {
-          "avg": {"field": "${field}"}
+          "avg": {
+            "field": "${field}"
+          }
         }
       }
     }
-  ]
+  ],
+  "detection_interval": {
+    "period": {
+      "interval": ${DETECTION_INTERVAL_MINUTES},
+      "unit": "Minutes"
+    }
+  },
+  "window_delay": {
+    "period": {
+      "interval": ${WINDOW_DELAY_MINUTES},
+      "unit": "Minutes"
+    }
+  },
+  "shingle_size": ${SHINGLE_SIZE}
 }
 JSON
 
@@ -162,10 +163,9 @@ ensure_detector() {
   name="$1"
   description="$2"
   host="$3"
-  measurement="$4"
-  field="$5"
-  feature_name="$6"
-  aggregation_name="$7"
+  field="$4"
+  feature_name="$5"
+  aggregation_name="$6"
 
   ids="$(find_detector_ids "$name" 2>/dev/null || true)"
   if [ -n "$ids" ]; then
@@ -175,7 +175,7 @@ ensure_detector() {
     return 0
   fi
 
-  create_detector "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
+  create_detector "$name" "$description" "$host" "$field" "$feature_name" "$aggregation_name"
 }
 
 wait_for_plugin
@@ -187,7 +187,6 @@ for host in $HOSTS; do
     "CPU-${host}" \
     "Active CPU usage anomaly detector for ${host}" \
     "$host" \
-    cpu \
     cpu.usage_active \
     CPU_ANOMALY \
     cpu_anomaly
@@ -196,7 +195,6 @@ for host in $HOSTS; do
     "RAM-${host}" \
     "Memory usage anomaly detector for ${host}" \
     "$host" \
-    mem \
     mem.used_percent \
     RAM_ANOMALY \
     ram_anomaly
