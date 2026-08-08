@@ -26,13 +26,19 @@ services:
     <<: *monitored-service
     container_name: api-gateway
     hostname: api-gateway
+    ports:
+      - "8000:5000"
     environment:
       HOST_ID: api-gateway
       MACHINE_ROLE: api-gateway
-      LOG_LEVEL_PROFILE: normal
-      LATENCY_MIN: 20
-      LATENCY_MAX: 700
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
+      WORKLOAD_MODE: application
+      APP_COMMAND: "cd /opt/monitored-system/src/api-gateway && gunicorn --workers 2 --bind 0.0.0.0:5000 app:app"
+      NOTES_SERVICE_URL: http://processing-service:8000
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-3}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-notes-platform-dev-secret}
+    depends_on:
+      - processing-service
 
   processing-service:
     <<: *monitored-service
@@ -46,20 +52,26 @@ services:
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
       WORKLOAD_MODE: application
       APP_COMMAND: "cd /opt/monitored-system/src/processing-service && uvicorn app:app --host 0.0.0.0 --port 8000"
-      PROCESSING_MULTIPLIER: ${PROCESSING_MULTIPLIER:-2}
-      PROCESSING_DELAY_MS: ${PROCESSING_DELAY_MS:-50}
+      DATA_SERVICE_URL: http://data-service:8000
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-3}
+    depends_on:
+      - data-service
 
   data-service:
     <<: *monitored-service
     container_name: data-service
     hostname: data-service
+    ports:
+      - "8003:8000"
     environment:
       HOST_ID: data-service
       MACHINE_ROLE: data-service
-      LOG_LEVEL_PROFILE: normal
-      LATENCY_MIN: 40
-      LATENCY_MAX: 1100
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
+      WORKLOAD_MODE: application
+      APP_COMMAND: "cd /opt/monitored-system/src/data-service && uvicorn app:app --host 0.0.0.0 --port 8000"
+      DATABASE_PATH: /var/lib/notes/notes.db
+    volumes:
+      - notes-data:/var/lib/notes
 
   worker-service:
     <<: *monitored-service
@@ -68,7 +80,7 @@ services:
     environment:
       HOST_ID: worker-service
       MACHINE_ROLE: worker-service
-      LOG_LEVEL_PROFILE: critical
+      LOG_LEVEL_PROFILE: normal
       LATENCY_MIN: 50
       LATENCY_MAX: 1300
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
@@ -79,3 +91,6 @@ networks:
   observability-net:
     external: true
     name: ${OBSERVABILITY_NETWORK_NAME:-agentic-monitoring-net}
+
+volumes:
+  notes-data:
