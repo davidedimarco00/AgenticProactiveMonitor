@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% set is_edit = mode == 'edit' %}
+{% block title %}{{ 'Edit note' if is_edit else 'New note' }} · Notes Platform{% endblock %}
+
+{% block content %}
+<section class="form-shell">
+    <div class="form-header">
+        <p class="eyebrow">{{ 'Update' if is_edit else 'Create' }}</p>
+        <h1>{{ 'Edit note' if is_edit else 'Create a new note' }}</h1>
+        <p>{{ 'Refine the content and keep your note up to date.' if is_edit else 'Write down an idea, reminder or piece of information you want to keep.' }}</p>
+    </div>
+
+    <form class="note-form" method="post">
+        <label for="title">Title</label>
+        <input id="title" name="title" maxlength="120" required value="{{ note.title if note else '' }}" placeholder="e.g. Thesis meeting notes">
+
+        <label for="content">Content</label>
+        <textarea id="content" name="content" maxlength="10000" required placeholder="Start writing...">{{ note.content if note else '' }}</textarea>
+
+        <div class="form-actions">
+            <a class="button button-secondary" href="{{ url_for('note_detail', note_id=note.id) if is_edit else url_for('dashboard') }}">Cancel</a>
+            <button class="button button-primary" type="submit">{{ 'Save changes' if is_edit else 'Create note' }}</button>
+        </div>
+    </form>
+</section>
+{% endblock %}
