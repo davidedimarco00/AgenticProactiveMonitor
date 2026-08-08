@@ -3,7 +3,7 @@ set -eu
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-900}"
-MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-60}"
+MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-6}"
 FORCE_RECREATE="${DETECTOR_FORCE_RECREATE:-false}"
 HOSTS="${DETECTOR_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}"
 LEGACY_HOSTS="${LEGACY_DETECTOR_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}"
@@ -152,10 +152,10 @@ create_detector() {
     }
   },
   "detection_interval": {
-    "period": {"interval": 1, "unit": "Minutes"}
+    "period": {"interval": 15, "unit": "Seconds"}
   },
   "window_delay": {
-    "period": {"interval": 1, "unit": "Minutes"}
+    "period": {"interval": 10, "unit": "Seconds"}
   },
   "shingle_size": 8,
   "schema_version": 0,
