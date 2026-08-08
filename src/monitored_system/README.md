@@ -1,41 +1,27 @@
 # Monitored System - Notes Platform
 
-This directory contains the standalone software environment observed by AgenticProactiveMonitor. The monitored system is intentionally separated from the agentic infrastructure and runs as its own Docker Compose project: `monitored-system`.
+This directory contains the standalone Notes Platform observed by AgenticProactiveMonitor. It runs as a separate Docker Compose project and shares only the observability network with the agentic infrastructure.
 
 ## Application
 
-The monitored workload is a small but realistic personal notes platform. A user can:
-
-- view previously saved notes from a dashboard;
-- create a note;
-- open a note;
-- edit a note;
-- delete a note.
-
-Notes are persisted in a SQLite database stored on a Docker volume, so data survives container restarts.
+The monitored workload is a small distributed personal notes platform. A user can view, create, open, edit and delete notes. Notes are persisted in SQLite on a Docker volume.
 
 ## Architecture
 
 ```text
-User / Browser
-      |
-      v
-api-gateway
-Flask Web App
-      |
-      v
-processing-service
-FastAPI Notes API
-      |
-      v
-data-service
-FastAPI + SQLite
-
-worker-service      -> background workload, to be implemented
-traffic-generator   -> synthetic user traffic, to be implemented
+traffic-generator
+       |
+       v
+api-gateway (Flask)
+       |
+       v
+processing-service (FastAPI)
+       |
+       v
+data-service (FastAPI + SQLite)
 ```
 
-The existing service names are retained because they identify the monitored machines in the thesis environment.
+`traffic-generator` behaves as a synthetic user and performs real HTTP requests against Flask. `worker-service` still uses the temporary synthetic workload and will be implemented separately.
 
 ## Project structure
 
@@ -49,51 +35,68 @@ src/monitored_system/
 │   ├── entrypoint.sh
 │   ├── telegraf.conf
 │   ├── fluent-bit.conf
-│   └── parsers.conf
+│   ├── parsers.conf
+│   └── scenarios/
+│       ├── README.md
+│       ├── data-service-down/
+│       └── high-latency/
 └── src/
     ├── common/
-    │   └── logging_utils.py
     ├── api-gateway/
-    │   ├── app.py
-    │   ├── requirements.txt
-    │   ├── templates/
-    │   └── static/
     ├── processing-service/
-    │   ├── app.py
-    │   └── requirements.txt
-    └── data-service/
-        ├── app.py
-        └── requirements.txt
+    ├── data-service/
+    └── traffic-generator/
 ```
 
-`infrastructure/` contains Docker runtime and observability configuration. `src/` contains application source code only.
+`infrastructure/` contains Docker runtime, telemetry configuration and controlled test scenarios. `src/` contains application source code.
 
 ## Ports
 
-- `8000`: Flask Notes Platform dashboard
-- `8002`: internal FastAPI Notes API, exposed for development/debugging
-- `8003`: internal FastAPI Data Service, exposed for development/debugging
+- `8080`: Flask Notes Platform dashboard
+- `8002`: FastAPI Notes API, exposed for development/debugging
+- `8003`: FastAPI Data Service, exposed for development/debugging
+
+## Traffic generator
+
+The default workload performs real actions every 2-5 seconds:
+
+- dashboard browsing;
+- note creation;
+- note reads;
+- note updates;
+- occasional note deletion.
+
+Every generated operation carries an `X-Request-ID`, propagated through the API Gateway, Notes Service and Data Service for distributed log correlation.
 
 ## Observability
 
-Every monitored container still runs Telegraf and Fluent Bit.
+Every monitored container runs Telegraf and Fluent Bit.
 
-- Telegraf collects real container/system metrics and sends them to `metrics-<service>-YYYY.MM.DD`.
-- Fluent Bit tails `/var/log/machine/app.log` and `/var/log/machine/system.log` and sends structured logs to `logs-<service>-YYYY.MM.DD`.
-- Application logs are JSON Lines and contain fields such as `timestamp`, `host`, `machine_role`, `service`, `event_type`, `level`, `message`, and `request_id`.
-- The same `request_id` is propagated from Flask to the Notes API and then to the Data Service, allowing an operation to be correlated across services in OpenSearch.
+- Telegraf writes metrics to `metrics-<service>-YYYY.MM.DD`.
+- Fluent Bit writes logs to `logs-<service>-YYYY.MM.DD`.
+- Application JSON Lines are written to `/var/log/machine/app.log`.
+- System heartbeat records are written to `/var/log/machine/system.log`.
 
-Typical application events include `http_request_completed`, `downstream_request_completed`, `note_created`, `note_updated`, `note_deleted`, `notes_listed`, and downstream availability errors.
+## Controlled scenarios
 
-## Persistent data
+Scenario scripts are under `infrastructure/scenarios/`. Each scenario includes PowerShell start/stop scripts and a `scenario.yaml` ground-truth description.
 
-The Data Service stores SQLite at:
+### Data Service unavailable
 
-```text
-/var/lib/notes/notes.db
+```powershell
+.\infrastructure\scenarios\data-service-down\start.ps1
+.\infrastructure\scenarios\data-service-down\stop.ps1
 ```
 
-The path is backed by the Docker volume `notes-data`.
+### High processing latency
+
+```powershell
+.\infrastructure\scenarios\high-latency\start.ps1
+.\infrastructure\scenarios\high-latency\start.ps1 -DelayMs 2500
+.\infrastructure\scenarios\high-latency\stop.ps1
+```
+
+The latency test is enabled at runtime and does not require rebuilding or restarting the processing service.
 
 ## Start
 
@@ -104,17 +107,4 @@ docker compose build
 docker compose up -d
 ```
 
-Then open `http://localhost:8000` in a browser.
-
-## Monitoring scenarios
-
-The application is intentionally suitable for controlled thesis experiments, including:
-
-1. high CPU or memory usage on an application service;
-2. Notes API latency or timeout;
-3. Data Service unavailable;
-4. database write/read errors;
-5. HTTP 5xx propagation to the Flask dashboard;
-6. container crash/restart;
-7. worker backlog or resource saturation;
-8. increased traffic generated by `traffic-generator`.
+Then open `http://localhost:8080`.
