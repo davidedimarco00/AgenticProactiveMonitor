@@ -5,6 +5,7 @@ OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-300}"
 MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-20}"
 HOSTS="${DETECTOR_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}"
+LEGACY_HOSTS="${LEGACY_DETECTOR_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}"
 
 request() {
   curl -fsS "$@"
@@ -104,6 +105,21 @@ remove_detectors_by_name() {
   done
 }
 
+remove_legacy_detectors() {
+  echo "Removing detector definitions that belong to the legacy machine-XX naming scheme..."
+
+  for legacy_host in $LEGACY_HOSTS; do
+    remove_detectors_by_name "CPU-${legacy_host}"
+    remove_detectors_by_name "RAM-${legacy_host}"
+  done
+
+  # Older experimental detector names used before the per-service baseline.
+  remove_detectors_by_name "CPU_ANOMALY"
+  remove_detectors_by_name "RAM_ANOMALY"
+  remove_detectors_by_name "infrastructure-cpu-usage"
+  remove_detectors_by_name "infrastructure-memory-usage"
+}
+
 create_detector() {
   name="$1"
   description="$2"
@@ -199,14 +215,10 @@ ensure_detector() {
 }
 
 wait_for_plugin
+remove_legacy_detectors
+
 wait_for_metric_on_all_hosts CPU cpu cpu.usage_active
 wait_for_metric_on_all_hosts RAM mem mem.used_percent
-
-# Remove the multi-entity/HCAD detectors used by the previous baseline.
-remove_detectors_by_name "CPU_ANOMALY"
-remove_detectors_by_name "RAM_ANOMALY"
-remove_detectors_by_name "infrastructure-cpu-usage"
-remove_detectors_by_name "infrastructure-memory-usage"
 
 for host in $HOSTS; do
   ensure_detector \
