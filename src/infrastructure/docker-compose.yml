@@ -259,7 +259,7 @@ services:
     environment:
       OPENSEARCH_URL: http://opensearch:9200
       DASHBOARDS_URL: http://opensearch-dashboards:5601
-      DASHBOARDS_WAIT_SECONDS: ${DASHBOARDS_WAIT_SECONDS:-300}
+      DASHBOARDS_WAIT_SECONDS: ${DASHBOARDS_WAIT_SECONDS:-3600}
       DASHBOARDS_INDEX_PATTERN_HOSTS: ${MONITORED_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}
     volumes:
       - ./opensearch-dashboards/init/create-index-patterns.sh:/create-index-patterns.sh:ro
