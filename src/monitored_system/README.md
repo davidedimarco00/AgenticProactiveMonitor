@@ -1,7 +1,41 @@
-# Monitored System
+# Monitored System - Notes Platform
 
-This directory contains the standalone software environment observed by AgenticProactiveMonitor.
-It is intentionally separated from the agentic infrastructure and runs as its own Docker Compose project: `monitored-system`.
+This directory contains the standalone software environment observed by AgenticProactiveMonitor. The monitored system is intentionally separated from the agentic infrastructure and runs as its own Docker Compose project: `monitored-system`.
+
+## Application
+
+The monitored workload is a small but realistic personal notes platform. A user can:
+
+- view previously saved notes from a dashboard;
+- create a note;
+- open a note;
+- edit a note;
+- delete a note.
+
+Notes are persisted in a SQLite database stored on a Docker volume, so data survives container restarts.
+
+## Architecture
+
+```text
+User / Browser
+      |
+      v
+api-gateway
+Flask Web App
+      |
+      v
+processing-service
+FastAPI Notes API
+      |
+      v
+data-service
+FastAPI + SQLite
+
+worker-service      -> background workload, to be implemented
+traffic-generator   -> synthetic user traffic, to be implemented
+```
+
+The existing service names are retained because they identify the monitored machines in the thesis environment.
 
 ## Project structure
 
@@ -17,86 +51,70 @@ src/monitored_system/
 │   ├── fluent-bit.conf
 │   └── parsers.conf
 └── src/
+    ├── common/
+    │   └── logging_utils.py
+    ├── api-gateway/
+    │   ├── app.py
+    │   ├── requirements.txt
+    │   ├── templates/
+    │   └── static/
     ├── processing-service/
     │   ├── app.py
     │   └── requirements.txt
-    ├── api-gateway/
-    ├── data-service/
-    ├── worker-service/
-    └── traffic-generator/
+    └── data-service/
+        ├── app.py
+        └── requirements.txt
 ```
 
-`infrastructure/` contains container runtime and observability configuration.
-`src/` contains only monitored application source code.
+`infrastructure/` contains Docker runtime and observability configuration. `src/` contains application source code only.
 
-## Services
+## Ports
 
-- `traffic-generator`: generates requests for the monitored application flow.
-- `api-gateway`: receives and forwards requests to the processing layer.
-- `processing-service`: FastAPI service that performs the main application processing.
-- `data-service`: represents the data access layer.
-- `worker-service`: performs background or asynchronous work.
-
-## Communication topology
-
-```text
-traffic-generator
-       |
-       v
-  api-gateway
-       |
-       v
-processing-service
-    /       \
-   v         v
-data-service  worker-service
-```
-
-## Current implementation status
-
-The monitored system is being converted incrementally from synthetic workloads to real application services.
-
-- `processing-service` is the first real FastAPI application.
-- `traffic-generator`, `api-gateway`, `data-service`, and `worker-service` still use the synthetic workload temporarily.
-- All containers continue to run Telegraf and Fluent Bit.
-
-### Processing service
-
-The service is exposed on host port `8002` and provides:
-
-- `GET /health`
-- `POST /process`
-
-Example request:
-
-```json
-{
-  "value": 10
-}
-```
-
-The service multiplies the input value by `PROCESSING_MULTIPLIER` (default `2`) and returns the result together with a request identifier and processing time.
-`PROCESSING_DELAY_MS` configures an artificial processing delay that can later be used for controlled fault scenarios.
+- `8000`: Flask Notes Platform dashboard
+- `8002`: internal FastAPI Notes API, exposed for development/debugging
+- `8003`: internal FastAPI Data Service, exposed for development/debugging
 
 ## Observability
 
-Each monitored service contains Telegraf and Fluent Bit.
+Every monitored container still runs Telegraf and Fluent Bit.
 
-- Telegraf collects host/container metrics and writes them to `metrics-<service>-YYYY.MM.DD`.
-- Fluent Bit collects application and system logs and writes them to `logs-<service>-YYYY.MM.DD`.
-- Real application services write structured JSON events to `/var/log/machine/app.log`.
+- Telegraf collects real container/system metrics and sends them to `metrics-<service>-YYYY.MM.DD`.
+- Fluent Bit tails `/var/log/machine/app.log` and `/var/log/machine/system.log` and sends structured logs to `logs-<service>-YYYY.MM.DD`.
+- Application logs are JSON Lines and contain fields such as `timestamp`, `host`, `machine_role`, `service`, `event_type`, `level`, `message`, and `request_id`.
+- The same `request_id` is propagated from Flask to the Notes API and then to the Data Service, allowing an operation to be correlated across services in OpenSearch.
 
-The monitored stack connects to the Docker network created by the agentic infrastructure only for observability traffic. The application services also have their own private `monitored-system-net`.
+Typical application events include `http_request_completed`, `downstream_request_completed`, `note_created`, `note_updated`, `note_deleted`, `notes_listed`, and downstream availability errors.
 
-## Failure scenarios
+## Persistent data
 
-Examples that can later be introduced intentionally:
+The Data Service stores SQLite at:
 
-1. High CPU
-2. Memory leak
-3. Service crash
-4. Data service unavailable
-5. API timeout
-6. HTTP 500 errors
-7. Disk saturation
-8. Network degradation
+```text
+/var/lib/notes/notes.db
+```
+
+The path is backed by the Docker volume `notes-data`.
+
+## Start
+
+From `src/monitored_system`:
+
+```powershell
+docker compose build
+docker compose up -d
+```
+
+Then open `http://localhost:8000` in a browser.
+
+## Monitoring scenarios
+
+The application is intentionally suitable for controlled thesis experiments, including:
+
+1. high CPU or memory usage on an application service;
+2. Notes API latency or timeout;
+3. Data Service unavailable;
+4. database write/read errors;
+5. HTTP 5xx propagation to the Flask dashboard;
+6. container crash/restart;
+7. worker backlog or resource saturation;
+8. increased traffic generated by `traffic-generator`.
