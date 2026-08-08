@@ -2,14 +2,11 @@
 set -eu
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
-WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-3600}"
-REQUIRED_INTERVALS="${DETECTOR_REQUIRED_INTERVALS:-40}"
-DETECTION_INTERVAL_MINUTES=1
-WINDOW_DELAY_MINUTES=1
-SHINGLE_SIZE=8
+WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-900}"
+MIN_DOCUMENTS="${DETECTOR_MIN_DOCUMENTS:-60}"
+FORCE_RECREATE="${DETECTOR_FORCE_RECREATE:-false}"
 HOSTS="${DETECTOR_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}"
 LEGACY_HOSTS="${LEGACY_DETECTOR_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}"
-LOOKBACK_MINUTES=$((REQUIRED_INTERVALS + 10))
 
 request() {
   curl -fsS "$@"
@@ -29,28 +26,20 @@ wait_for_plugin() {
   echo "OpenSearch Anomaly Detection plugin is available."
 }
 
-complete_interval_count() {
+metric_count() {
   host="$1"
   measurement="$2"
   field="$3"
   index_pattern="metrics-${host}-*"
 
-  response="$(request -X POST "${OPENSEARCH_URL}/${index_pattern}/_search?ignore_unavailable=true" \
+  request -X POST "${OPENSEARCH_URL}/${index_pattern}/_count" \
     -H "Content-Type: application/json" \
-    -d "{\"size\":0,\"query\":{\"bool\":{\"filter\":[{\"range\":{\"@timestamp\":{\"gte\":\"now-${LOOKBACK_MINUTES}m/m\",\"lt\":\"now-${WINDOW_DELAY_MINUTES}m/m\"}}},{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"exists\":{\"field\":\"${field}\"}}]}},\"aggs\":{\"per_interval\":{\"date_histogram\":{\"field\":\"@timestamp\",\"fixed_interval\":\"${DETECTION_INTERVAL_MINUTES}m\",\"min_doc_count\":1}}}}" 2>/dev/null || true)"
-
-  if [ -z "$response" ]; then
-    echo 0
-    return
-  fi
-
-  printf '%s' "$response" \
-    | grep -o '"key_as_string"' \
-    | wc -l \
-    | tr -d ' '
+    -d "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"measurement_name\":\"${measurement}\"}},{\"exists\":{\"field\":\"${field}\"}}]}}}" \
+    | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    | head -n 1
 }
 
-wait_for_complete_intervals_on_all_hosts() {
+wait_for_metric_on_all_hosts() {
   label="$1"
   measurement="$2"
   field="$3"
@@ -60,25 +49,25 @@ wait_for_complete_intervals_on_all_hosts() {
     all_ready=1
 
     for host in $HOSTS; do
-      intervals="$(complete_interval_count "$host" "$measurement" "$field" 2>/dev/null || echo 0)"
-      intervals="${intervals:-0}"
+      count="$(metric_count "$host" "$measurement" "$field" 2>/dev/null || echo 0)"
+      count="${count:-0}"
 
-      if [ "$intervals" -lt "$REQUIRED_INTERVALS" ]; then
+      if [ "$count" -lt "$MIN_DOCUMENTS" ]; then
         all_ready=0
-        echo "Waiting for ${label} history on ${host} (${intervals}/${REQUIRED_INTERVALS} complete ${DETECTION_INTERVAL_MINUTES}-minute intervals)..."
+        echo "Waiting for ${label} documents on ${host} (${count}/${MIN_DOCUMENTS})..."
       fi
     done
 
     if [ "$all_ready" -eq 1 ]; then
-      echo "${label}: every monitored host has at least ${REQUIRED_INTERVALS} complete intervals."
+      echo "${label}: every monitored host has at least ${MIN_DOCUMENTS} valid documents."
       return 0
     fi
 
-    sleep 10
-    elapsed=$((elapsed + 10))
+    sleep 5
+    elapsed=$((elapsed + 5))
   done
 
-  echo "Not enough ${label} history arrived on every monitored host within ${WAIT_SECONDS}s." >&2
+  echo "Not enough ${label} documents arrived on every monitored host within ${WAIT_SECONDS}s." >&2
   exit 1
 }
 
@@ -113,13 +102,11 @@ remove_detectors_by_name() {
   name="$1"
   for detector_id in $(find_detector_ids "$name" 2>/dev/null || true); do
     delete_detector_id "$detector_id"
-    echo "Removed obsolete detector ${name} (${detector_id})."
+    echo "Removed detector ${name} (${detector_id})."
   done
 }
 
 remove_legacy_detectors() {
-  echo "Removing detector definitions that belong to the legacy machine-XX naming scheme..."
-
   for legacy_host in $LEGACY_HOSTS; do
     remove_detectors_by_name "CPU-${legacy_host}"
     remove_detectors_by_name "RAM-${legacy_host}"
@@ -129,6 +116,15 @@ remove_legacy_detectors() {
   remove_detectors_by_name "RAM_ANOMALY"
   remove_detectors_by_name "infrastructure-cpu-usage"
   remove_detectors_by_name "infrastructure-memory-usage"
+  remove_detectors_by_name "thesis-cpu-anomaly-detector"
+  remove_detectors_by_name "thesis-memory-anomaly-detector"
+}
+
+remove_current_detectors() {
+  for host in $HOSTS; do
+    remove_detectors_by_name "CPU-${host}"
+    remove_detectors_by_name "RAM-${host}"
+  done
 }
 
 create_detector() {
@@ -156,12 +152,12 @@ create_detector() {
     }
   },
   "detection_interval": {
-    "period": {"interval": ${DETECTION_INTERVAL_MINUTES}, "unit": "Minutes"}
+    "period": {"interval": 1, "unit": "Minutes"}
   },
   "window_delay": {
-    "period": {"interval": ${WINDOW_DELAY_MINUTES}, "unit": "Minutes"}
+    "period": {"interval": 1, "unit": "Minutes"}
   },
-  "shingle_size": ${SHINGLE_SIZE},
+  "shingle_size": 8,
   "schema_version": 0,
   "feature_attributes": [
     {
@@ -187,13 +183,13 @@ JSON
 
   detector_id="$(printf '%s' "$response" | sed -n 's/.*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   if [ -z "$detector_id" ]; then
-    echo "Unable to read the detector ID for ${name}." >&2
+    echo "Unable to read detector ID for ${name}." >&2
     printf '%s\n' "$response" >&2
     exit 1
   fi
 
   start_detector "$detector_id"
-  echo "Created and started ${name} (${detector_id}) on ${index_pattern}."
+  echo "Created SINGLE_ENTITY detector ${name} (${detector_id}) on ${index_pattern}."
 }
 
 ensure_detector() {
@@ -222,14 +218,19 @@ ensure_detector() {
   done
 
   start_detector "$detector_id"
-  echo "Reusing existing ${name} detector (${detector_id}); model state preserved."
+  echo "Reusing existing ${name} detector (${detector_id})."
 }
 
 wait_for_plugin
 remove_legacy_detectors
 
-wait_for_complete_intervals_on_all_hosts CPU cpu cpu.usage_active
-wait_for_complete_intervals_on_all_hosts RAM mem mem.used_percent
+if [ "$FORCE_RECREATE" = "true" ]; then
+  echo "Force recreation enabled: removing current SINGLE_ENTITY detectors."
+  remove_current_detectors
+fi
+
+wait_for_metric_on_all_hosts CPU cpu cpu.usage_active
+wait_for_metric_on_all_hosts RAM mem mem.used_percent
 
 for host in $HOSTS; do
   ensure_detector \
@@ -251,4 +252,4 @@ for host in $HOSTS; do
     ram_anomaly
 done
 
-echo "Single-entity CPU and RAM anomaly detectors are ready for all monitored hosts."
+echo "Single-entity CPU and RAM anomaly detectors are ready for all monitored services."
