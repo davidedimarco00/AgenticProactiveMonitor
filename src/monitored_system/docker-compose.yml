@@ -1,0 +1,77 @@
+name: monitored-system
+
+x-monitored-service: &monitored-service
+  build:
+    context: ./runtime
+  networks:
+    - monitored-system-net
+    - observability-net
+  restart: unless-stopped
+
+services:
+  traffic-generator:
+    <<: *monitored-service
+    container_name: traffic-generator
+    hostname: traffic-generator
+    environment:
+      HOST_ID: traffic-generator
+      MACHINE_ROLE: traffic-generator
+      LOG_LEVEL_PROFILE: normal
+      LATENCY_MIN: 10
+      LATENCY_MAX: 500
+      LOG_INTERVAL: ${LOG_INTERVAL:-3}
+
+  api-gateway:
+    <<: *monitored-service
+    container_name: api-gateway
+    hostname: api-gateway
+    environment:
+      HOST_ID: api-gateway
+      MACHINE_ROLE: api-gateway
+      LOG_LEVEL_PROFILE: normal
+      LATENCY_MIN: 20
+      LATENCY_MAX: 700
+      LOG_INTERVAL: ${LOG_INTERVAL:-3}
+
+  processing-service:
+    <<: *monitored-service
+    container_name: processing-service
+    hostname: processing-service
+    environment:
+      HOST_ID: processing-service
+      MACHINE_ROLE: processing-service
+      LOG_LEVEL_PROFILE: unstable
+      LATENCY_MIN: 30
+      LATENCY_MAX: 900
+      LOG_INTERVAL: ${LOG_INTERVAL:-3}
+
+  data-service:
+    <<: *monitored-service
+    container_name: data-service
+    hostname: data-service
+    environment:
+      HOST_ID: data-service
+      MACHINE_ROLE: data-service
+      LOG_LEVEL_PROFILE: normal
+      LATENCY_MIN: 40
+      LATENCY_MAX: 1100
+      LOG_INTERVAL: ${LOG_INTERVAL:-3}
+
+  worker-service:
+    <<: *monitored-service
+    container_name: worker-service
+    hostname: worker-service
+    environment:
+      HOST_ID: worker-service
+      MACHINE_ROLE: worker-service
+      LOG_LEVEL_PROFILE: critical
+      LATENCY_MIN: 50
+      LATENCY_MAX: 1300
+      LOG_INTERVAL: ${LOG_INTERVAL:-3}
+
+networks:
+  monitored-system-net:
+    driver: bridge
+  observability-net:
+    external: true
+    name: ${OBSERVABILITY_NETWORK_NAME:-agentic-monitoring-net}
