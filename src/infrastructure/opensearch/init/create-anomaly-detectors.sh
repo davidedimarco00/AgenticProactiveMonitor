@@ -92,13 +92,28 @@ start_detector() {
   request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start" >/dev/null
 }
 
-create_detector() {
+stop_detector() {
+  detector_id="$1"
+  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_stop" >/dev/null 2>&1 || true
+  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_stop?historical=true" >/dev/null 2>&1 || true
+}
+
+detector_uses_field() {
+  detector_id="$1"
+  field="$2"
+
+  body="$(request "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}" 2>/dev/null || true)"
+  printf '%s' "$body" | tr -d '[:space:]' | grep -Fq "\"field\":\"${field}\""
+}
+
+write_detector_json() {
   name="$1"
   description="$2"
   host="$3"
-  field="$4"
-  feature_name="$5"
-  aggregation_name="$6"
+  measurement="$4"
+  field="$5"
+  feature_name="$6"
+  aggregation_name="$7"
   index_pattern="metrics-${host}-*"
 
   cat >/tmp/detector.json <<JSON
@@ -108,7 +123,9 @@ create_detector() {
   "time_field": "@timestamp",
   "indices": ["${index_pattern}"],
   "filter_query": {
-    "match_all": {}
+    "term": {
+      "measurement_name": "${measurement}"
+    }
   },
   "feature_attributes": [
     {
@@ -142,6 +159,19 @@ JSON
   request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_validate/detector" \
     -H "Content-Type: application/json" \
     --data-binary @/tmp/detector.json >/tmp/detector-validation.json
+}
+
+create_detector() {
+  name="$1"
+  description="$2"
+  host="$3"
+  measurement="$4"
+  field="$5"
+  feature_name="$6"
+  aggregation_name="$7"
+  index_pattern="metrics-${host}-*"
+
+  write_detector_json "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
 
   response="$(request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors" \
     -H "Content-Type: application/json" \
@@ -159,45 +189,75 @@ JSON
   echo "Created SINGLE_ENTITY detector ${name} (${detector_id}) on ${index_pattern}."
 }
 
+update_detector() {
+  detector_id="$1"
+  name="$2"
+  description="$3"
+  host="$4"
+  measurement="$5"
+  field="$6"
+  feature_name="$7"
+  aggregation_name="$8"
+
+  echo "Migrating ${name} (${detector_id}) to container-specific metric ${field}."
+  stop_detector "$detector_id"
+  write_detector_json "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
+
+  request -X PUT "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}" \
+    -H "Content-Type: application/json" \
+    --data-binary @/tmp/detector.json >/dev/null
+
+  start_detector "$detector_id"
+  echo "Updated and restarted SINGLE_ENTITY detector ${name} (${detector_id})."
+}
+
 ensure_detector() {
   name="$1"
   description="$2"
   host="$3"
-  field="$4"
-  feature_name="$5"
-  aggregation_name="$6"
+  measurement="$4"
+  field="$5"
+  feature_name="$6"
+  aggregation_name="$7"
 
   ids="$(find_detector_ids "$name" 2>/dev/null || true)"
   if [ -n "$ids" ]; then
     detector_id="$(printf '%s\n' "$ids" | head -n 1)"
-    start_detector "$detector_id" || true
-    echo "Reusing existing SINGLE_ENTITY detector ${name} (${detector_id})."
+
+    if detector_uses_field "$detector_id" "$field"; then
+      start_detector "$detector_id" || true
+      echo "Reusing existing SINGLE_ENTITY detector ${name} (${detector_id}) with ${field}."
+    else
+      update_detector "$detector_id" "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
+    fi
     return 0
   fi
 
-  create_detector "$name" "$description" "$host" "$field" "$feature_name" "$aggregation_name"
+  create_detector "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
 }
 
 wait_for_plugin
-wait_for_history_on_all_hosts CPU cpu cpu.usage_active
-wait_for_history_on_all_hosts RAM mem mem.used_percent
+wait_for_history_on_all_hosts CPU docker_container_cpu docker_container_cpu.usage_percent
+wait_for_history_on_all_hosts RAM docker_container_mem docker_container_mem.usage_percent
 
 for host in $HOSTS; do
   ensure_detector \
     "CPU-${host}" \
-    "Active CPU usage anomaly detector for ${host}" \
+    "Container CPU usage anomaly detector for ${host}" \
     "$host" \
-    cpu.usage_active \
+    docker_container_cpu \
+    docker_container_cpu.usage_percent \
     CPU_ANOMALY \
     cpu_anomaly
 
   ensure_detector \
     "RAM-${host}" \
-    "Memory usage anomaly detector for ${host}" \
+    "Container memory usage anomaly detector for ${host}" \
     "$host" \
-    mem.used_percent \
+    docker_container_mem \
+    docker_container_mem.usage_percent \
     RAM_ANOMALY \
     ram_anomaly
 done
 
-echo "All SINGLE_ENTITY CPU and RAM detectors are created and started."
+echo "All SINGLE_ENTITY CPU and RAM detectors use container-specific Docker metrics."
