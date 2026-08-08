@@ -4,7 +4,7 @@ import os
 import time
 
 import requests
-from flask import Flask, abort, flash, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
 
 from common.logging_utils import new_request_id, write_log
 
@@ -15,6 +15,38 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "notes-platform-dev-secret")
 
+write_log(
+    service=SERVICE_NAME,
+    level="INFO",
+    event_type="service_started",
+    message="Notes web application worker started",
+    notes_service_url=NOTES_SERVICE_URL,
+)
+
+
+@app.before_request
+def begin_request() -> None:
+    g.request_id = request.headers.get("X-Request-ID") or new_request_id()
+    g.request_started_at = time.perf_counter()
+
+
+@app.after_request
+def log_request(response):
+    latency_ms = round((time.perf_counter() - g.request_started_at) * 1000, 3)
+    response.headers["X-Request-ID"] = g.request_id
+    write_log(
+        service=SERVICE_NAME,
+        level="INFO" if response.status_code < 500 else "ERROR",
+        event_type="http_request_completed",
+        message="Web request completed",
+        request_id=g.request_id,
+        method=request.method,
+        path=request.path,
+        status_code=response.status_code,
+        latency_ms=latency_ms,
+    )
+    return response
+
 
 def call_notes_service(
     method: str,
@@ -22,7 +54,7 @@ def call_notes_service(
     *,
     payload: dict[str, object] | None = None,
 ) -> requests.Response:
-    request_id = request.headers.get("X-Request-ID") or new_request_id()
+    request_id = g.request_id
     start = time.perf_counter()
 
     try:
@@ -168,6 +200,7 @@ def service_unavailable(error):
         level="ERROR",
         event_type="request_failed",
         message="Web request failed because a downstream service was unavailable",
+        request_id=g.request_id,
         path=request.path,
         status_code=503,
     )
