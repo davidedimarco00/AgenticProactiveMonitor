@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $container = "monitored-toxiproxy"
 $proxy = "api-gateway-processing-service"
-$toxic = "network-latency"
+$toxic = "latency_downstream"
 
 Write-Host "Starting scenario: network-latency"
 Write-Host "Source: api-gateway"
@@ -33,7 +33,6 @@ if ($existing) {
 $args = @(
     "exec", $container,
     "/toxiproxy-cli", "toxic", "add",
-    "-n", $toxic,
     "-t", "latency",
     "-a", "latency=$DelayMs",
     "-a", "jitter=$JitterMs",
