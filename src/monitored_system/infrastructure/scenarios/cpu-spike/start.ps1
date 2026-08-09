@@ -28,9 +28,15 @@ docker cp "$PSScriptRoot\cpu_spike.py" "${container}:$remoteScript" | Out-Null
 
 $command = "python3 $remoteScript --workers $Workers >/tmp/monitored-cpu-spike.log 2>&1 & echo `$! > $pidFile"
 docker exec $container sh -c $command
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to start the CPU spike workload in '$container'."
+}
 
 Start-Sleep -Seconds 1
-$pid = docker exec $container sh -c "cat $pidFile"
+$controllerPid = (docker exec $container sh -c "cat $pidFile" | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($controllerPid)) {
+    throw "CPU spike started, but the controller PID could not be read from '$pidFile'."
+}
 
-Write-Host "Scenario active. Controller PID: $pid"
+Write-Host "Scenario active. Controller PID: $controllerPid"
 Write-Host "Run .\infrastructure\scenarios\cpu-spike\stop.ps1 to restore normal CPU load."
