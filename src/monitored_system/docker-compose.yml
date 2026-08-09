@@ -42,6 +42,12 @@ services:
       - ./infrastructure/toxiproxy.json:/config/toxiproxy.json:ro
     networks:
       - monitored-system-net
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
 
   api-gateway:
@@ -64,8 +70,10 @@ services:
       NETWORK_TCP_TARGET: toxiproxy:18000
       NETWORK_PROBE_PATH: /docs
     depends_on:
-      - processing-service
-      - toxiproxy
+      processing-service:
+        condition: service_started
+      toxiproxy:
+        condition: service_healthy
 
   processing-service:
     <<: *monitored-service
@@ -101,7 +109,7 @@ services:
       MACHINE_ROLE: data-service
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
       WORKLOAD_MODE: application
-      APP_COMMAND: "cd /opt/monitored-system/src/data-service && uvicorn app:app --host 0.0.0.0 --port 8000"
+      APP_COMMAND: "cd /opt/monitored-system/src/data-service && uvicorn app:app --host 0.0.0.0:8000"
       DATABASE_PATH: /var/lib/notes/notes.db
       NETWORK_TARGET_NAME: processing-service
       NETWORK_PING_TARGET: processing-service
