@@ -16,6 +16,9 @@ services:
       memlock:
         soft: -1
         hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
       - "127.0.0.1:${OPENSEARCH_HTTP_PORT:-9200}:9200"
       - "127.0.0.1:${OPENSEARCH_PERFORMANCE_ANALYZER_PORT:-9600}:9600"
@@ -46,6 +49,7 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
+        restart: true
     networks:
       - monitoring-net
     restart: unless-stopped
@@ -197,6 +201,11 @@ services:
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
     ports:
       - "127.0.0.1:8000:8000"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     networks:
       - monitoring-net
     volumes:
