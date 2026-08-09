@@ -11,7 +11,7 @@ from mcp.types import TextContent
 
 
 DEFAULT_MCP_URL = "http://127.0.0.1:8000/mcp"
-DEFAULT_TEST_HOST = "machine-03"
+DEFAULT_TEST_HOST = "processing-service"
 
 
 @dataclass(frozen=True)
@@ -29,10 +29,11 @@ class MCPTestClient:
 
     def _run(self, operation):
         async def runner():
+            # MCP Python SDK v2 Streamable HTTP yields exactly two streams.
             async with streamable_http_client(
                 self.url,
                 terminate_on_close=False,
-            ) as (read_stream, write_stream, _):
+            ) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     return await operation(session)
@@ -65,6 +66,7 @@ class MCPTestClient:
             text = "\n".join(text_parts)
 
             payload = None
+
             if text:
                 try:
                     parsed = json.loads(text)
@@ -74,12 +76,12 @@ class MCPTestClient:
                     pass
 
             if payload is None:
-                structured = getattr(result, "structuredContent", None)
+                structured = getattr(result, "structured_content", None)
                 if isinstance(structured, dict):
                     payload = structured
 
             return ToolResponse(
-                is_error=bool(getattr(result, "isError", False)),
+                is_error=bool(getattr(result, "is_error", False)),
                 text=text,
                 payload=payload,
             )
