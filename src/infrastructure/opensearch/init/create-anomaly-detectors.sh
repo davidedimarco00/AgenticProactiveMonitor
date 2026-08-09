@@ -83,15 +83,39 @@ wait_for_history_on_hosts() {
 
 find_detector_ids() {
   name="$1"
+
+  # OpenSearch commonly returns compact one-line JSON. Extract _id tokens without
+  # assuming pretty-printed line boundaries, otherwise existing detectors are
+  # missed and a duplicate create attempt returns HTTP 409.
   request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search" \
     -H "Content-Type: application/json" \
-    -d "{\"size\":100,\"_source\":false,\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" \
-    | sed -n 's/^[[:space:]]*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+    -d "{\"size\":100,\"_source\":[\"name\"],\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" \
+    | grep -o '"_id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | sed 's/.*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
 }
 
 start_detector() {
   detector_id="$1"
-  request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start" >/dev/null
+  response_file="/tmp/start-detector-${detector_id}.json"
+
+  http_code="$(curl -sS -o "$response_file" -w '%{http_code}' \
+    -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/${detector_id}/_start")"
+
+  case "$http_code" in
+    200|201)
+      return 0
+      ;;
+    409)
+      # OpenSearch returns Conflict when the detector is already running.
+      echo "Detector ${detector_id} is already running."
+      return 0
+      ;;
+    *)
+      echo "Unable to start detector ${detector_id} (HTTP ${http_code})." >&2
+      cat "$response_file" >&2 || true
+      return 1
+      ;;
+  esac
 }
 
 stop_detector() {
@@ -179,7 +203,7 @@ create_detector() {
     -H "Content-Type: application/json" \
     --data-binary @/tmp/detector.json)"
 
-  detector_id="$(printf '%s' "$response" | sed -n 's/.*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  detector_id="$(printf '%s' "$response" | grep -o '"_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed 's/.*"_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
 
   if [ -z "$detector_id" ]; then
     echo "Unable to read detector ID for ${name}." >&2
@@ -227,7 +251,7 @@ ensure_detector() {
     detector_id="$(printf '%s\n' "$ids" | head -n 1)"
 
     if detector_uses_field "$detector_id" "$field"; then
-      start_detector "$detector_id" || true
+      start_detector "$detector_id"
       echo "Reusing existing SINGLE_ENTITY detector ${name} (${detector_id}) with ${field}."
     else
       update_detector "$detector_id" "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
