@@ -1,0 +1,27 @@
+name: network-latency
+target: api-gateway-to-processing-service
+type: network-performance
+root_cause: controlled tc/netem delay applied to the api-gateway application-network egress interface
+
+description: >
+  Injects a real packet delay on the interface selected by the route from
+  api-gateway to processing-service. The application path becomes measurably
+  slower while the separate observability route to OpenSearch remains outside
+  the selected application interface.
+
+default_delay_ms: 250
+default_jitter_ms: 0
+max_delay_ms: 2000
+max_jitter_ms: 1000
+
+expected_metric_effects:
+  - ping.average_response_ms increases on api-gateway for target processing-service
+  - ping.percentile95_ms increases on api-gateway for target processing-service
+  - net_response.response_time increases for processing-service:8000
+  - application request latency increases at api-gateway and traffic-generator
+  - net interface counters continue to expose packets, bytes, errors and drops
+
+expected_detector:
+  - NETLAT-api-gateway-processing-service
+
+recovery: remove the root netem qdisc from the recorded application interface using stop.ps1
