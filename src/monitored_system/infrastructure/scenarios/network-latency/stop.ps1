@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $container = "monitored-toxiproxy"
 $proxy = "api-gateway-processing-service"
-$toxic = "network-latency"
+$toxic = "latency_downstream"
 
 Write-Host "Stopping scenario: network-latency"
 
