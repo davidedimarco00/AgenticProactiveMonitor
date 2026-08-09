@@ -32,30 +32,40 @@ services:
     depends_on:
       - api-gateway
 
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:${TOXIPROXY_VERSION:-2.12.0}
+    container_name: monitored-toxiproxy
+    hostname: toxiproxy
+    command: ["-config", "/config/toxiproxy.json"]
+    volumes:
+      - ./infrastructure/toxiproxy.json:/config/toxiproxy.json:ro
+    networks:
+      - monitored-system-net
+    restart: unless-stopped
+
   api-gateway:
     <<: *monitored-service
     container_name: api-gateway
     hostname: api-gateway
     ports:
       - "8080:5000"
-    # NET_ADMIN is limited to the fault-injection source used by the
-    # network-latency scenario. Other monitored services do not receive it.
-    cap_add:
-      - NET_ADMIN
     environment:
       HOST_ID: api-gateway
       MACHINE_ROLE: api-gateway
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
       WORKLOAD_MODE: application
       APP_COMMAND: "cd /opt/monitored-system/src/api-gateway && gunicorn --workers 2 --bind 0.0.0.0:5000 app:app"
-      NOTES_SERVICE_URL: http://processing-service:8000
+      # Normal traffic always traverses Toxiproxy, but no toxic is active in the
+      # base scenario. This keeps fault injection deterministic on Docker Desktop.
+      NOTES_SERVICE_URL: http://toxiproxy:18000
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-3}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-notes-platform-dev-secret}
       NETWORK_TARGET_NAME: processing-service
       NETWORK_PING_TARGET: processing-service
-      NETWORK_TCP_TARGET: processing-service:8000
+      NETWORK_TCP_TARGET: toxiproxy:18000
     depends_on:
       - processing-service
+      - toxiproxy
 
   processing-service:
     <<: *monitored-service
