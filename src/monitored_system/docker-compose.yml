@@ -26,6 +26,9 @@ services:
       REQUEST_TIMEOUT_SECONDS: ${TRAFFIC_REQUEST_TIMEOUT_SECONDS:-5}
       TRAFFIC_MIN_INTERVAL_SECONDS: ${TRAFFIC_MIN_INTERVAL_SECONDS:-2}
       TRAFFIC_MAX_INTERVAL_SECONDS: ${TRAFFIC_MAX_INTERVAL_SECONDS:-5}
+      NETWORK_TARGET_NAME: api-gateway
+      NETWORK_PING_TARGET: api-gateway
+      NETWORK_TCP_TARGET: api-gateway:5000
     depends_on:
       - api-gateway
 
@@ -35,6 +38,10 @@ services:
     hostname: api-gateway
     ports:
       - "8080:5000"
+    # NET_ADMIN is limited to the fault-injection source used by the
+    # network-latency scenario. Other monitored services do not receive it.
+    cap_add:
+      - NET_ADMIN
     environment:
       HOST_ID: api-gateway
       MACHINE_ROLE: api-gateway
@@ -44,6 +51,9 @@ services:
       NOTES_SERVICE_URL: http://processing-service:8000
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-3}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-notes-platform-dev-secret}
+      NETWORK_TARGET_NAME: processing-service
+      NETWORK_PING_TARGET: processing-service
+      NETWORK_TCP_TARGET: processing-service:8000
     depends_on:
       - processing-service
 
@@ -63,6 +73,9 @@ services:
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-3}
       FAULT_DELAY_FILE: /var/run/monitored-faults/processing-delay-ms
       MAX_FAULT_DELAY_MS: ${MAX_FAULT_DELAY_MS:-30000}
+      NETWORK_TARGET_NAME: data-service
+      NETWORK_PING_TARGET: data-service
+      NETWORK_TCP_TARGET: data-service:8000
     depends_on:
       - data-service
 
@@ -79,6 +92,9 @@ services:
       WORKLOAD_MODE: application
       APP_COMMAND: "cd /opt/monitored-system/src/data-service && uvicorn app:app --host 0.0.0.0 --port 8000"
       DATABASE_PATH: /var/lib/notes/notes.db
+      NETWORK_TARGET_NAME: processing-service
+      NETWORK_PING_TARGET: processing-service
+      NETWORK_TCP_TARGET: processing-service:8000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - notes-data:/var/lib/notes
@@ -95,6 +111,9 @@ services:
       LATENCY_MIN: 50
       LATENCY_MAX: 1300
       LOG_INTERVAL: ${LOG_INTERVAL:-3}
+      NETWORK_TARGET_NAME: api-gateway
+      NETWORK_PING_TARGET: api-gateway
+      NETWORK_TCP_TARGET: api-gateway:5000
 
 networks:
   monitored-system-net:
