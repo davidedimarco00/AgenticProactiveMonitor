@@ -14,6 +14,7 @@ traffic-generator
        v
 api-gateway (Flask)
        |
+       |  normal path through Toxiproxy (no fault in base state)
        v
 processing-service (FastAPI)
        |
@@ -23,7 +24,7 @@ data-service (FastAPI + SQLite)
 worker-service (independent synthetic background node)
 ```
 
-`traffic-generator` behaves as a synthetic user and performs real HTTP requests against the Notes Platform. `worker-service` is intentionally kept as an independent background node with a controlled synthetic workload. It is not part of the HTTP request path; it provides a fifth monitored entity and a reproducible target for resource faults such as memory exhaustion.
+`traffic-generator` behaves as a synthetic user and performs real HTTP requests against the Notes Platform. `worker-service` is intentionally kept as an independent background node with a controlled synthetic workload. Toxiproxy is an infrastructure-only fault-injection helper and is not one of the five monitored entities.
 
 ## Project structure
 
@@ -38,6 +39,7 @@ src/monitored_system/
 │   ├── telegraf.conf
 │   ├── fluent-bit.conf
 │   ├── parsers.conf
+│   ├── toxiproxy.json
 │   └── scenarios/
 │       ├── README.md
 │       ├── reset-to-base.ps1
@@ -53,8 +55,6 @@ src/monitored_system/
     ├── data-service/
     └── traffic-generator/
 ```
-
-`infrastructure/` contains Docker runtime, telemetry configuration and controlled test scenarios. `src/` contains application source code.
 
 ## Ports
 
@@ -80,15 +80,15 @@ Every monitored container runs Telegraf and Fluent Bit.
 
 - Telegraf writes metrics to `metrics-<service>-YYYY.MM.DD`.
 - Fluent Bit writes logs to `logs-<service>-YYYY.MM.DD`.
-- Container CPU is collected as `docker_container_cpu.usage_percent`.
-- Container memory is collected as `docker_container_mem.usage_percent`.
-- Interface counters are collected through the Telegraf `net` measurement.
-- ICMP RTT and packet loss are collected through `ping`, including `average_response_ms` and p50/p95/p99 values.
-- TCP connection response time and reachability are collected through `net_response.response_time` and `net_response.result_code`.
-- Application JSON Lines are written to `/var/log/machine/app.log`.
-- System heartbeat records are written to `/var/log/machine/system.log`.
+- Container CPU: `docker_container_cpu.usage_percent`.
+- Container memory: `docker_container_mem.usage_percent`.
+- Interface counters: Telegraf `net` measurement.
+- Raw ICMP RTT reference: Telegraf `ping` measurement.
+- End-to-end network-service latency: `network_service_latency.response_time`.
+- Application logs: `/var/log/machine/app.log`.
+- System heartbeat: `/var/log/machine/system.log`.
 
-Active latency probes follow the monitored topology. The three critical links used by network-latency detection are:
+The three critical links used by network-latency detection are:
 
 ```text
 traffic-generator   -> api-gateway
@@ -96,42 +96,42 @@ api-gateway         -> processing-service
 processing-service  -> data-service
 ```
 
-OpenSearch Anomaly Detection uses only SINGLE_ENTITY detectors. The configured set contains:
+OpenSearch Anomaly Detection uses only SINGLE_ENTITY detectors:
 
 - 5 CPU detectors;
 - 5 RAM detectors;
-- 3 network-latency detectors, one per critical source/link.
+- 3 network-latency detectors.
 
 ## Controlled scenarios
 
-Restore the normal base state at any time:
+Restore the normal base state:
 
 ```powershell
 .\infrastructure\scenarios\reset-to-base.ps1
 ```
 
-CPU spike on `processing-service`:
+CPU spike:
 
 ```powershell
 .\infrastructure\scenarios\cpu-spike\start.ps1 -Workers 4
 .\infrastructure\scenarios\cpu-spike\stop.ps1
 ```
 
-Memory leak on `worker-service`:
+Memory leak:
 
 ```powershell
 .\infrastructure\scenarios\memory-leak\start.ps1
 .\infrastructure\scenarios\memory-leak\stop.ps1
 ```
 
-Real network delay on the `api-gateway -> processing-service` path:
+Network latency on `api-gateway -> processing-service`:
 
 ```powershell
 .\infrastructure\scenarios\network-latency\start.ps1 -DelayMs 250
 .\infrastructure\scenarios\network-latency\stop.ps1
 ```
 
-Application-level processing delay:
+Application processing latency:
 
 ```powershell
 .\infrastructure\scenarios\high-latency\start.ps1 -DelayMs 2500
@@ -145,7 +145,7 @@ Data Service unavailable:
 .\infrastructure\scenarios\data-service-down\stop.ps1
 ```
 
-The distinction between `network-latency` and `high-latency` is intentional: the former changes the packet path using Linux traffic control, while the latter delays processing inside the application. This gives the diagnostic agents independent evidence to distinguish network degradation from application slowdown.
+`network-latency` and `high-latency` intentionally represent different root causes. The first introduces latency in the TCP path through Toxiproxy; the second adds delay inside the application. This gives the diagnostic agents independent evidence to distinguish network degradation from application slowdown.
 
 ## Start
 
