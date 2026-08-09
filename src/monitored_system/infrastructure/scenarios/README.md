@@ -37,11 +37,23 @@ Allocates and retains memory progressively. The expected OpenSearch detector is 
 .\infrastructure\scenarios\memory-leak\stop.ps1
 ```
 
+### network-latency
+
+Target link: `api-gateway -> processing-service`
+
+Uses Linux `tc/netem` to add real packet delay to the application-network interface selected by the route to `processing-service`. The observability network is not the selected route. The expected detector is `NETLAT-api-gateway-processing-service`, based on `ping.average_response_ms`.
+
+```powershell
+.\infrastructure\scenarios\network-latency\start.ps1
+.\infrastructure\scenarios\network-latency\start.ps1 -DelayMs 250 -JitterMs 25
+.\infrastructure\scenarios\network-latency\stop.ps1
+```
+
 ### high-latency
 
 Target: `processing-service`
 
-Adds a runtime processing delay without rebuilding or restarting the service.
+Adds an application-level runtime delay before downstream calls. Unlike `network-latency`, this does not alter the network stack and is useful to distinguish application slowdown from network degradation.
 
 ```powershell
 .\infrastructure\scenarios\high-latency\start.ps1
@@ -60,4 +72,4 @@ Stops the persistence service to simulate complete downstream unavailability.
 .\infrastructure\scenarios\data-service-down\stop.ps1
 ```
 
-Each fault scenario includes a `scenario.yaml` ground-truth description. The current OpenSearch anomaly detector set is metric-based and contains only CPU and RAM SINGLE_ENTITY detectors. Therefore CPU and memory scenarios have dedicated detectors, while latency and availability scenarios are retained for diagnostic evaluation using telemetry and application logs and for future detector extensions.
+Each fault scenario includes a `scenario.yaml` ground-truth description. OpenSearch detection is metric-based: CPU and RAM have one SINGLE_ENTITY detector per monitored service, while network latency has one SINGLE_ENTITY detector per critical application link/source index. High application latency and service unavailability remain controlled incidents for diagnostic reasoning using metrics and logs.
