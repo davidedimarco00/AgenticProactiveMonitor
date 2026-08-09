@@ -14,10 +14,11 @@ default_step_seconds: 2
 max_total_mb: 2048
 
 expected_metric_effects:
-  - mem.used_percent increases relative to the normal baseline
-  - memory pressure remains elevated after the configured allocation is reached
+  - docker_container_mem.usage_percent increases relative to the normal baseline
+  - container memory usage remains elevated after the configured allocation is reached
 
 expected_detector:
   - RAM-worker-service
 
+detection_scope: metric-based OpenSearch Anomaly Detection
 recovery: terminate the injected allocation process using stop.ps1
