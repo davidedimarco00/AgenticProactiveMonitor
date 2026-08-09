@@ -17,7 +17,10 @@ if (-not $ollama) {
     throw "Ollama for Windows is not installed or ollama.exe is not available in PATH. Install Ollama for Windows, start it once, then rerun this script."
 }
 
-$modelDirectory = Join-Path $env:USERPROFILE ".ollama\models"
+$userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+$modelDirectory = [System.IO.Path]::Combine($userProfile, ".ollama", "models")
+$legacyMalformedDirectory = "${userProfile}.ollama\models"
+
 New-Item -ItemType Directory -Force -Path $modelDirectory | Out-Null
 
 Write-Host "Configuring Ollama for native Windows execution..."
@@ -31,6 +34,11 @@ Write-Host "  OLLAMA_HOST=$HostBinding"
 Write-Host "  OLLAMA_KEEP_ALIVE=$KeepAlive"
 Write-Host "  OLLAMA_NUM_PARALLEL=$NumParallel"
 Write-Host "  OLLAMA_MODELS=$modelDirectory"
+
+if (Test-Path $legacyMalformedDirectory) {
+    Write-Warning "A legacy malformed Ollama model directory exists at '$legacyMalformedDirectory'."
+    Write-Warning "Do not delete it if it contains partial downloads. Quit Ollama and migrate its contents to '$modelDirectory' before retrying the pull."
+}
 
 if (-not $PullModels) {
     Write-Host ""
