@@ -89,7 +89,8 @@ services:
     hostname: worker-service
     environment:
       HOST_ID: worker-service
-      MACHINE_ROLE: worker-service
+      MACHINE_ROLE: background-worker
+      WORKLOAD_MODE: synthetic
       LOG_LEVEL_PROFILE: normal
       LATENCY_MIN: 50
       LATENCY_MAX: 1300
