@@ -43,6 +43,7 @@ src/monitored_system/
 │       ├── reset-to-base.ps1
 │       ├── cpu-spike/
 │       ├── memory-leak/
+│       ├── network-latency/
 │       ├── high-latency/
 │       └── data-service-down/
 └── src/
@@ -81,10 +82,25 @@ Every monitored container runs Telegraf and Fluent Bit.
 - Fluent Bit writes logs to `logs-<service>-YYYY.MM.DD`.
 - Container CPU is collected as `docker_container_cpu.usage_percent`.
 - Container memory is collected as `docker_container_mem.usage_percent`.
+- Interface counters are collected through the Telegraf `net` measurement.
+- ICMP RTT and packet loss are collected through `ping`, including `average_response_ms` and p50/p95/p99 values.
+- TCP connection response time and reachability are collected through `net_response.response_time` and `net_response.result_code`.
 - Application JSON Lines are written to `/var/log/machine/app.log`.
 - System heartbeat records are written to `/var/log/machine/system.log`.
 
-The current OpenSearch Anomaly Detection configuration uses ten SINGLE_ENTITY detectors: one CPU detector and one RAM detector for each of the five monitored services.
+Active latency probes follow the monitored topology. The three critical links used by network-latency detection are:
+
+```text
+traffic-generator   -> api-gateway
+api-gateway         -> processing-service
+processing-service  -> data-service
+```
+
+OpenSearch Anomaly Detection uses only SINGLE_ENTITY detectors. The configured set contains:
+
+- 5 CPU detectors;
+- 5 RAM detectors;
+- 3 network-latency detectors, one per critical source/link.
 
 ## Controlled scenarios
 
@@ -108,7 +124,14 @@ Memory leak on `worker-service`:
 .\infrastructure\scenarios\memory-leak\stop.ps1
 ```
 
-High processing latency:
+Real network delay on the `api-gateway -> processing-service` path:
+
+```powershell
+.\infrastructure\scenarios\network-latency\start.ps1 -DelayMs 250
+.\infrastructure\scenarios\network-latency\stop.ps1
+```
+
+Application-level processing delay:
 
 ```powershell
 .\infrastructure\scenarios\high-latency\start.ps1 -DelayMs 2500
@@ -122,7 +145,7 @@ Data Service unavailable:
 .\infrastructure\scenarios\data-service-down\stop.ps1
 ```
 
-CPU and RAM scenarios map directly to the current metric-based OpenSearch detectors. High latency and service unavailability are retained as controlled ground-truth incidents for diagnostic reasoning using telemetry and logs and for future detector extensions.
+The distinction between `network-latency` and `high-latency` is intentional: the former changes the packet path using Linux traffic control, while the latter delays processing inside the application. This gives the diagnostic agents independent evidence to distinguish network degradation from application slowdown.
 
 ## Start
 
