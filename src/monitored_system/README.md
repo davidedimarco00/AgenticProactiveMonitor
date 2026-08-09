@@ -14,7 +14,6 @@ traffic-generator
        v
 api-gateway (Flask)
        |
-       |  normal path through Toxiproxy (no fault in base state)
        v
 processing-service (FastAPI)
        |
@@ -24,7 +23,7 @@ data-service (FastAPI + SQLite)
 worker-service (independent synthetic background node)
 ```
 
-`traffic-generator` behaves as a synthetic user and performs real HTTP requests against the Notes Platform. `worker-service` is intentionally kept as an independent background node with a controlled synthetic workload. Toxiproxy is an infrastructure-only fault-injection helper and is not one of the five monitored entities.
+`traffic-generator` behaves as a synthetic user and performs real HTTP requests against the Notes Platform. `worker-service` is intentionally kept as an independent background node with a controlled synthetic workload.
 
 ## Project structure
 
@@ -39,7 +38,6 @@ src/monitored_system/
 │   ├── telegraf.conf
 │   ├── fluent-bit.conf
 │   ├── parsers.conf
-│   ├── toxiproxy.json
 │   └── scenarios/
 │       ├── README.md
 │       ├── reset-to-base.ps1
@@ -83,7 +81,7 @@ Every monitored container runs Telegraf and Fluent Bit.
 - Container CPU: `docker_container_cpu.usage_percent`.
 - Container memory: `docker_container_mem.usage_percent`.
 - Interface counters: Telegraf `net` measurement.
-- Raw ICMP RTT reference: Telegraf `ping` measurement.
+- Raw ICMP RTT: Telegraf `ping` measurement.
 - End-to-end network-service latency: `network_service_latency.response_time`.
 - Application logs: `/var/log/machine/app.log`.
 - System heartbeat: `/var/log/machine/system.log`.
@@ -128,8 +126,11 @@ Network latency on `api-gateway -> processing-service`:
 
 ```powershell
 .\infrastructure\scenarios\network-latency\start.ps1 -DelayMs 250
+.\infrastructure\scenarios\network-latency\start.ps1 -DelayMs 250 -JitterMs 25
 .\infrastructure\scenarios\network-latency\stop.ps1
 ```
+
+This scenario uses Linux `tc/netem` on the application-network interface selected from the route to `processing-service`. `api-gateway` receives only the `NET_ADMIN` capability. On Docker Desktop for Windows, the tested environment uses the Hyper-V/LinuxKit backend because the WSL2 kernel used during development did not expose the `netem` qdisc.
 
 Application processing latency:
 
@@ -145,7 +146,7 @@ Data Service unavailable:
 .\infrastructure\scenarios\data-service-down\stop.ps1
 ```
 
-`network-latency` and `high-latency` intentionally represent different root causes. The first introduces latency in the TCP path through Toxiproxy; the second adds delay inside the application. This gives the diagnostic agents independent evidence to distinguish network degradation from application slowdown.
+`network-latency` and `high-latency` intentionally represent different root causes. The first delays packets in the Linux traffic-control layer; the second adds delay inside the application. This gives the diagnostic agents independent evidence to distinguish network degradation from application slowdown.
 
 ## Start
 
