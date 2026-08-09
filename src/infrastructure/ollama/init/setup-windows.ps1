@@ -1,6 +1,7 @@
 param(
     [string]$ChatModel = "gemma4:e2b",
     [string]$ToolModel = "qwen3.5:4b",
+    [string]$FallbackToolModel = "qwen2.5:latest",
     [string]$EmbeddingModel = "ibm/granite-embedding:30m",
     [string]$HostBinding = "0.0.0.0:11434",
     [string]$KeepAlive = "5m",
@@ -32,7 +33,7 @@ catch {
     throw "Ollama is installed but the local API is not running on 127.0.0.1:11434. Start Ollama from the Windows Start menu and rerun this script."
 }
 
-$models = @($ChatModel, $ToolModel, $EmbeddingModel) | Select-Object -Unique
+$models = @($ChatModel, $ToolModel, $FallbackToolModel, $EmbeddingModel) | Select-Object -Unique
 foreach ($model in $models) {
     Write-Host "Ensuring model is available: $model"
     & ollama pull $model
