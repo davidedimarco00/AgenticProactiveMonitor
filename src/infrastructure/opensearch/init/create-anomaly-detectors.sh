@@ -84,9 +84,6 @@ wait_for_history_on_hosts() {
 find_detector_ids() {
   name="$1"
 
-  # OpenSearch commonly returns compact one-line JSON. Extract _id tokens without
-  # assuming pretty-printed line boundaries, otherwise existing detectors are
-  # missed and a duplicate create attempt returns HTTP 409.
   request -X POST "${OPENSEARCH_URL}/_plugins/_anomaly_detection/detectors/_search" \
     -H "Content-Type: application/json" \
     -d "{\"size\":100,\"_source\":[\"name\"],\"query\":{\"match_phrase\":{\"name\":\"${name}\"}}}" \
@@ -106,7 +103,6 @@ start_detector() {
       return 0
       ;;
     409)
-      # OpenSearch returns Conflict when the detector is already running.
       echo "Detector ${detector_id} is already running."
       return 0
       ;;
@@ -265,7 +261,7 @@ ensure_detector() {
 wait_for_plugin
 wait_for_history_on_hosts CPU docker_container_cpu docker_container_cpu.usage_percent "$HOSTS"
 wait_for_history_on_hosts RAM docker_container_mem docker_container_mem.usage_percent "$HOSTS"
-wait_for_history_on_hosts NETLAT ping ping.average_response_ms "$NETWORK_LATENCY_HOSTS"
+wait_for_history_on_hosts NETLAT network_service_latency network_service_latency.response_time "$NETWORK_LATENCY_HOSTS"
 
 for host in $HOSTS; do
   ensure_detector \
@@ -289,28 +285,28 @@ done
 
 ensure_detector \
   "NETLAT-traffic-generator-api-gateway" \
-  "ICMP network latency anomaly detector from traffic-generator to api-gateway" \
+  "End-to-end network service latency detector from traffic-generator to api-gateway" \
   traffic-generator \
-  ping \
-  ping.average_response_ms \
+  network_service_latency \
+  network_service_latency.response_time \
   NETWORK_LATENCY_ANOMALY \
   network_latency_anomaly
 
 ensure_detector \
   "NETLAT-api-gateway-processing-service" \
-  "ICMP network latency anomaly detector from api-gateway to processing-service" \
+  "End-to-end network service latency detector from api-gateway to processing-service" \
   api-gateway \
-  ping \
-  ping.average_response_ms \
+  network_service_latency \
+  network_service_latency.response_time \
   NETWORK_LATENCY_ANOMALY \
   network_latency_anomaly
 
 ensure_detector \
   "NETLAT-processing-service-data-service" \
-  "ICMP network latency anomaly detector from processing-service to data-service" \
+  "End-to-end network service latency detector from processing-service to data-service" \
   processing-service \
-  ping \
-  ping.average_response_ms \
+  network_service_latency \
+  network_service_latency.response_time \
   NETWORK_LATENCY_ANOMALY \
   network_latency_anomaly
 
