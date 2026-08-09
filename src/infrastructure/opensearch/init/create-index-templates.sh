@@ -63,7 +63,13 @@ cat >/tmp/metrics-template.json <<'JSON'
             "monitored_by": {"type": "keyword"},
             "container_name": {"type": "keyword"},
             "container_image": {"type": "keyword"},
-            "container_status": {"type": "keyword"}
+            "container_status": {"type": "keyword"},
+            "network_target": {"type": "keyword"},
+            "url": {"type": "keyword"},
+            "server": {"type": "keyword"},
+            "port": {"type": "keyword"},
+            "protocol": {"type": "keyword"},
+            "result": {"type": "keyword"}
           }
         },
         "cpu": {
@@ -108,6 +114,30 @@ cat >/tmp/metrics-template.json <<'JSON'
             "limit": {"type": "long"},
             "rss": {"type": "long"},
             "cache": {"type": "long"}
+          }
+        },
+        "ping": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "packets_transmitted": {"type": "integer"},
+            "packets_received": {"type": "integer"},
+            "percent_packet_loss": {"type": "float"},
+            "average_response_ms": {"type": "float"},
+            "minimum_response_ms": {"type": "float"},
+            "maximum_response_ms": {"type": "float"},
+            "percentile50_ms": {"type": "float"},
+            "percentile95_ms": {"type": "float"},
+            "percentile99_ms": {"type": "float"},
+            "result_code": {"type": "integer"}
+          }
+        },
+        "net_response": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "response_time": {"type": "float"},
+            "result_code": {"type": "integer"}
           }
         },
         "docker_container_net": {"type": "object", "dynamic": true},
