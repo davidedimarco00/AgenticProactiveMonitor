@@ -140,6 +140,14 @@ cat >/tmp/metrics-template.json <<'JSON'
             "result_code": {"type": "integer"}
           }
         },
+        "network_service_latency": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "response_time": {"type": "float"},
+            "result_code": {"type": "integer"}
+          }
+        },
         "docker_container_net": {"type": "object", "dynamic": true},
         "docker_container_blkio": {"type": "object", "dynamic": true},
         "docker_container_status": {"type": "object", "dynamic": true},
