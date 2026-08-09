@@ -11,7 +11,7 @@ from mcp.types import TextContent
 
 
 DEFAULT_MCP_URL = "http://127.0.0.1:8000/mcp"
-DEFAULT_TEST_HOST = "machine-03"
+DEFAULT_TEST_HOST = "processing-service"
 
 
 @dataclass(frozen=True)
@@ -67,8 +67,6 @@ class MCPTestClient:
 
             payload = None
 
-            # MCPServer returns dictionaries as JSON text for backward-compatible
-            # unstructured content, so try this representation first.
             if text:
                 try:
                     parsed = json.loads(text)
@@ -77,7 +75,6 @@ class MCPTestClient:
                 except json.JSONDecodeError:
                     pass
 
-            # MCP Python SDK v2 exposes Python model fields in snake_case.
             if payload is None:
                 structured = getattr(result, "structured_content", None)
                 if isinstance(structured, dict):
