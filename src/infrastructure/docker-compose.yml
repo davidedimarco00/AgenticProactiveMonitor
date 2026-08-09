@@ -178,7 +178,7 @@ services:
         aliases:
           - ${XMPP_DOMAIN:-xmpp}
     healthcheck:
-      test: ["CMD-SHELL", "prosodyctl check config >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "prosodyctl shell server uptime >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10
