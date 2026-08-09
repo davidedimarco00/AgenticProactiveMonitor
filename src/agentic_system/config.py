@@ -21,7 +21,7 @@ class OpenSearchSettings(BaseModel):
 
 
 class OllamaSettings(BaseModel):
-    base_url: str = "http://ollama:11434"
+    base_url: str = "http://host.docker.internal:11434"
     model: str = "llama3.2:3b"
     temperature: float = 0.1
     timeout_seconds: float = 120.0
