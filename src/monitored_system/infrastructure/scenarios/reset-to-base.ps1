@@ -25,10 +25,10 @@ docker exec $processing sh -c "if [ -s /var/run/monitored-faults/cpu-spike.pid ]
 # Stop only the injected memory workload, if present.
 docker exec $worker sh -c "if [ -s /var/run/monitored-faults/memory-leak.pid ]; then xargs kill < /var/run/monitored-faults/memory-leak.pid 2>/dev/null || true; fi; rm -f /var/run/monitored-faults/memory-leak.pid /tmp/monitored-memory-leak.py /tmp/monitored-memory-leak.log" 2>$null
 
-# Remove network impairments while keeping the proxy path enabled.
+# Remove network impairments while keeping the normal proxy path enabled.
 $proxyRunning = docker inspect -f "{{.State.Running}}" $toxiproxy 2>$null
 if ($proxyRunning -eq "true") {
-    docker exec $toxiproxy /toxiproxy-cli toxic remove -n network-latency api-gateway-processing-service 2>$null | Out-Null
+    docker exec $toxiproxy /toxiproxy-cli toxic remove -n latency_downstream api-gateway-processing-service 2>$null | Out-Null
     $global:LASTEXITCODE = 0
 }
 
