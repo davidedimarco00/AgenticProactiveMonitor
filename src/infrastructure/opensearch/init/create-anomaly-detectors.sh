@@ -5,6 +5,7 @@ OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
 WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-3600}"
 REQUIRED_INTERVALS="${DETECTOR_REQUIRED_INTERVALS:-40}"
 HOSTS="${DETECTOR_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}"
+NETWORK_LATENCY_HOSTS="traffic-generator api-gateway processing-service"
 
 DETECTION_INTERVAL_MINUTES=1
 WINDOW_DELAY_MINUTES=1
@@ -47,16 +48,17 @@ complete_interval_count() {
   printf '%s' "$response" | grep -o '"key_as_string"' | wc -l | tr -d ' '
 }
 
-wait_for_history_on_all_hosts() {
+wait_for_history_on_hosts() {
   label="$1"
   measurement="$2"
   field="$3"
+  host_list="$4"
   elapsed=0
 
   while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
     all_ready=1
 
-    for host in $HOSTS; do
+    for host in $host_list; do
       intervals="$(complete_interval_count "$host" "$measurement" "$field" 2>/dev/null || echo 0)"
       intervals="${intervals:-0}"
 
@@ -67,7 +69,7 @@ wait_for_history_on_all_hosts() {
     done
 
     if [ "$all_ready" -eq 1 ]; then
-      echo "${label}: every monitored service has ${REQUIRED_INTERVALS} complete 1-minute intervals."
+      echo "${label}: every required source has ${REQUIRED_INTERVALS} complete 1-minute intervals."
       return 0
     fi
 
@@ -199,7 +201,7 @@ update_detector() {
   feature_name="$7"
   aggregation_name="$8"
 
-  echo "Migrating ${name} (${detector_id}) to container-specific metric ${field}."
+  echo "Migrating ${name} (${detector_id}) to metric ${field}."
   stop_detector "$detector_id"
   write_detector_json "$name" "$description" "$host" "$measurement" "$field" "$feature_name" "$aggregation_name"
 
@@ -237,8 +239,9 @@ ensure_detector() {
 }
 
 wait_for_plugin
-wait_for_history_on_all_hosts CPU docker_container_cpu docker_container_cpu.usage_percent
-wait_for_history_on_all_hosts RAM docker_container_mem docker_container_mem.usage_percent
+wait_for_history_on_hosts CPU docker_container_cpu docker_container_cpu.usage_percent "$HOSTS"
+wait_for_history_on_hosts RAM docker_container_mem docker_container_mem.usage_percent "$HOSTS"
+wait_for_history_on_hosts NETLAT ping ping.average_response_ms "$NETWORK_LATENCY_HOSTS"
 
 for host in $HOSTS; do
   ensure_detector \
@@ -260,4 +263,31 @@ for host in $HOSTS; do
     ram_anomaly
 done
 
-echo "All SINGLE_ENTITY CPU and RAM detectors use container-specific Docker metrics."
+ensure_detector \
+  "NETLAT-traffic-generator-api-gateway" \
+  "ICMP network latency anomaly detector from traffic-generator to api-gateway" \
+  traffic-generator \
+  ping \
+  ping.average_response_ms \
+  NETWORK_LATENCY_ANOMALY \
+  network_latency_anomaly
+
+ensure_detector \
+  "NETLAT-api-gateway-processing-service" \
+  "ICMP network latency anomaly detector from api-gateway to processing-service" \
+  api-gateway \
+  ping \
+  ping.average_response_ms \
+  NETWORK_LATENCY_ANOMALY \
+  network_latency_anomaly
+
+ensure_detector \
+  "NETLAT-processing-service-data-service" \
+  "ICMP network latency anomaly detector from processing-service to data-service" \
+  processing-service \
+  ping \
+  ping.average_response_ms \
+  NETWORK_LATENCY_ANOMALY \
+  network_latency_anomaly
+
+echo "All detectors are SINGLE_ENTITY: 10 container CPU/RAM detectors and 3 network-latency detectors."
