@@ -91,7 +91,7 @@ The script:
 
 - configures `OLLAMA_HOST=0.0.0.0:11434` for the current Windows user;
 - configures `OLLAMA_KEEP_ALIVE=5m` and `OLLAMA_NUM_PARALLEL=1`;
-- pulls `gemma4:e2b`, `qwen3.5:4b` and `ibm/granite-embedding:30m` by default.
+- pulls `gemma4:e2b`, `qwen3.5:4b`, `qwen2.5:latest` and `ibm/granite-embedding:30m` by default.
 
 After the script completes, quit Ollama from the Windows tray and start it again so it inherits the new environment variables.
 
