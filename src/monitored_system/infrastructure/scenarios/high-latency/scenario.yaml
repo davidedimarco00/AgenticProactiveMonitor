@@ -16,4 +16,9 @@ expected_symptoms:
   - traffic-generator observes slower user actions
   - requests may become HTTP 503 if the configured delay exceeds upstream timeouts
 
-recovery: remove the runtime fault-control file
+current_detection_scope: >
+  No dedicated anomaly detector is defined for latency in the current metric-only
+  detector set. Logs and request timing are retained as diagnostic evidence for
+  later agent reasoning and future detector extensions.
+
+recovery: remove the runtime fault-control file using stop.ps1
