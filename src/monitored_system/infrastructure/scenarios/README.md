@@ -35,9 +35,11 @@ Expected detector: `RAM-worker-service`, based on `docker_container_mem.usage_pe
 ### network-latency
 Target link: `api-gateway -> processing-service`
 
-Normal traffic traverses a dedicated Toxiproxy TCP proxy with no active toxic. The scenario adds deterministic latency and optional jitter to that path. This approach works on Docker Desktop without depending on the host kernel exposing the Linux `sch_netem` qdisc.
+The scenario resolves the Docker route from `api-gateway` to `processing-service` and applies a Linux `tc/netem` root qdisc only to that application-network interface. `api-gateway` is granted the `NET_ADMIN` capability; privileged mode is not required.
 
-Expected detector: `NETLAT-api-gateway-processing-service`, based on `network_service_latency.response_time`. ICMP `ping` remains available as an independent raw-network reference and `inputs.net` keeps interface counters.
+Expected detector: `NETLAT-api-gateway-processing-service`, based on `network_service_latency.response_time`. Telegraf `ping.average_response_ms` provides an independent RTT signal and `inputs.net` keeps interface counters.
+
+On Docker Desktop for Windows, this scenario requires a backend kernel with `sch_netem` support. The validated thesis environment uses Docker Desktop Hyper-V/LinuxKit.
 
 ```powershell
 .\infrastructure\scenarios\network-latency\start.ps1 -DelayMs 250
