@@ -1,28 +1,23 @@
 $ErrorActionPreference = "Stop"
 
-$container = "api-gateway"
-$stateFile = "/var/run/monitored-faults/network-latency.interface"
+$container = "monitored-toxiproxy"
+$proxy = "api-gateway-processing-service"
+$toxic = "network-latency"
 
 Write-Host "Stopping scenario: network-latency"
 
 $running = docker inspect -f "{{.State.Running}}" $container 2>$null
 if ($running -ne "true") {
-    throw "Container '$container' is not running."
-}
-
-$networkInterface = docker exec $container sh -c "cat $stateFile 2>/dev/null || true"
-$networkInterface = ($networkInterface | Select-Object -First 1).Trim()
-
-if (-not $networkInterface) {
-    Write-Host "No active network-latency state was found. Nothing to remove."
+    Write-Host "Toxiproxy is not running. Nothing to remove."
     exit 0
 }
 
-docker exec $container tc qdisc del dev $networkInterface root 2>$null | Out-Null
-# tc returns a non-zero code when no qdisc exists; cleanup should still be idempotent.
-$global:LASTEXITCODE = 0
+docker exec $container /toxiproxy-cli toxic remove -n $toxic $proxy 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "No active network-latency toxic was found."
+    $global:LASTEXITCODE = 0
+    exit 0
+}
 
-docker exec $container sh -c "rm -f $stateFile"
-
-Write-Host "Scenario stopped. Removed netem from interface '$networkInterface'."
-Write-Host "Network latency should return to the normal baseline."
+Write-Host "Scenario stopped. Toxiproxy latency removed."
+Write-Host "Network service latency should return to the normal baseline."
