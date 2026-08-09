@@ -14,7 +14,6 @@ finally {
 $processing = "processing-service"
 $worker = "worker-service"
 $data = "data-service"
-$toxiproxy = "monitored-toxiproxy"
 
 # Remove controlled processing latency.
 docker exec $processing sh -c "rm -f /var/run/monitored-faults/processing-delay-ms" 2>$null
@@ -25,12 +24,9 @@ docker exec $processing sh -c "if [ -s /var/run/monitored-faults/cpu-spike.pid ]
 # Stop only the injected memory workload, if present.
 docker exec $worker sh -c "if [ -s /var/run/monitored-faults/memory-leak.pid ]; then xargs kill < /var/run/monitored-faults/memory-leak.pid 2>/dev/null || true; fi; rm -f /var/run/monitored-faults/memory-leak.pid /tmp/monitored-memory-leak.py /tmp/monitored-memory-leak.log" 2>$null
 
-# Remove network impairments while keeping the normal proxy path enabled.
-$proxyRunning = docker inspect -f "{{.State.Running}}" $toxiproxy 2>$null
-if ($proxyRunning -eq "true") {
-    docker exec $toxiproxy /toxiproxy-cli toxic remove -n latency_downstream api-gateway-processing-service 2>$null | Out-Null
-    $global:LASTEXITCODE = 0
-}
+# Remove the network qdisc through the scenario recovery script.
+$networkStop = Join-Path $PSScriptRoot "network-latency\stop.ps1"
+& $networkStop
 
 # Ensure the persistence service is running again.
 docker start $data 2>$null | Out-Null
