@@ -8,56 +8,43 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$container = "api-gateway"
-$destination = "processing-service"
-$stateFile = "/var/run/monitored-faults/network-latency.interface"
+$container = "monitored-toxiproxy"
+$proxy = "api-gateway-processing-service"
+$toxic = "network-latency"
 
 Write-Host "Starting scenario: network-latency"
-Write-Host "Source: $container"
-Write-Host "Destination: $destination"
-Write-Host "Injected egress delay: $DelayMs ms"
+Write-Host "Source: api-gateway"
+Write-Host "Destination: processing-service"
+Write-Host "Injected downstream latency: $DelayMs ms"
 if ($JitterMs -gt 0) {
     Write-Host "Injected jitter: +/- $JitterMs ms"
 }
 
 $running = docker inspect -f "{{.State.Running}}" $container 2>$null
 if ($running -ne "true") {
-    throw "Container '$container' is not running."
+    throw "Container '$container' is not running. Recreate the monitored system after pulling the latest branch."
 }
 
-$existingInterface = docker exec $container sh -c "cat $stateFile 2>/dev/null || true"
-if ($existingInterface) {
-    throw "Network latency scenario is already active on interface '$existingInterface'. Run stop.ps1 first."
+$existing = docker exec $container /toxiproxy-cli inspect $proxy 2>$null | Select-String $toxic
+if ($existing) {
+    throw "Network latency scenario is already active. Run stop.ps1 first."
 }
 
-$destinationLine = docker exec $container getent ahostsv4 $destination | Select-Object -First 1
-if (-not $destinationLine) {
-    throw "Unable to resolve destination '$destination' from '$container'."
-}
+$args = @(
+    "exec", $container,
+    "/toxiproxy-cli", "toxic", "add",
+    "-n", $toxic,
+    "-t", "latency",
+    "-a", "latency=$DelayMs",
+    "-a", "jitter=$JitterMs",
+    $proxy
+)
 
-$destinationIp = ($destinationLine -split '\s+')[0]
-$route = docker exec $container ip route get $destinationIp
-$match = [regex]::Match(($route -join ' '), '\bdev\s+(\S+)')
-if (-not $match.Success) {
-    throw "Unable to determine the application interface used to reach $destination ($destinationIp)."
-}
-
-$networkInterface = $match.Groups[1].Value
-Write-Host "Application route: $destinationIp via $networkInterface"
-
-if ($JitterMs -gt 0) {
-    docker exec $container tc qdisc replace dev $networkInterface root netem delay "${DelayMs}ms" "${JitterMs}ms"
-}
-else {
-    docker exec $container tc qdisc replace dev $networkInterface root netem delay "${DelayMs}ms"
-}
-
+& docker @args
 if ($LASTEXITCODE -ne 0) {
-    throw "Unable to apply tc/netem. Verify that api-gateway has NET_ADMIN capability."
+    throw "Unable to create the Toxiproxy latency toxic."
 }
 
-docker exec $container sh -c "mkdir -p /var/run/monitored-faults && echo $networkInterface > $stateFile"
-
-Write-Host "Scenario active. Traffic from api-gateway to processing-service is now delayed."
-Write-Host "Observability traffic uses the separate observability network and is not the selected route."
-Write-Host "Run .\infrastructure\scenarios\network-latency\stop.ps1 to restore the normal network path."
+Write-Host "Scenario active. api-gateway requests to processing-service now traverse the injected latency."
+Write-Host "Telegraf network_service_latency.response_time should increase while ICMP ping remains available as an independent reference."
+Write-Host "Run .\infrastructure\scenarios\network-latency\stop.ps1 to restore the normal path."
