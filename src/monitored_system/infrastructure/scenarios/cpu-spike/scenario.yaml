@@ -1,0 +1,22 @@
+name: cpu-spike
+target: processing-service
+type: resource-exhaustion
+root_cause: controlled CPU-bound workers running inside processing-service
+
+description: >
+  Starts a bounded number of CPU-bound Python workers inside the processing-service
+  container. The application remains running while the injected workload increases
+  container-specific CPU consumption. The scenario is explicitly reversible.
+
+default_workers: 4
+max_workers: 8
+
+expected_metric_effects:
+  - docker_container_cpu.usage_percent increases relative to the normal baseline
+  - system load may increase while the scenario is active
+
+expected_detector:
+  - CPU-processing-service
+
+detection_scope: metric-based OpenSearch Anomaly Detection
+recovery: terminate only the injected CPU workload using stop.ps1

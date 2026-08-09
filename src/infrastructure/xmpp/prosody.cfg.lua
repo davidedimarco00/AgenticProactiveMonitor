@@ -21,10 +21,7 @@ local registration_enabled =
 
 admins = {}
 
-daemonize = false
-
 pidfile = "/tmp/prosody.pid"
-
 data_path = "/var/lib/prosody"
 
 

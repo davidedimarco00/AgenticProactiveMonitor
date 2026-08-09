@@ -23,7 +23,13 @@ wait_for_opensearch
 
 cat >/tmp/metrics-template.json <<'JSON'
 {
-  "index_patterns": ["metrics-machine-*"],
+  "index_patterns": [
+    "metrics-traffic-generator-*",
+    "metrics-api-gateway-*",
+    "metrics-processing-service-*",
+    "metrics-data-service-*",
+    "metrics-worker-service-*"
+  ],
   "priority": 200,
   "template": {
     "settings": {
@@ -54,7 +60,16 @@ cat >/tmp/metrics-template.json <<'JSON'
             "metric_type": {"type": "keyword"},
             "project": {"type": "keyword"},
             "environment": {"type": "keyword"},
-            "monitored_by": {"type": "keyword"}
+            "monitored_by": {"type": "keyword"},
+            "container_name": {"type": "keyword"},
+            "container_image": {"type": "keyword"},
+            "container_status": {"type": "keyword"},
+            "network_target": {"type": "keyword"},
+            "url": {"type": "keyword"},
+            "server": {"type": "keyword"},
+            "port": {"type": "keyword"},
+            "protocol": {"type": "keyword"},
+            "result": {"type": "keyword"}
           }
         },
         "cpu": {
@@ -80,6 +95,63 @@ cat >/tmp/metrics-template.json <<'JSON'
             "available_percent": {"type": "float"}
           }
         },
+        "docker_container_cpu": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "usage_percent": {"type": "float"},
+            "usage_total": {"type": "long"},
+            "usage_in_usermode": {"type": "long"},
+            "usage_in_kernelmode": {"type": "long"}
+          }
+        },
+        "docker_container_mem": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "usage": {"type": "long"},
+            "usage_percent": {"type": "float"},
+            "limit": {"type": "long"},
+            "rss": {"type": "long"},
+            "cache": {"type": "long"}
+          }
+        },
+        "ping": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "packets_transmitted": {"type": "integer"},
+            "packets_received": {"type": "integer"},
+            "percent_packet_loss": {"type": "float"},
+            "average_response_ms": {"type": "float"},
+            "minimum_response_ms": {"type": "float"},
+            "maximum_response_ms": {"type": "float"},
+            "percentile50_ms": {"type": "float"},
+            "percentile95_ms": {"type": "float"},
+            "percentile99_ms": {"type": "float"},
+            "result_code": {"type": "integer"}
+          }
+        },
+        "net_response": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "response_time": {"type": "float"},
+            "result_code": {"type": "integer"}
+          }
+        },
+        "network_service_latency": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "response_time": {"type": "float"},
+            "result_code": {"type": "integer"}
+          }
+        },
+        "docker_container_net": {"type": "object", "dynamic": true},
+        "docker_container_blkio": {"type": "object", "dynamic": true},
+        "docker_container_status": {"type": "object", "dynamic": true},
+        "docker_container_health": {"type": "object", "dynamic": true},
         "disk": {"type": "object", "dynamic": true},
         "diskio": {"type": "object", "dynamic": true},
         "net": {"type": "object", "dynamic": true},
@@ -91,14 +163,20 @@ cat >/tmp/metrics-template.json <<'JSON'
     }
   },
   "_meta": {
-    "description": "Telegraf metrics, separated by monitored machine"
+    "description": "Telegraf metrics from the standalone monitored system"
   }
 }
 JSON
 
 cat >/tmp/logs-template.json <<'JSON'
 {
-  "index_patterns": ["logs-machine-*"],
+  "index_patterns": [
+    "logs-traffic-generator-*",
+    "logs-api-gateway-*",
+    "logs-processing-service-*",
+    "logs-data-service-*",
+    "logs-worker-service-*"
+  ],
   "priority": 100,
   "template": {
     "settings": {
@@ -133,12 +211,12 @@ cat >/tmp/logs-template.json <<'JSON'
     }
   },
   "_meta": {
-    "description": "Fluent Bit logs, separated by monitored machine"
+    "description": "Fluent Bit logs from the standalone monitored system"
   }
 }
 JSON
 
-put_template metrics-machine-template /tmp/metrics-template.json
-put_template logs-machine-template /tmp/logs-template.json
+put_template monitored-system-metrics-template /tmp/metrics-template.json
+put_template monitored-system-logs-template /tmp/logs-template.json
 
 echo "OpenSearch templates are ready."

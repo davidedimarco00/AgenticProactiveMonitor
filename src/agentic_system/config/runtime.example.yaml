@@ -13,12 +13,18 @@ detectors:
     - disk.used_percent
 
 topology:
-  machine-01:
-    role: application-server
-    dependencies: [machine-03]
-  machine-03:
+  traffic-generator:
+    role: traffic-generator
+    dependencies: [api-gateway]
+  api-gateway:
     role: api-gateway
-    dependencies: [machine-04]
-  machine-04:
-    role: worker-node
+    dependencies: [processing-service]
+  processing-service:
+    role: processing-service
+    dependencies: [data-service, worker-service]
+  data-service:
+    role: data-service
+    dependencies: []
+  worker-service:
+    role: worker-service
     dependencies: []

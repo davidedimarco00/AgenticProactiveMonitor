@@ -1,6 +1,8 @@
 FROM ubuntu:22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/opt/monitored-system/src
 
 #############################
 # BASE PACKAGES
@@ -17,6 +19,8 @@ RUN apt-get update && apt-get install -y \
     iproute2 \
     dnsutils \
     jq \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 #############################
@@ -39,19 +43,34 @@ RUN curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor > /us
     && rm -rf /var/lib/apt/lists/*
 
 #############################
-# CONFIGURATION
+# PYTHON APPLICATIONS
 #############################
-COPY telegraf.conf /etc/telegraf/telegraf.conf
-COPY fluent-bit.conf /etc/fluent-bit/fluent-bit.conf
-COPY parsers.conf /etc/fluent-bit/parsers.conf
-COPY entrypoint.sh /entrypoint.sh
+COPY src/api-gateway/requirements.txt /tmp/api-gateway-requirements.txt
+COPY src/processing-service/requirements.txt /tmp/processing-service-requirements.txt
+COPY src/data-service/requirements.txt /tmp/data-service-requirements.txt
+COPY src/traffic-generator/requirements.txt /tmp/traffic-generator-requirements.txt
 
-RUN mkdir -p /var/log/machine \
+RUN pip3 install --no-cache-dir \
+      -r /tmp/api-gateway-requirements.txt \
+      -r /tmp/processing-service-requirements.txt \
+      -r /tmp/data-service-requirements.txt \
+      -r /tmp/traffic-generator-requirements.txt \
+    && rm /tmp/*-requirements.txt
+
+COPY src /opt/monitored-system/src
+
+#############################
+# OBSERVABILITY CONFIGURATION
+#############################
+COPY infrastructure/telegraf.conf /etc/telegraf/telegraf.conf
+COPY infrastructure/fluent-bit.conf /etc/fluent-bit/fluent-bit.conf
+COPY infrastructure/parsers.conf /etc/fluent-bit/parsers.conf
+COPY infrastructure/entrypoint.sh /entrypoint.sh
+
+RUN mkdir -p /var/log/machine /var/lib/notes /var/run/monitored-faults \
     && touch /var/log/machine/app.log /var/log/machine/system.log \
     && chmod +x /entrypoint.sh
 
-# A container is healthy only when both collectors are alive and the workload
-# has started producing both application and system log records.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=12 \
   CMD pgrep -x telegraf >/dev/null \
       && pgrep -f '[f]luent-bit' >/dev/null \
