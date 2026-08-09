@@ -3,16 +3,18 @@
 This directory contains only the infrastructure used by the **agentic monitoring system**.
 The software under observation is intentionally separated into `src/monitored_system` and runs as a different Docker Compose project.
 
-## Docker architecture
+## Runtime architecture
 
-Docker Desktop shows two independent projects:
+Docker Desktop shows two independent projects, while Ollama runs directly on Windows:
 
 ```text
+Windows host
+  - Ollama (native, NVIDIA GPU)
+
 agentic-proactive-monitor-infrastructure
   - OpenSearch
   - OpenSearch Dashboards
   - Qdrant
-  - Ollama
   - Open WebUI
   - Prosody XMPP
   - MCP Server
@@ -26,11 +28,11 @@ monitored-system
   - worker-service
 ```
 
-The monitored services are **not defined in this Compose file**.
+The monitored services are **not defined in the infrastructure Compose file**. Ollama is also intentionally outside Docker so Docker Desktop can use the Hyper-V/LinuxKit backend required by the validated `tc/netem` network-fault scenario while Ollama continues to use the host NVIDIA GPU.
 
 ## Integration boundary
 
-The two projects communicate through the Docker network:
+The two Docker projects communicate through:
 
 ```text
 agentic-monitoring-net
@@ -38,7 +40,13 @@ agentic-monitoring-net
 
 The agentic infrastructure creates the network. The standalone monitored system attaches to it only to send telemetry to OpenSearch.
 
-The monitored system also owns a separate private network, `monitored-system-net`, for its future application-to-application communication.
+Ollama is reached from Docker containers through:
+
+```text
+http://host.docker.internal:11434
+```
+
+The monitored system owns a separate private network, `monitored-system-net`, for application-to-application communication.
 
 ## Telemetry flow
 
@@ -70,6 +78,35 @@ logs-data-service-YYYY.MM.DD
 logs-worker-service-YYYY.MM.DD
 ```
 
+## Configure native Ollama on Windows
+
+Install and start Ollama for Windows first. Then, from PowerShell:
+
+```powershell
+cd src\infrastructure
+.\ollama\init\setup-windows.ps1
+```
+
+The script:
+
+- configures `OLLAMA_HOST=0.0.0.0:11434` for the current Windows user;
+- configures `OLLAMA_KEEP_ALIVE=5m` and `OLLAMA_NUM_PARALLEL=1`;
+- pulls `gemma4:e2b`, `qwen3.5:4b` and `ibm/granite-embedding:30m` by default.
+
+After the script completes, quit Ollama from the Windows tray and start it again so it inherits the new environment variables.
+
+Verify the host API:
+
+```powershell
+curl.exe http://localhost:11434/api/tags
+```
+
+Verify access from Docker Desktop:
+
+```powershell
+docker run --rm curlimages/curl:8.10.1 -fsS http://host.docker.internal:11434/api/tags
+```
+
 ## Configure the agentic infrastructure
 
 From PowerShell:
@@ -79,7 +116,11 @@ cd src\infrastructure
 Copy-Item .env.example .env
 ```
 
-Edit `.env` as required before the first start.
+The default `.env.example` uses:
+
+```text
+OLLAMA_HOST_URL=http://host.docker.internal:11434
+```
 
 Validate the Compose configuration:
 
@@ -89,7 +130,7 @@ docker compose config
 
 ## Start the two systems
 
-Start the agentic infrastructure first because it creates `agentic-monitoring-net`:
+Start native Ollama first, then the agentic infrastructure because it creates `agentic-monitoring-net`:
 
 ```powershell
 cd src\infrastructure
@@ -136,6 +177,8 @@ data-service
 worker-service
 ```
 
+Ollama must not appear as a Docker container.
+
 ## Verify OpenSearch data
 
 ```powershell
@@ -152,13 +195,7 @@ The bootstrap creates one metric and one log data view for each monitored servic
 
 ## Anomaly detectors
 
-CPU and RAM detectors are created for:
-
-- `traffic-generator`
-- `api-gateway`
-- `processing-service`
-- `data-service`
-- `worker-service`
+CPU and RAM detectors are created for all five monitored services. Network-latency detectors cover the three critical application links. Every detector is **SINGLE_ENTITY** and reads only the dedicated source-service metrics index.
 
 If the detector or Dashboards bootstrap finishes before telemetry is available, rerun the one-shot services after the monitored stack is running:
 
@@ -196,4 +233,4 @@ cd ..\infrastructure
 docker compose down
 ```
 
-The monitored system can be rebuilt and restarted independently from the agentic infrastructure.
+Native Ollama remains independent from Docker Compose and can continue running while the Docker projects are stopped.
