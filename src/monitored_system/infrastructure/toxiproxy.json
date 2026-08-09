@@ -1,0 +1,8 @@
+[
+  {
+    "name": "api-gateway-processing-service",
+    "listen": "0.0.0.0:18000",
+    "upstream": "processing-service:8000",
+    "enabled": true
+  }
+]
