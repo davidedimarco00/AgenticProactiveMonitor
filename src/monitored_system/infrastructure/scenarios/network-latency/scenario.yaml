@@ -1,26 +1,29 @@
 name: network-latency
 target: api-gateway-to-processing-service
 type: network-performance
-root_cause: controlled Toxiproxy latency toxic on the api-gateway to processing-service TCP path
+root_cause: controlled Linux tc/netem delay on the api-gateway application network interface
 
 description: >
-  Routes normal api-gateway traffic through a dedicated Toxiproxy instance and,
-  when activated, injects deterministic latency into the downstream TCP stream.
-  The approach is portable on Docker Desktop and does not depend on the host
-  kernel exposing the Linux sch_netem queue discipline.
+  Injects deterministic egress delay, with optional jitter, on the Docker network
+  interface used by api-gateway to reach processing-service. The fault is applied
+  at the Linux traffic-control layer and does not modify application code.
 
 default_delay_ms: 250
 default_jitter_ms: 0
 max_delay_ms: 2000
 max_jitter_ms: 1000
 
+requirements:
+  - Docker Desktop using the Hyper-V/LinuxKit backend with sch_netem support
+  - NET_ADMIN capability on api-gateway
+
 expected_metric_effects:
+  - ping.average_response_ms increases on api-gateway for target processing-service
   - network_service_latency.response_time increases on api-gateway for target processing-service
   - application request latency increases at api-gateway and traffic-generator
-  - ping metrics remain available as an independent raw-path RTT reference
   - net interface counters continue to expose packets, bytes, errors and drops
 
 expected_detector:
   - NETLAT-api-gateway-processing-service
 
-recovery: remove the network-latency toxic from Toxiproxy using stop.ps1
+recovery: remove the root netem qdisc from the affected application interface using stop.ps1
