@@ -6,7 +6,7 @@ from src.agentic_system.detectors.manager import DetectorManager
 
 class FakeMetrics:
     async def discover_hosts(self):
-        return [{"host_id": "machine-03", "machine_role": "api-gateway"}]
+        return [{"host_id": "processing-service", "machine_role": "processing-service"}]
 
 
 class EmptyMetrics:
@@ -51,7 +51,7 @@ class MissingRegistryClient:
 async def test_synchronise_creates_missing_detector():
     manager = DetectorManager(FakeClient(), FakeMetrics())
     result = await manager.synchronise(["cpu.usage_active"])
-    assert result["auto-machine-03-cpu-usage-active"] == "detector-1"
+    assert result["auto-processing-service-cpu-usage-active"] == "detector-1"
 
 
 @pytest.mark.asyncio

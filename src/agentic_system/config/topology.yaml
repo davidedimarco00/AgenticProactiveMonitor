@@ -1,16 +1,16 @@
 nodes:
-  - host_id: machine-01
-    role: application-server
-    dependencies: [machine-03]
-  - host_id: machine-02
-    role: database-server
-    dependencies: []
-  - host_id: machine-03
+  - host_id: traffic-generator
+    role: traffic-generator
+    dependencies: [api-gateway]
+  - host_id: api-gateway
     role: api-gateway
-    dependencies: [machine-02, machine-04]
-  - host_id: machine-04
-    role: worker-node
-    dependencies: [machine-02]
-  - host_id: machine-05
-    role: edge-node
-    dependencies: [machine-03]
+    dependencies: [processing-service]
+  - host_id: processing-service
+    role: processing-service
+    dependencies: [data-service, worker-service]
+  - host_id: data-service
+    role: data-service
+    dependencies: []
+  - host_id: worker-service
+    role: worker-service
+    dependencies: []

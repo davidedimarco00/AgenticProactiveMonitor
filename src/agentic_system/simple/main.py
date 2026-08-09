@@ -119,7 +119,7 @@ async def run(config_path: str) -> None:
         if settings.open_demo_incident:
             incident = IncidentContext(
                 detector_id="demo",
-                host_id="machine-03",
+                host_id="processing-service",
                 metric_name="usage_active",
                 anomaly_score=0.91,
             )

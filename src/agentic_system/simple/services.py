@@ -57,7 +57,10 @@ class EvidenceService:
             log_rows = await self.logs.window(host)
             text = " ".join(str(row).lower() for row in log_rows)
             markers = Counter(
-                {word: text.count(word) for word in ("error", "timeout", "retry", "failed", "refused")}
+                {
+                    word: text.count(word)
+                    for word in ("error", "timeout", "retry", "failed", "refused")
+                }
             )
             report["logs"][host] = {
                 "entries": len(log_rows),
@@ -158,7 +161,7 @@ class CriticService:
 
 
 class RemediationService:
-    allowed_targets = {"machine-03"}
+    allowed_targets = {"processing-service"}
     allowed_actions = {"stop_container"}
 
     async def execute(self, incident: IncidentContext) -> dict[str, Any]:

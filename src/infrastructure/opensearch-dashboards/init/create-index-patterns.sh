@@ -4,7 +4,7 @@ set -eu
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch:9200}"
 DASHBOARDS_URL="${DASHBOARDS_URL:-http://opensearch-dashboards:5601}"
 WAIT_SECONDS="${DASHBOARDS_WAIT_SECONDS:-300}"
-HOSTS="${DASHBOARDS_INDEX_PATTERN_HOSTS:-machine-01 machine-02 machine-03 machine-04 machine-05}"
+HOSTS="${DASHBOARDS_INDEX_PATTERN_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}"
 
 wait_for_dashboards() {
   elapsed=0
@@ -78,4 +78,4 @@ for host in $HOSTS; do
   create_index_pattern "logs-${host}" "$logs_pattern"
 done
 
-echo "All per-machine OpenSearch Dashboards index patterns are ready."
+echo "All monitored-system OpenSearch Dashboards index patterns are ready."

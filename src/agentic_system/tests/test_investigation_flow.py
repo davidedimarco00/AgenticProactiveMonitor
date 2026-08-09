@@ -6,8 +6,8 @@ def test_diagnostic_test_is_structured_and_non_destructive() -> None:
         incident_id="inc-1",
         hypothesis_id="h-1",
         action="inspect_container",
-        target="machine-03",
+        target="processing-service",
         rationale="Gather runtime evidence",
     )
     assert test.action == "inspect_container"
-    assert test.target == "machine-03"
+    assert test.target == "processing-service"
