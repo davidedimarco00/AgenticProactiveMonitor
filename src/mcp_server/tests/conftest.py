@@ -29,10 +29,11 @@ class MCPTestClient:
 
     def _run(self, operation):
         async def runner():
+            # MCP Python SDK v2 Streamable HTTP yields exactly two streams.
             async with streamable_http_client(
                 self.url,
                 terminate_on_close=False,
-            ) as (read_stream, write_stream, _):
+            ) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     return await operation(session)
@@ -65,6 +66,9 @@ class MCPTestClient:
             text = "\n".join(text_parts)
 
             payload = None
+
+            # MCPServer returns dictionaries as JSON text for backward-compatible
+            # unstructured content, so try this representation first.
             if text:
                 try:
                     parsed = json.loads(text)
@@ -73,13 +77,14 @@ class MCPTestClient:
                 except json.JSONDecodeError:
                     pass
 
+            # MCP Python SDK v2 exposes Python model fields in snake_case.
             if payload is None:
-                structured = getattr(result, "structuredContent", None)
+                structured = getattr(result, "structured_content", None)
                 if isinstance(structured, dict):
                     payload = structured
 
             return ToolResponse(
-                is_error=bool(getattr(result, "isError", False)),
+                is_error=bool(getattr(result, "is_error", False)),
                 text=text,
                 payload=payload,
             )
