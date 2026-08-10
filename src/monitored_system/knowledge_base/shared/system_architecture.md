@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.shared.system-architecture
-version: 2
+version: 3
 domain: monitored_system
 document_type: architecture
-agents: [coordinator, evidence, reasoning, critic, remediation]
+roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+domains: [architecture, dependencies, services, networks, persistence]
 services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
 incident_types: [cpu, memory, network-latency, application-latency, availability]
 source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/src/api-gateway/app.py, src/monitored_system/src/processing-service/app.py, src/monitored_system/src/data-service/app.py, src/monitored_system/src/traffic-generator/generator.py]
