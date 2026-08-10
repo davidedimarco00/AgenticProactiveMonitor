@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}System Health · {{ app_name }}{% endblock %}
+{% block page_title %}System Health{% endblock %}
+
+{% block content %}
+<section class="system-hero panel">
+  <div>
+    <span class="section-kicker">RUNTIME DEPENDENCIES</span>
+    <h2>{{ 'All core services operational' if overall_online else 'One or more core services are degraded' }}</h2>
+    <p>Live connectivity checks from the dashboard container across the shared monitoring network.</p>
+  </div>
+  <div class="system-orb {{ 'ok' if overall_online else 'warn' }}">
+    <span>{{ 'OK' if overall_online else '!' }}</span>
+    <small>{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</small>
+  </div>
+</section>
+
+<section class="health-grid" id="health-grid">
+  {% for service in services %}
+  <article class="health-card">
+    <div class="health-card-top">
+      <div class="health-icon">{{ loop.index|string|zfill(2) if false else '0' ~ loop.index }}</div>
+      <span class="status-pill compact {{ 'online' if service.status == 'ONLINE' else 'degraded' }}">{{ service.status }}</span>
+    </div>
+    <h3>{{ service.name }}</h3>
+    <p>{{ service.role }}</p>
+    <div class="health-detail"><span class="health-dot {{ service.status|lower }}"></span>{{ service.detail }}</div>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="panel architecture-panel">
+  <div class="card-heading">
+    <div>
+      <span class="section-kicker">OBSERVABILITY PATH</span>
+      <h3>Runtime dependency map</h3>
+    </div>
+    <span class="muted small">Checked {{ now|human_time }}</span>
+  </div>
+  <div class="architecture-flow">
+    <div class="architecture-node"><span>01</span><strong>OpenSearch</strong><small>Anomaly signal</small></div>
+    <div class="flow-line"></div>
+    <div class="architecture-node highlighted"><span>02</span><strong>SPADE Agents</strong><small>Reasoning & coordination</small></div>
+    <div class="flow-line split"></div>
+    <div class="architecture-node"><span>03</span><strong>MCP</strong><small>Diagnostic tools</small></div>
+    <div class="architecture-node"><span>04</span><strong>Qdrant</strong><small>RAG evidence</small></div>
+    <div class="architecture-node"><span>05</span><strong>Ollama</strong><small>Local reasoning</small></div>
+  </div>
+</section>
+{% endblock %}
