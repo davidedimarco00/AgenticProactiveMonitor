@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.diagnostic.network-degradation-api-gateway-processing-service
-version: 1
+version: 2
 domain: monitored_system
 document_type: diagnostic-guide
-agents: [evidence, reasoning, critic]
+roles: [network_engineer, application_engineer, technical_lead]
+domains: [network, connectivity, latency, application-impact]
 services: [api-gateway, processing-service]
 incident_types: [network-latency, network-performance]
 source_files: [src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/docker-compose.yml, src/monitored_system/src/api-gateway/app.py, src/monitored_system/src/processing-service/app.py, src/infrastructure/opensearch/init/create-anomaly-detectors.sh]
