@@ -82,13 +82,13 @@
           <span class="section-kicker">EXPLAINABLE DIAGNOSIS</span>
           <h3>Most probable cause</h3>
         </div>
-        {% if incident.diagnosis.confidence is not none %}
+        {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
         <div class="confidence-badge">{{ incident.diagnosis.confidence|confidence }} confidence</div>
         {% endif %}
       </div>
       <p class="diagnosis-copy">{{ incident.diagnosis.summary or 'Diagnosis is still in progress.' }}</p>
 
-      {% if incident.diagnosis.confidence is not none %}
+      {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
       {% set confidence_value = incident.diagnosis.confidence * 100 if incident.diagnosis.confidence <= 1 else incident.diagnosis.confidence %}
       <div class="confidence-track"><span style="width: {{ confidence_value }}%"></span></div>
       {% endif %}
@@ -166,10 +166,10 @@
       <div class="fact-grid">
         <div><span>Detector</span><strong>{{ incident.anomaly.detector_id or '—' }}</strong></div>
         <div><span>Metric</span><strong>{{ incident.anomaly.metric or '—' }}</strong></div>
-        <div><span>Grade</span><strong>{{ incident.anomaly.grade if incident.anomaly.grade is not none else '—' }}</strong></div>
-        <div><span>AD confidence</span><strong>{{ incident.anomaly.confidence|confidence }}</strong></div>
-        <div><span>Observed</span><strong>{{ incident.anomaly.observed_value if incident.anomaly.observed_value is not none else '—' }}</strong></div>
-        <div><span>Baseline</span><strong>{{ incident.anomaly.baseline_value if incident.anomaly.baseline_value is not none else '—' }}</strong></div>
+        <div><span>Grade</span><strong>{{ incident.anomaly.grade if incident.anomaly.grade is defined and incident.anomaly.grade is not none else '—' }}</strong></div>
+        <div><span>AD confidence</span><strong>{{ incident.anomaly.confidence|default(none)|confidence }}</strong></div>
+        <div><span>Observed</span><strong>{{ incident.anomaly.observed_value if incident.anomaly.observed_value is defined and incident.anomaly.observed_value is not none else '—' }}</strong></div>
+        <div><span>Baseline</span><strong>{{ incident.anomaly.baseline_value if incident.anomaly.baseline_value is defined and incident.anomaly.baseline_value is not none else '—' }}</strong></div>
       </div>
       <div class="single-entity-note">Single-entity detector · {{ incident.entity or incident.service }}</div>
     </article>
