@@ -1,18 +1,19 @@
 # Agentic System Operator Dashboard
 
-Flask-based operator interface for the thesis prototype. The dashboard is intentionally separated from the agentic control loop: it observes and presents incident state, while the SPADE agents remain responsible for autonomous investigation.
+Flask-based operator interface for the thesis prototype. The dashboard is intentionally separated from the agentic control loop: it observes and presents incident and agent activity state, while the SPADE agents remain responsible for autonomous investigation.
 
 ## What the operator can inspect
 
 - incidents taken in charge and their current lifecycle state;
 - explicit rationale for starting an investigation;
 - OpenSearch Anomaly Detection signal and confidence;
-- observable ReAct trajectory: actions/tool calls, observations and concise decision rationales;
 - final diagnosis, supporting evidence and diagnosis confidence;
 - remediation recommendation, verification steps and operational risks;
-- live health of OpenSearch, Qdrant, MCP Server, Prosody/XMPP and Ollama.
+- live health of OpenSearch, Qdrant, MCP Server, Prosody/XMPP and Ollama;
+- the specialised agent network and current `WORKING` / `IDLE` state;
+- per-agent operational activity: timestamp, action, caller, reason, tool/outcome and incident.
 
-The interface does **not** store or display raw private model chain-of-thought. Only operationally useful actions, observations and concise decision rationales are persisted.
+The interface does **not** store or display raw private model chain-of-thought. Agent observability records only expose concise operational rationale and externally observable actions useful for audit and troubleshooting.
 
 ## Container
 
@@ -39,17 +40,25 @@ docker compose ps agentic-system-dashboard
 docker compose logs -f agentic-system-dashboard
 ```
 
-## Incident persistence
+## OpenSearch persistence
 
-Incident records are stored in OpenSearch using monthly indices:
+Incident records are stored using monthly indices:
 
 ```text
 agentic-incidents-YYYY.MM
 ```
 
-The dashboard automatically ensures the `agentic-dashboard-incidents` index template when it starts.
+Agent activity records are stored separately:
 
-The agentic runtime can later write directly to the same OpenSearch indices. For integration and manual testing, the dashboard also exposes a small local REST interface:
+```text
+agentic-agent-events-YYYY.MM
+```
+
+The dashboard ensures both index templates at startup. Keeping agent events separate from incident documents makes the observability stream independently searchable and suitable for later experimental analysis.
+
+## REST interface
+
+Incident endpoints:
 
 - `GET /api/incidents`
 - `POST /api/incidents`
@@ -58,20 +67,40 @@ The agentic runtime can later write directly to the same OpenSearch indices. For
 - `GET /api/overview`
 - `GET /api/system-health`
 
-## Load the thesis demo incident
+Agent observability endpoints:
 
-A complete example is available in `examples/demo-incident.json`. From `src/infrastructure` in PowerShell:
+- `GET /api/agent-events?agent_jid=reasoning@xmpp`
+- `POST /api/agent-events`
+- `GET /api/agents/<agent_jid>/activity`
 
-```powershell
-$body = Get-Content ..\agentic_dashboard\examples\demo-incident.json -Raw
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://127.0.0.1:5050/api/incidents" `
-  -ContentType "application/json" `
-  -Body $body
+Each agent can publish a structured event whenever it is invoked, selects a tool, receives a delegated task, completes an operation or hands control to another agent. Example payload:
+
+```json
+{
+  "agent_jid": "evidence@xmpp",
+  "timestamp": "2026-08-10T12:32:12+00:00",
+  "action": "Validate runtime CPU saturation",
+  "called_by": "coordinator@xmpp",
+  "reason": "The OpenSearch anomaly must be confirmed against live telemetry.",
+  "incident_id": "INC-001",
+  "tool": "get_runtime_stats",
+  "status": "COMPLETED",
+  "outcome": "CPU saturation confirmed."
+}
 ```
 
-The generated incident can then be opened from the dashboard and used to verify the final visual layout before real agent integration.
+The `reason` field is an operational explanation for the action, not raw hidden reasoning.
+
+## Load the thesis demo incident
+
+`examples/demo-incident.json` includes both the incident and a complete multi-agent activity trace. From `src/infrastructure` in PowerShell:
+
+```powershell
+$body = Get-Content "..\agentic_dashboard\examples\demo-incident.json" -Raw
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5050/api/incidents" -ContentType "application/json; charset=utf-8" -Body $body
+```
+
+The incident POST also persists the embedded `agent_events` into the dedicated agent-event OpenSearch index. After loading the demo, select any agent in the network to inspect its activity window.
 
 ## Current autonomy boundary
 
@@ -87,4 +116,4 @@ OpenSearch anomaly
       -> operator decision
 ```
 
-Automatic remediation execution is intentionally not part of this dashboard. A future `ExecutionAgent` can be added later without changing the operator-facing incident model.
+Automatic remediation execution is intentionally not part of this dashboard. A future `ExecutionAgent` can be added later without changing the operator-facing incident or observability model.
