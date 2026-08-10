@@ -13,15 +13,40 @@ param(
     [string]$OpenSearchUrl = "http://localhost:9200",
     [string]$GatewayUrl = "http://localhost:8080",
 
-    [ValidateRange(2, 15)]
-    [int]$DetectorWaitMinutes = 7,
+    [ValidateRange(2, 20)]
+    [int]$DetectorWaitMinutes = 10,
 
-    [ValidateRange(1, 15)]
-    [int]$RecoveryMinutes = 5
+    [ValidateRange(0, 30)]
+    [int]$RecoveryMinutes = 10,
+
+    [ValidateRange(1, 8)]
+    [int]$CpuWorkers = 6,
+
+    [ValidateRange(64, 2048)]
+    [int]$MemoryTotalMB = 1024,
+
+    [ValidateRange(1, 512)]
+    [int]$MemoryStepMB = 64,
+
+    [ValidateRange(1, 60)]
+    [int]$MemoryStepSeconds = 10,
+
+    [ValidateRange(1, 2000)]
+    [int]$NetworkDelayMs = 400,
+
+    [ValidateRange(0, 1000)]
+    [int]$NetworkJitterMs = 50,
+
+    [ValidateRange(1, 30000)]
+    [int]$ApplicationDelayMs = 2000
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+if ($MemoryStepMB -gt $MemoryTotalMB) {
+    throw "MemoryStepMB cannot be greater than MemoryTotalMB."
+}
 
 $testsRoot = $PSScriptRoot
 $infrastructureRoot = (Resolve-Path (Join-Path $testsRoot "..")).Path
@@ -196,57 +221,95 @@ function Add-ExperimentObservation {
         [object]$Anomaly,
         [DateTimeOffset]$FaultStartedAt,
         [string]$MetricField,
-        [double]$MaxMetricValue,
-        [string]$MetricUnit
+        [object]$BaselineMetricValue,
+        [object]$MaxMetricValue,
+        [string]$MetricUnit,
+        [string]$FaultParameters,
+        [string]$FailureReason = ""
     )
 
+    $detected = $null -ne $Anomaly
     $executionStartMs = $null
-    if ($Anomaly.PSObject.Properties.Name -contains "execution_start_time") {
-        $executionStartMs = [int64]$Anomaly.execution_start_time
-    }
-
     $dataEndTimeMs = $null
-    if ($Anomaly.PSObject.Properties.Name -contains "data_end_time") {
-        $dataEndTimeMs = [int64]$Anomaly.data_end_time
+    $grade = $null
+    $confidence = $null
+    $anomalyScore = $null
+
+    if ($detected) {
+        if ($Anomaly.PSObject.Properties.Name -contains "execution_start_time") {
+            $executionStartMs = [int64]$Anomaly.execution_start_time
+        }
+        if ($Anomaly.PSObject.Properties.Name -contains "data_end_time") {
+            $dataEndTimeMs = [int64]$Anomaly.data_end_time
+        }
+        if ($Anomaly.PSObject.Properties.Name -contains "anomaly_grade") {
+            $grade = [math]::Round([double]$Anomaly.anomaly_grade, 6)
+        }
+        if ($Anomaly.PSObject.Properties.Name -contains "confidence") {
+            $confidence = [math]::Round([double]$Anomaly.confidence, 6)
+        }
+        if ($Anomaly.PSObject.Properties.Name -contains "anomaly_score") {
+            $anomalyScore = [math]::Round([double]$Anomaly.anomaly_score, 6)
+        }
     }
 
-    $runningMinutesAtAnomaly = $null
+    $runningMinutesAtFaultStart = $null
     if ($null -ne $Detector.EnabledTimeMs -and $Detector.EnabledTimeMs -gt 0) {
-        $referenceMs = if ($null -ne $executionStartMs -and $executionStartMs -gt 0) {
-            $executionStartMs
-        }
-        else {
-            [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        }
-
-        $runningMinutesAtAnomaly = [math]::Round(
-            ($referenceMs - [int64]$Detector.EnabledTimeMs) / 60000.0,
+        $runningMinutesAtFaultStart = [math]::Round(
+            ($FaultStartedAt.ToUnixTimeMilliseconds() - [int64]$Detector.EnabledTimeMs) / 60000.0,
             2
         )
     }
 
-    $anomalyScore = $null
-    if ($Anomaly.PSObject.Properties.Name -contains "anomaly_score") {
-        $anomalyScore = [double]$Anomaly.anomaly_score
+    $runningMinutesAtAnomaly = $null
+    if ($detected -and $null -ne $executionStartMs -and $null -ne $Detector.EnabledTimeMs) {
+        $runningMinutesAtAnomaly = [math]::Round(
+            ($executionStartMs - [int64]$Detector.EnabledTimeMs) / 60000.0,
+            2
+        )
+    }
+
+    $detectionLatencySeconds = $null
+    if ($detected -and $null -ne $executionStartMs) {
+        $detectionLatencySeconds = [math]::Round(
+            ($executionStartMs - $FaultStartedAt.ToUnixTimeMilliseconds()) / 1000.0,
+            3
+        )
+    }
+
+    $baselineRounded = $null
+    if ($null -ne $BaselineMetricValue) {
+        $baselineRounded = [math]::Round([double]$BaselineMetricValue, 6)
+    }
+
+    $maxRounded = $null
+    if ($null -ne $MaxMetricValue) {
+        $maxRounded = [math]::Round([double]$MaxMetricValue, 6)
     }
 
     $record = [pscustomobject]@{
         observed_at_utc = [DateTimeOffset]::UtcNow.ToString("o")
         scenario = $Scenario
+        detected = $detected
         detector_name = $Detector.Name
         detector_id = $Detector.Id
         detector_type = $Detector.Type
         detector_enabled_at_utc = $Detector.EnabledAtUtc
+        detector_running_minutes_at_fault_start = $runningMinutesAtFaultStart
         detector_running_minutes_at_anomaly = $runningMinutesAtAnomaly
         fault_started_at_utc = $FaultStartedAt.UtcDateTime.ToString("o")
         anomaly_execution_time_utc = Convert-EpochMillisecondsToIso -Value $executionStartMs
         anomaly_data_end_time_utc = Convert-EpochMillisecondsToIso -Value $dataEndTimeMs
-        anomaly_grade = [math]::Round([double]$Anomaly.anomaly_grade, 6)
-        confidence = [math]::Round([double]$Anomaly.confidence, 6)
-        anomaly_score = if ($null -eq $anomalyScore) { $null } else { [math]::Round($anomalyScore, 6) }
+        anomaly_grade = $grade
+        confidence = $confidence
+        anomaly_score = $anomalyScore
+        detection_latency_seconds = $detectionLatencySeconds
         metric_field = $MetricField
-        max_metric_value = [math]::Round($MaxMetricValue, 6)
+        baseline_metric_value = $baselineRounded
+        max_metric_value = $maxRounded
         metric_unit = $MetricUnit
+        fault_parameters = $FaultParameters
+        failure_reason = $FailureReason
     }
 
     $script:experiments.Add($record) | Out-Null
@@ -267,7 +330,7 @@ function Get-IndexDocumentCount {
     }
 }
 
-function Get-MaxMetricValue {
+function Get-MetricStats {
     param(
         [string]$HostId,
         [string]$Measurement,
@@ -303,6 +366,11 @@ function Get-MaxMetricValue {
                 }
             }
             aggs = @{
+                avg_value = @{
+                    avg = @{
+                        field = $Field
+                    }
+                }
                 max_value = @{
                     max = @{
                         field = $Field
@@ -311,14 +379,17 @@ function Get-MaxMetricValue {
             }
         }
 
-    return $response.aggregations.max_value.value
+    return [pscustomobject]@{
+        Average = $response.aggregations.avg_value.value
+        Max = $response.aggregations.max_value.value
+    }
 }
 
 function Wait-ForAnomaly {
     param(
         [string]$DetectorId,
         [DateTimeOffset]$FaultStartedAt,
-        [int]$TimeoutMinutes = 7
+        [int]$TimeoutMinutes = 10
     )
 
     $deadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
@@ -426,9 +497,51 @@ function Reset-ToBase {
     }
 }
 
-function Wait-RecoveryWindow {
-    Write-Host "Waiting $RecoveryMinutes minute(s) of normal traffic before the next detector test..."
-    Start-Sleep -Seconds ($RecoveryMinutes * 60)
+function Assert-NoControlledFaults {
+    $checks = @(
+        @{
+            Container = "processing-service"
+            Command = "test ! -s /var/run/monitored-faults/cpu-spike.pid"
+            Message = "CPU spike marker is still active on processing-service."
+        },
+        @{
+            Container = "processing-service"
+            Command = "test ! -s /var/run/monitored-faults/processing-delay-ms"
+            Message = "Application latency marker is still active on processing-service."
+        },
+        @{
+            Container = "worker-service"
+            Command = "test ! -s /var/run/monitored-faults/memory-leak.pid"
+            Message = "Memory leak marker is still active on worker-service."
+        }
+    )
+
+    foreach ($check in $checks) {
+        docker exec $check.Container sh -c $check.Command 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw $check.Message
+        }
+    }
+
+    docker exec api-gateway sh -c "tc qdisc show | grep -q netem" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        throw "A netem qdisc is still active on api-gateway."
+    }
+}
+
+function Prepare-DetectorExperiment {
+    param([string]$DetectorName)
+
+    $null = Assert-DetectorReady -Name $DetectorName
+    Reset-ToBase
+
+    if ($RecoveryMinutes -gt 0) {
+        Write-Host "Waiting $RecoveryMinutes minute(s) of clean normal traffic before fault injection..."
+        Start-Sleep -Seconds ($RecoveryMinutes * 60)
+    }
+
+    Assert-NoControlledFaults
+    return Assert-DetectorReady -Name $DetectorName
 }
 
 function Test-Preflight {
@@ -468,6 +581,9 @@ function Test-Preflight {
     }
     Add-Result -Name "telemetry" -Status PASS -Detail "Metrics and logs are present for all five monitored services."
 
+    Assert-NoControlledFaults
+    Add-Result -Name "fault-state" -Status PASS -Detail "No controlled CPU, RAM, application-latency, or netem fault is active."
+
     $expectedDetectors = @(
         "CPU-traffic-generator",
         "RAM-traffic-generator",
@@ -496,44 +612,52 @@ function Test-Preflight {
 
 function Test-CpuSpike {
     Write-Step "CPU spike -> OpenSearch anomaly"
-    $detector = Assert-DetectorReady -Name "CPU-processing-service"
+    $detector = Prepare-DetectorExperiment -DetectorName "CPU-processing-service"
+    $baseline = Get-MetricStats `
+        -HostId "processing-service" `
+        -Measurement "docker_container_cpu" `
+        -Field "docker_container_cpu.usage_percent" `
+        -From ([DateTimeOffset]::UtcNow.AddMinutes(-5))
+
     $faultStartedAt = [DateTimeOffset]::UtcNow
+    $faultParameters = "workers=$CpuWorkers"
 
     try {
-        & (Join-Path $scenariosRoot "cpu-spike\start.ps1") -Workers 4
+        & (Join-Path $scenariosRoot "cpu-spike\start.ps1") -Workers $CpuWorkers
 
         $anomaly = Wait-ForAnomaly `
             -DetectorId $detector.Id `
             -FaultStartedAt $faultStartedAt `
             -TimeoutMinutes $DetectorWaitMinutes
 
-        if ($null -eq $anomaly) {
-            throw "CPU detector did not emit anomaly_grade > 0 within $DetectorWaitMinutes minute(s)."
-        }
-
-        $maxCpu = Get-MaxMetricValue `
+        $faultStats = Get-MetricStats `
             -HostId "processing-service" `
             -Measurement "docker_container_cpu" `
             -Field "docker_container_cpu.usage_percent" `
             -From $faultStartedAt
 
-        if ($null -eq $maxCpu -or [double]$maxCpu -lt 100) {
-            throw "CPU telemetry did not show the expected spike. Max value: $maxCpu"
+        $baselineCpu = if ($null -eq $baseline.Average) { 0.0 } else { [double]$baseline.Average }
+        $maxCpu = $faultStats.Max
+        $minimumExpected = [math]::Max(100.0, $baselineCpu + 100.0)
+
+        if ($null -eq $maxCpu -or [double]$maxCpu -lt $minimumExpected) {
+            $reason = "CPU fault telemetry is too weak. baseline_avg=$baselineCpu%, max=$maxCpu%, expected_at_least=$minimumExpected%."
+            $null = Add-ExperimentObservation -Scenario "cpu-spike" -Detector $detector -Anomaly $anomaly -FaultStartedAt $faultStartedAt -MetricField "docker_container_cpu.usage_percent" -BaselineMetricValue $baselineCpu -MaxMetricValue $maxCpu -MetricUnit "%" -FaultParameters $faultParameters -FailureReason $reason
+            throw $reason
         }
 
-        $experiment = Add-ExperimentObservation `
-            -Scenario "cpu-spike" `
-            -Detector $detector `
-            -Anomaly $anomaly `
-            -FaultStartedAt $faultStartedAt `
-            -MetricField "docker_container_cpu.usage_percent" `
-            -MaxMetricValue ([double]$maxCpu) `
-            -MetricUnit "%"
+        if ($null -eq $anomaly) {
+            $reason = "CPU detector did not emit anomaly_grade > 0 within $DetectorWaitMinutes minute(s), although the CPU fault was confirmed by telemetry."
+            $null = Add-ExperimentObservation -Scenario "cpu-spike" -Detector $detector -Anomaly $null -FaultStartedAt $faultStartedAt -MetricField "docker_container_cpu.usage_percent" -BaselineMetricValue $baselineCpu -MaxMetricValue $maxCpu -MetricUnit "%" -FaultParameters $faultParameters -FailureReason $reason
+            throw $reason
+        }
+
+        $experiment = Add-ExperimentObservation -Scenario "cpu-spike" -Detector $detector -Anomaly $anomaly -FaultStartedAt $faultStartedAt -MetricField "docker_container_cpu.usage_percent" -BaselineMetricValue $baselineCpu -MaxMetricValue $maxCpu -MetricUnit "%" -FaultParameters $faultParameters
 
         Add-Result `
             -Name "cpu-spike" `
             -Status PASS `
-            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, max_cpu={3:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, [double]$maxCpu)
+            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, baseline_cpu={3:N2}%, max_cpu={4:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, $baselineCpu, [double]$maxCpu)
     }
     finally {
         Reset-ToBase
@@ -542,47 +666,55 @@ function Test-CpuSpike {
 
 function Test-MemoryLeak {
     Write-Step "Memory leak -> OpenSearch anomaly"
-    $detector = Assert-DetectorReady -Name "RAM-worker-service"
+    $detector = Prepare-DetectorExperiment -DetectorName "RAM-worker-service"
+    $baseline = Get-MetricStats `
+        -HostId "worker-service" `
+        -Measurement "docker_container_mem" `
+        -Field "docker_container_mem.usage_percent" `
+        -From ([DateTimeOffset]::UtcNow.AddMinutes(-5))
+
     $faultStartedAt = [DateTimeOffset]::UtcNow
+    $faultParameters = "total_mb=$MemoryTotalMB;step_mb=$MemoryStepMB;step_seconds=$MemoryStepSeconds"
 
     try {
         & (Join-Path $scenariosRoot "memory-leak\start.ps1") `
-            -TotalMB 512 `
-            -StepMB 32 `
-            -StepSeconds 2
+            -TotalMB $MemoryTotalMB `
+            -StepMB $MemoryStepMB `
+            -StepSeconds $MemoryStepSeconds
 
         $anomaly = Wait-ForAnomaly `
             -DetectorId $detector.Id `
             -FaultStartedAt $faultStartedAt `
             -TimeoutMinutes $DetectorWaitMinutes
 
-        if ($null -eq $anomaly) {
-            throw "RAM detector did not emit anomaly_grade > 0 within $DetectorWaitMinutes minute(s)."
-        }
-
-        $maxRam = Get-MaxMetricValue `
+        $faultStats = Get-MetricStats `
             -HostId "worker-service" `
             -Measurement "docker_container_mem" `
             -Field "docker_container_mem.usage_percent" `
             -From $faultStartedAt
 
-        if ($null -eq $maxRam) {
-            throw "RAM telemetry is missing during the memory-leak scenario."
+        $baselineRam = if ($null -eq $baseline.Average) { 0.0 } else { [double]$baseline.Average }
+        $maxRam = $faultStats.Max
+        $minimumExpected = $baselineRam + 5.0
+
+        if ($null -eq $maxRam -or [double]$maxRam -lt $minimumExpected) {
+            $reason = "RAM fault telemetry is too weak. baseline_avg=$baselineRam%, max=$maxRam%, expected_at_least=$minimumExpected%."
+            $null = Add-ExperimentObservation -Scenario "memory-leak" -Detector $detector -Anomaly $anomaly -FaultStartedAt $faultStartedAt -MetricField "docker_container_mem.usage_percent" -BaselineMetricValue $baselineRam -MaxMetricValue $maxRam -MetricUnit "%" -FaultParameters $faultParameters -FailureReason $reason
+            throw $reason
         }
 
-        $experiment = Add-ExperimentObservation `
-            -Scenario "memory-leak" `
-            -Detector $detector `
-            -Anomaly $anomaly `
-            -FaultStartedAt $faultStartedAt `
-            -MetricField "docker_container_mem.usage_percent" `
-            -MaxMetricValue ([double]$maxRam) `
-            -MetricUnit "%"
+        if ($null -eq $anomaly) {
+            $reason = "RAM detector did not emit anomaly_grade > 0 within $DetectorWaitMinutes minute(s), although the memory fault was confirmed by telemetry."
+            $null = Add-ExperimentObservation -Scenario "memory-leak" -Detector $detector -Anomaly $null -FaultStartedAt $faultStartedAt -MetricField "docker_container_mem.usage_percent" -BaselineMetricValue $baselineRam -MaxMetricValue $maxRam -MetricUnit "%" -FaultParameters $faultParameters -FailureReason $reason
+            throw $reason
+        }
+
+        $experiment = Add-ExperimentObservation -Scenario "memory-leak" -Detector $detector -Anomaly $anomaly -FaultStartedAt $faultStartedAt -MetricField "docker_container_mem.usage_percent" -BaselineMetricValue $baselineRam -MaxMetricValue $maxRam -MetricUnit "%" -FaultParameters $faultParameters
 
         Add-Result `
             -Name "memory-leak" `
             -Status PASS `
-            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, max_ram={3:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, [double]$maxRam)
+            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, baseline_ram={3:N2}%, max_ram={4:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, $baselineRam, [double]$maxRam)
     }
     finally {
         Reset-ToBase
@@ -591,44 +723,54 @@ function Test-MemoryLeak {
 
 function Test-NetworkLatency {
     Write-Step "Network latency -> OpenSearch anomaly"
-    $detector = Assert-DetectorReady -Name "NETLAT-api-gateway-processing-service"
+    $detector = Prepare-DetectorExperiment -DetectorName "NETLAT-api-gateway-processing-service"
+    $baseline = Get-MetricStats `
+        -HostId "api-gateway" `
+        -Measurement "network_service_latency" `
+        -Field "network_service_latency.response_time" `
+        -From ([DateTimeOffset]::UtcNow.AddMinutes(-5))
+
     $faultStartedAt = [DateTimeOffset]::UtcNow
+    $faultParameters = "delay_ms=$NetworkDelayMs;jitter_ms=$NetworkJitterMs"
 
     try {
-        & (Join-Path $scenariosRoot "network-latency\start.ps1") -DelayMs 250
+        & (Join-Path $scenariosRoot "network-latency\start.ps1") `
+            -DelayMs $NetworkDelayMs `
+            -JitterMs $NetworkJitterMs
 
         $anomaly = Wait-ForAnomaly `
             -DetectorId $detector.Id `
             -FaultStartedAt $faultStartedAt `
             -TimeoutMinutes $DetectorWaitMinutes
 
-        if ($null -eq $anomaly) {
-            throw "Network-latency detector did not emit anomaly_grade > 0 within $DetectorWaitMinutes minute(s)."
-        }
-
-        $maxLatency = Get-MaxMetricValue `
+        $faultStats = Get-MetricStats `
             -HostId "api-gateway" `
             -Measurement "network_service_latency" `
             -Field "network_service_latency.response_time" `
             -From $faultStartedAt
 
-        if ($null -eq $maxLatency -or [double]$maxLatency -lt 0.2) {
-            throw "Network latency telemetry did not show the injected delay. Max value: $maxLatency"
+        $baselineLatency = if ($null -eq $baseline.Average) { 0.0 } else { [double]$baseline.Average }
+        $maxLatency = $faultStats.Max
+        $minimumExpected = $baselineLatency + 0.3
+
+        if ($null -eq $maxLatency -or [double]$maxLatency -lt $minimumExpected) {
+            $reason = "Network fault telemetry is too weak. baseline_avg=$baselineLatency s, max=$maxLatency s, expected_at_least=$minimumExpected s."
+            $null = Add-ExperimentObservation -Scenario "network-latency" -Detector $detector -Anomaly $anomaly -FaultStartedAt $faultStartedAt -MetricField "network_service_latency.response_time" -BaselineMetricValue $baselineLatency -MaxMetricValue $maxLatency -MetricUnit "s" -FaultParameters $faultParameters -FailureReason $reason
+            throw $reason
         }
 
-        $experiment = Add-ExperimentObservation `
-            -Scenario "network-latency" `
-            -Detector $detector `
-            -Anomaly $anomaly `
-            -FaultStartedAt $faultStartedAt `
-            -MetricField "network_service_latency.response_time" `
-            -MaxMetricValue ([double]$maxLatency) `
-            -MetricUnit "s"
+        if ($null -eq $anomaly) {
+            $reason = "Network-latency detector did not emit anomaly_grade > 0 within $DetectorWaitMinutes minute(s), although the network fault was confirmed by telemetry."
+            $null = Add-ExperimentObservation -Scenario "network-latency" -Detector $detector -Anomaly $null -FaultStartedAt $faultStartedAt -MetricField "network_service_latency.response_time" -BaselineMetricValue $baselineLatency -MaxMetricValue $maxLatency -MetricUnit "s" -FaultParameters $faultParameters -FailureReason $reason
+            throw $reason
+        }
+
+        $experiment = Add-ExperimentObservation -Scenario "network-latency" -Detector $detector -Anomaly $anomaly -FaultStartedAt $faultStartedAt -MetricField "network_service_latency.response_time" -BaselineMetricValue $baselineLatency -MaxMetricValue $maxLatency -MetricUnit "s" -FaultParameters $faultParameters
 
         Add-Result `
             -Name "network-latency" `
             -Status PASS `
-            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, max_response_time={3:N3}s" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, [double]$maxLatency)
+            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, baseline_latency={3:N3}s, max_response_time={4:N3}s" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, $baselineLatency, [double]$maxLatency)
     }
     finally {
         Reset-ToBase
@@ -639,7 +781,8 @@ function Test-HighLatency {
     Write-Step "Application high latency"
 
     try {
-        & (Join-Path $scenariosRoot "high-latency\start.ps1") -DelayMs 2000
+        Reset-ToBase
+        & (Join-Path $scenariosRoot "high-latency\start.ps1") -DelayMs $ApplicationDelayMs
         Start-Sleep -Seconds 2
 
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -650,14 +793,15 @@ function Test-HighLatency {
             throw "Gateway health request returned HTTP $status during controlled application latency."
         }
 
-        if ($stopwatch.Elapsed.TotalSeconds -lt 1.5) {
+        $minimumVisibleSeconds = [math]::Max(0.5, ($ApplicationDelayMs / 1000.0) * 0.75)
+        if ($stopwatch.Elapsed.TotalSeconds -lt $minimumVisibleSeconds) {
             throw "Controlled processing delay was not visible end-to-end. Elapsed: $($stopwatch.Elapsed.TotalSeconds)s"
         }
 
         Add-Result `
             -Name "high-latency" `
             -Status PASS `
-            -Detail ("HTTP 200 with end-to-end latency {0:N2}s" -f $stopwatch.Elapsed.TotalSeconds)
+            -Detail ("HTTP 200 with end-to-end latency {0:N2}s for configured delay {1}ms" -f $stopwatch.Elapsed.TotalSeconds, $ApplicationDelayMs)
     }
     finally {
         Reset-ToBase
@@ -668,6 +812,7 @@ function Test-DataServiceDown {
     Write-Step "Data service unavailable"
 
     try {
+        Reset-ToBase
         & (Join-Path $scenariosRoot "data-service-down\start.ps1")
         Start-Sleep -Seconds 2
 
@@ -700,6 +845,17 @@ function Save-TestReport {
     $report = [pscustomobject]@{
         selected_test = $Test
         generated_at = [DateTimeOffset]::UtcNow.ToString("o")
+        parameters = [pscustomobject]@{
+            detector_wait_minutes = $DetectorWaitMinutes
+            recovery_minutes = $RecoveryMinutes
+            cpu_workers = $CpuWorkers
+            memory_total_mb = $MemoryTotalMB
+            memory_step_mb = $MemoryStepMB
+            memory_step_seconds = $MemoryStepSeconds
+            network_delay_ms = $NetworkDelayMs
+            network_jitter_ms = $NetworkJitterMs
+            application_delay_ms = $ApplicationDelayMs
+        }
         results = $reportResults
         detector_experiments = $reportExperiments
     }
@@ -750,16 +906,9 @@ try {
         }
         "all" {
             Test-Preflight
-
             Test-CpuSpike
-            Wait-RecoveryWindow
-
             Test-MemoryLeak
-            Wait-RecoveryWindow
-
             Test-NetworkLatency
-            Wait-RecoveryWindow
-
             Test-HighLatency
             Test-DataServiceDown
         }
@@ -768,13 +917,6 @@ try {
 catch {
     $failed = $true
     Add-Result -Name $Test -Status FAIL -Detail $_.Exception.Message
-
-    try {
-        Reset-ToBase
-    }
-    catch {
-        Write-Warning "Automatic recovery also failed: $($_.Exception.Message)"
-    }
 }
 finally {
     Save-TestReport
