@@ -27,6 +27,112 @@
     "iterations": 4,
     "loop": "ReAct"
   },
+  "agent_events": [
+    {
+      "event_id": "AEV-DEMO-001",
+      "timestamp": "2026-08-10T12:32:11+00:00",
+      "agent_jid": "coordinator@xmpp",
+      "action": "Take incident in charge and start investigation",
+      "called_by": "opensearch-ad",
+      "reason": "A high-grade single-entity CPU anomaly exceeded the triage criteria and persisted across consecutive observations.",
+      "status": "COMPLETED",
+      "outcome": "Incident opened and evidence collection requested."
+    },
+    {
+      "event_id": "AEV-DEMO-002",
+      "timestamp": "2026-08-10T12:32:12+00:00",
+      "agent_jid": "evidence@xmpp",
+      "action": "Validate runtime CPU saturation",
+      "called_by": "coordinator@xmpp",
+      "reason": "The anomaly must be confirmed against live runtime telemetry before diagnostic reasoning continues.",
+      "tool": "get_runtime_stats",
+      "status": "COMPLETED",
+      "outcome": "CPU approximately 392%; memory stable; container running."
+    },
+    {
+      "event_id": "AEV-DEMO-003",
+      "timestamp": "2026-08-10T12:32:16+00:00",
+      "agent_jid": "evidence@xmpp",
+      "action": "Inspect recent application logs",
+      "called_by": "reasoning@xmpp",
+      "reason": "The reasoning agent needs evidence to distinguish workload saturation from an exception or crash loop.",
+      "tool": "get_logs",
+      "status": "COMPLETED",
+      "outcome": "No critical errors; requests continue successfully."
+    },
+    {
+      "event_id": "AEV-DEMO-004",
+      "timestamp": "2026-08-10T12:32:18+00:00",
+      "agent_jid": "reasoning@xmpp",
+      "action": "Refine diagnostic hypotheses",
+      "called_by": "coordinator@xmpp",
+      "reason": "Runtime and log evidence confirm the anomaly but do not yet identify the root cause.",
+      "status": "COMPLETED",
+      "outcome": "Workload saturation retained as primary hypothesis; memory leak and exception loop reduced in probability."
+    },
+    {
+      "event_id": "AEV-DEMO-005",
+      "timestamp": "2026-08-10T12:32:20+00:00",
+      "agent_jid": "evidence@xmpp",
+      "action": "Retrieve service troubleshooting knowledge",
+      "called_by": "reasoning@xmpp",
+      "reason": "The ReAct loop requires external knowledge to decide which evidence should be collected next.",
+      "tool": "search_knowledge",
+      "status": "COMPLETED",
+      "outcome": "Runbook points to abnormal request volume and CPU-bound processing loops as primary checks."
+    },
+    {
+      "event_id": "AEV-DEMO-006",
+      "timestamp": "2026-08-10T12:32:24+00:00",
+      "agent_jid": "evidence@xmpp",
+      "action": "Correlate workload and CPU metrics",
+      "called_by": "reasoning@xmpp",
+      "reason": "The workload hypothesis must be confirmed with current telemetry before a diagnosis can be accepted.",
+      "tool": "get_metrics",
+      "status": "COMPLETED",
+      "outcome": "Processing workload increased sharply in the same window as CPU saturation."
+    },
+    {
+      "event_id": "AEV-DEMO-007",
+      "timestamp": "2026-08-10T12:32:27+00:00",
+      "agent_jid": "reasoning@xmpp",
+      "action": "Produce evidence-backed diagnosis",
+      "called_by": "evidence@xmpp",
+      "reason": "The latest metric observation completes the evidence required by the diagnostic ReAct loop.",
+      "status": "COMPLETED",
+      "outcome": "Workload-induced CPU saturation diagnosed with confidence 0.88."
+    },
+    {
+      "event_id": "AEV-DEMO-008",
+      "timestamp": "2026-08-10T12:32:29+00:00",
+      "agent_jid": "critic@xmpp",
+      "action": "Validate diagnosis and evidence consistency",
+      "called_by": "reasoning@xmpp",
+      "reason": "The proposed diagnosis must be checked for contradictions before remediation guidance is produced.",
+      "status": "COMPLETED",
+      "outcome": "Diagnosis accepted; no evidence contradicts workload-induced CPU saturation."
+    },
+    {
+      "event_id": "AEV-DEMO-009",
+      "timestamp": "2026-08-10T12:32:31+00:00",
+      "agent_jid": "remediation@xmpp",
+      "action": "Generate operator remediation plan",
+      "called_by": "critic@xmpp",
+      "reason": "The diagnosis has been validated and the operator needs precise corrective actions without automatic execution.",
+      "status": "COMPLETED",
+      "outcome": "Reduce abnormal workload, verify recovery, restart processing-service only if saturation persists."
+    },
+    {
+      "event_id": "AEV-DEMO-010",
+      "timestamp": "2026-08-10T12:32:33+00:00",
+      "agent_jid": "coordinator@xmpp",
+      "action": "Hand incident to operator",
+      "called_by": "remediation@xmpp",
+      "reason": "Diagnosis and remediation recommendation are complete; execution remains human-controlled.",
+      "status": "COMPLETED",
+      "outcome": "Incident status changed to OPERATOR_ACTION_REQUIRED."
+    }
+  ],
   "timeline": [
     {
       "timestamp": "2026-08-10T12:32:12+00:00",
