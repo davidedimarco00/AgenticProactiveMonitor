@@ -1,198 +1,144 @@
 {% extends "base.html" %}
 {% block title %}{{ incident.incident_id }} · {{ app_name }}{% endblock %}
-{% block page_title %}Incident Investigation{% endblock %}
+{% block page_title %}Incident {{ incident.incident_id }}{% endblock %}
+{% block page_actions %}<a class="secondary-button" href="/">Back to incidents</a>{% endblock %}
 
 {% block content %}
-<section class="incident-hero panel">
-  <div class="incident-hero-main">
-    <div class="incident-id-line">
+<section class="panel incident-header">
+  <div>
+    <div class="inline-meta">
       <span class="severity {{ (incident.severity or 'medium')|lower }}">{{ incident.severity or 'MEDIUM' }}</span>
-      <span class="muted">{{ incident.incident_id }}</span>
+      <span class="status-pill status-{{ (incident.status or 'new')|lower|replace('_','-') }}">{{ (incident.status or 'NEW')|replace('_',' ') }}</span>
     </div>
     <h2>{{ incident.entity or incident.service }}</h2>
-    <p class="incident-subtitle">
-      {{ incident.anomaly.metric or 'Anomalous behaviour' }} · detected {{ incident.created_at|human_time }}
-    </p>
+    <p>{{ incident.anomaly.metric or 'Anomalous behaviour' }} · detected {{ incident.created_at|human_time }}</p>
   </div>
-  <div class="incident-hero-status">
-    <span class="status-pill status-{{ (incident.status or 'new')|lower|replace('_','-') }}">{{ (incident.status or 'NEW')|replace('_',' ') }}</span>
-    <span class="muted small">Last update {{ incident.updated_at|human_time }}</span>
+  <div class="incident-updated">
+    <span>Last update</span>
+    <strong>{{ incident.updated_at|human_time }}</strong>
   </div>
 </section>
 
-<section class="detail-grid">
-  <div class="detail-main">
-    <article class="panel emphasis-panel">
-      <div class="section-kicker">WHY THE SYSTEM TOOK IT IN CHARGE</div>
-      <h3>Investigation rationale</h3>
-      <p class="lead-copy">{{ incident.takeover_reason or 'The triage rationale has not been persisted yet.' }}</p>
-      {% if incident.takeover_factors %}
-      <div class="evidence-chips">
-        {% for factor in incident.takeover_factors %}<span>{{ factor }}</span>{% endfor %}
-      </div>
-      {% endif %}
-    </article>
+<section class="detail-grid-simple">
+  <article class="panel detail-card">
+    <span class="eyebrow">TAKEOVER REASON</span>
+    <h3>Why the system investigated</h3>
+    <p class="important-copy">{{ incident.takeover_reason or 'The triage rationale has not been persisted yet.' }}</p>
+    {% if incident.takeover_factors %}
+    <ul class="plain-list">
+      {% for factor in incident.takeover_factors %}<li>{{ factor }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </article>
 
-    <article class="panel">
-      <div class="card-heading">
-        <div>
-          <span class="section-kicker">AGENTIC INVESTIGATION</span>
-          <h3>ReAct execution trace</h3>
-        </div>
-        <div class="trace-meta">
-          <span>{{ incident.agentic.iterations or incident.timeline|length }} iteration(s)</span>
-          {% if incident.agentic.current_agent %}<span>{{ incident.agentic.current_agent }}</span>{% endif %}
-        </div>
-      </div>
-      <p class="trace-note">
-        This view exposes operational actions, observations and concise decision rationales. Raw private model reasoning is not stored or displayed.
-      </p>
+  <article class="panel detail-card">
+    <span class="eyebrow">ANOMALY SIGNAL</span>
+    <h3>OpenSearch AD</h3>
+    <div class="facts-list">
+      <div><span>Detector</span><strong>{{ incident.anomaly.detector_id or '—' }}</strong></div>
+      <div><span>Metric</span><strong>{{ incident.anomaly.metric or '—' }}</strong></div>
+      <div><span>Grade</span><strong>{{ incident.anomaly.grade if incident.anomaly.grade is defined and incident.anomaly.grade is not none else '—' }}</strong></div>
+      <div><span>AD confidence</span><strong>{{ incident.anomaly.confidence|default(none)|confidence }}</strong></div>
+      <div><span>Observed value</span><strong>{{ incident.anomaly.observed_value if incident.anomaly.observed_value is defined and incident.anomaly.observed_value is not none else '—' }}</strong></div>
+      <div><span>Baseline</span><strong>{{ incident.anomaly.baseline_value if incident.anomaly.baseline_value is defined and incident.anomaly.baseline_value is not none else '—' }}</strong></div>
+    </div>
+    <p class="single-entity-note">Single-entity detector · {{ incident.entity or incident.service }}</p>
+  </article>
+</section>
 
-      {% if incident.timeline %}
-      <div class="trace-list">
-        {% for item in incident.timeline %}
-        <div class="trace-item">
-          <div class="trace-rail"><span>{{ '%02d'|format(loop.index) }}</span></div>
-          <div class="trace-body">
-            <div class="trace-topline">
-              <strong>{{ item.phase or item.action or 'Investigation step' }}</strong>
-              <span>{{ item.timestamp|human_time }}</span>
-            </div>
-            {% if item.tool %}<div class="tool-chip">TOOL · {{ item.tool }}</div>{% endif %}
-            {% if item.action and item.phase %}<p><b>Action:</b> {{ item.action }}</p>{% endif %}
-            {% if item.observation %}<p><b>Observation:</b> {{ item.observation }}</p>{% endif %}
-            {% if item.decision_rationale %}<p><b>Decision rationale:</b> {{ item.decision_rationale }}</p>{% endif %}
-            {% if item.outcome %}<p><b>Outcome:</b> {{ item.outcome }}</p>{% endif %}
-          </div>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div class="empty-state compact-empty">
-        <div class="empty-symbol">↻</div>
-        <h4>Investigation trace not available yet</h4>
-        <p>ReAct tool calls and observations will appear here while the incident is analysed.</p>
-      </div>
-      {% endif %}
-    </article>
+<section class="panel diagnosis-section">
+  <div class="section-header compact">
+    <div>
+      <span class="eyebrow">DIAGNOSIS</span>
+      <h2>Most probable cause</h2>
+    </div>
+    {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
+    <span class="confidence-pill">{{ incident.diagnosis.confidence|confidence }} confidence</span>
+    {% endif %}
+  </div>
+  <p class="diagnosis-copy">{{ incident.diagnosis.summary or 'Diagnosis is still in progress.' }}</p>
 
-    <article class="panel diagnosis-panel">
-      <div class="card-heading">
-        <div>
-          <span class="section-kicker">EXPLAINABLE DIAGNOSIS</span>
-          <h3>Most probable cause</h3>
-        </div>
-        {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
-        <div class="confidence-badge">{{ incident.diagnosis.confidence|confidence }} confidence</div>
+  {% if incident.diagnosis.evidence %}
+  <div class="evidence-block">
+    <strong>Supporting evidence</strong>
+    <ul class="plain-list">
+      {% for evidence in incident.diagnosis.evidence %}<li>{{ evidence }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel remediation-section">
+  <div class="section-header compact">
+    <div>
+      <span class="eyebrow">OPERATOR ACTION</span>
+      <h2>Recommended remediation</h2>
+    </div>
+    <span class="manual-pill">MANUAL EXECUTION</span>
+  </div>
+  <p class="important-copy">{{ incident.remediation.summary or 'No remediation recommendation has been produced yet.' }}</p>
+
+  {% if incident.remediation.steps %}
+  <ol class="remediation-list">
+    {% for step in incident.remediation.steps %}
+    <li>
+      <span class="step-number">{{ '%02d'|format(loop.index) }}</span>
+      <div>
+        {% if step is mapping %}
+          <strong>{{ step.title or step.action or 'Operator action' }}</strong>
+          {% if step.description %}<p>{{ step.description }}</p>{% endif %}
+          {% if step.command %}<code>{{ step.command }}</code>{% endif %}
+        {% else %}
+          <strong>{{ step }}</strong>
         {% endif %}
       </div>
-      <p class="diagnosis-copy">{{ incident.diagnosis.summary or 'Diagnosis is still in progress.' }}</p>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
 
-      {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
-      {% set confidence_value = incident.diagnosis.confidence * 100 if incident.diagnosis.confidence <= 1 else incident.diagnosis.confidence %}
-      <div class="confidence-track"><span style="width: {{ confidence_value }}%"></span></div>
-      {% endif %}
-
-      {% if incident.diagnosis.evidence %}
-      <div class="evidence-list">
-        {% for evidence in incident.diagnosis.evidence %}
-        <div class="evidence-row"><span>✓</span><p>{{ evidence }}</p></div>
-        {% endfor %}
-      </div>
-      {% endif %}
-
-      {% if incident.diagnosis.alternatives %}
-      <div class="subsection">
-        <h4>Alternative hypotheses considered</h4>
-        {% for hypothesis in incident.diagnosis.alternatives %}
-        <div class="hypothesis-row">
-          <span>{{ hypothesis.status or 'CONSIDERED' }}</span>
-          <p><strong>{{ hypothesis.name or hypothesis.summary }}</strong>{% if hypothesis.reason %} — {{ hypothesis.reason }}{% endif %}</p>
-        </div>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </article>
-
-    <article class="panel remediation-panel">
-      <div class="card-heading">
-        <div>
-          <span class="section-kicker">OPERATOR GUIDANCE</span>
-          <h3>Recommended remediation</h3>
-        </div>
-        <span class="human-control-badge">HUMAN APPROVAL</span>
-      </div>
-      <p class="remediation-summary">{{ incident.remediation.summary or 'No remediation recommendation has been produced yet.' }}</p>
-
-      {% if incident.remediation.steps %}
-      <ol class="remediation-steps">
-        {% for step in incident.remediation.steps %}
-        <li>
-          <span>{{ '%02d'|format(loop.index) }}</span>
-          <div>
-            {% if step is mapping %}
-              <strong>{{ step.title or step.action or 'Operator action' }}</strong>
-              {% if step.description %}<p>{{ step.description }}</p>{% endif %}
-              {% if step.command %}<code>{{ step.command }}</code>{% endif %}
-            {% else %}
-              <strong>{{ step }}</strong>
-            {% endif %}
-          </div>
-        </li>
-        {% endfor %}
-      </ol>
-      {% endif %}
-
-      {% if incident.remediation.verification %}
-      <div class="verification-box">
-        <h4>Post-remediation verification</h4>
-        <ul>{% for item in incident.remediation.verification %}<li>{{ item }}</li>{% endfor %}</ul>
-      </div>
-      {% endif %}
-
-      {% if incident.remediation.risks %}
-      <div class="risk-box">
-        <h4>Operational considerations</h4>
-        <ul>{% for item in incident.remediation.risks %}<li>{{ item }}</li>{% endfor %}</ul>
-      </div>
-      {% endif %}
-    </article>
+  {% if incident.remediation.verification %}
+  <div class="verification-block">
+    <strong>Verify after remediation</strong>
+    <ul class="plain-list">{% for item in incident.remediation.verification %}<li>{{ item }}</li>{% endfor %}</ul>
   </div>
+  {% endif %}
 
-  <aside class="detail-side">
-    <article class="panel compact-panel">
-      <span class="section-kicker">ANOMALY SIGNAL</span>
-      <h3>OpenSearch AD</h3>
-      <div class="fact-grid">
-        <div><span>Detector</span><strong>{{ incident.anomaly.detector_id or '—' }}</strong></div>
-        <div><span>Metric</span><strong>{{ incident.anomaly.metric or '—' }}</strong></div>
-        <div><span>Grade</span><strong>{{ incident.anomaly.grade if incident.anomaly.grade is defined and incident.anomaly.grade is not none else '—' }}</strong></div>
-        <div><span>AD confidence</span><strong>{{ incident.anomaly.confidence|default(none)|confidence }}</strong></div>
-        <div><span>Observed</span><strong>{{ incident.anomaly.observed_value if incident.anomaly.observed_value is defined and incident.anomaly.observed_value is not none else '—' }}</strong></div>
-        <div><span>Baseline</span><strong>{{ incident.anomaly.baseline_value if incident.anomaly.baseline_value is defined and incident.anomaly.baseline_value is not none else '—' }}</strong></div>
-      </div>
-      <div class="single-entity-note">Single-entity detector · {{ incident.entity or incident.service }}</div>
-    </article>
-
-    <article class="panel compact-panel">
-      <span class="section-kicker">TARGET CONTEXT</span>
-      <h3>Monitored entity</h3>
-      <div class="metadata-list">
-        <div><span>Entity</span><strong>{{ incident.entity or '—' }}</strong></div>
-        <div><span>Service</span><strong>{{ incident.service or '—' }}</strong></div>
-        <div><span>Machine role</span><strong>{{ incident.machine_role or '—' }}</strong></div>
-        {% if incident.host_id %}<div><span>Host ID</span><strong>{{ incident.host_id }}</strong></div>{% endif %}
-      </div>
-    </article>
-
-    <article class="panel compact-panel autonomy-card">
-      <span class="section-kicker">AUTONOMY BOUNDARY</span>
-      <h3>Decision ownership</h3>
-      <p>The agents autonomously investigate and recommend. Remediation execution remains under operator control in the current thesis baseline.</p>
-      <div class="autonomy-line"><span>Diagnosis</span><strong>AUTONOMOUS</strong></div>
-      <div class="autonomy-line"><span>Recommendation</span><strong>AUTONOMOUS</strong></div>
-      <div class="autonomy-line"><span>Execution</span><strong class="manual">MANUAL</strong></div>
-    </article>
-  </aside>
+  {% if incident.remediation.risks %}
+  <div class="risk-block">
+    <strong>Operational considerations</strong>
+    <ul class="plain-list">{% for item in incident.remediation.risks %}<li>{{ item }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
 </section>
+
+<details class="panel audit-panel">
+  <summary>
+    <span><strong>Investigation trace</strong><small>ReAct actions and observations for audit/debugging</small></span>
+    <span class="summary-hint">{{ incident.timeline|length }} steps</span>
+  </summary>
+
+  {% if incident.timeline %}
+  <div class="trace-table-wrap">
+    <table class="simple-table trace-table">
+      <thead><tr><th>#</th><th>Action / Tool</th><th>Observation</th><th>Decision rationale</th></tr></thead>
+      <tbody>
+        {% for item in incident.timeline %}
+        <tr>
+          <td>{{ '%02d'|format(loop.index) }}</td>
+          <td>
+            <strong>{{ item.action or item.phase or 'Investigation step' }}</strong>
+            {% if item.tool %}<small>{{ item.tool }}</small>{% endif %}
+          </td>
+          <td>{{ item.observation or '—' }}</td>
+          <td>{{ item.decision_rationale or item.outcome or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No investigation trace is available yet.</p></div>
+  {% endif %}
+</details>
 {% endblock %}
