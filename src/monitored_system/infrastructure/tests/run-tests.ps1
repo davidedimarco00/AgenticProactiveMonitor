@@ -97,20 +97,35 @@ function Get-DetectorInfo {
         throw "Detector '$Name' was not found."
     }
 
-    $detectorId = $hit._id
+    $detectorId = [string]$hit._id
+
     $detail = Invoke-RestMethod `
-        -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/$detectorId`?task=true" `
+        -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/$detectorId" `
+        -Method Get
+
+    $detectorType = "UNKNOWN"
+    if ($detail.PSObject.Properties.Name -contains "anomaly_detector") {
+        if ($detail.anomaly_detector.PSObject.Properties.Name -contains "detector_type") {
+            $detectorType = [string]$detail.anomaly_detector.detector_type
+        }
+    }
+    elseif ($detail.PSObject.Properties.Name -contains "detector_type") {
+        $detectorType = [string]$detail.detector_type
+    }
+
+    $profile = Invoke-RestMethod `
+        -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/$detectorId/_profile?_all=true" `
         -Method Get
 
     $state = "UNKNOWN"
-    if ($null -ne $detail.realtime_detection_task) {
-        $state = [string]$detail.realtime_detection_task.state
+    if ($profile.PSObject.Properties.Name -contains "state") {
+        $state = [string]$profile.state
     }
 
     return [pscustomobject]@{
         Name = $Name
         Id = $detectorId
-        Type = [string]$detail.anomaly_detector.detector_type
+        Type = $detectorType
         State = $state
     }
 }
@@ -544,12 +559,15 @@ function Save-TestReport {
 
     $timestamp = [DateTimeOffset]::Now.ToString("yyyyMMdd-HHmmss")
     $reportPath = Join-Path $resultsRoot "test-report-$timestamp.json"
+    $reportResults = $script:results.ToArray()
 
-    [pscustomobject]@{
+    $report = [pscustomobject]@{
         selected_test = $Test
         generated_at = [DateTimeOffset]::UtcNow.ToString("o")
-        results = @($script:results)
-    } |
+        results = $reportResults
+    }
+
+    $report |
         ConvertTo-Json -Depth 20 |
         Set-Content -Path $reportPath -Encoding UTF8
 
