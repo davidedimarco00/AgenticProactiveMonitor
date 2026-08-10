@@ -18,6 +18,7 @@ MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 XMPP_HOST = os.getenv("XMPP_HOST", "xmpp")
 XMPP_PORT = int(os.getenv("XMPP_PORT", "5222"))
 INCIDENT_INDEX_PREFIX = os.getenv("INCIDENT_INDEX_PREFIX", "agentic-incidents")
+AGENT_EVENT_INDEX_PREFIX = os.getenv("AGENT_EVENT_INDEX_PREFIX", "agentic-agent-events")
 REQUEST_TIMEOUT = float(os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "2.5"))
 
 ACTIVE_STATUSES = {
@@ -84,9 +85,13 @@ def parse_timestamp(value: str | None) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def index_for_timestamp(value: str | None) -> str:
+def monthly_index(prefix: str, value: str | None) -> str:
     stamp = parse_timestamp(value)
-    return f"{INCIDENT_INDEX_PREFIX}-{stamp:%Y.%m}"
+    return f"{prefix}-{stamp:%Y.%m}"
+
+
+def index_for_timestamp(value: str | None) -> str:
+    return monthly_index(INCIDENT_INDEX_PREFIX, value)
 
 
 def opensearch_request(method: str, path: str, **kwargs: Any) -> requests.Response:
@@ -147,6 +152,41 @@ def ensure_incident_template() -> None:
         app.logger.warning("OpenSearch incident template could not be ensured")
 
 
+def ensure_agent_event_template() -> None:
+    template = {
+        "index_patterns": [f"{AGENT_EVENT_INDEX_PREFIX}-*"],
+        "priority": 255,
+        "template": {
+            "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+            "mappings": {
+                "dynamic": True,
+                "properties": {
+                    "event_id": {"type": "keyword"},
+                    "timestamp": {"type": "date"},
+                    "agent_jid": {"type": "keyword"},
+                    "agent_name": {"type": "keyword"},
+                    "action": {"type": "text"},
+                    "called_by": {"type": "keyword"},
+                    "reason": {"type": "text"},
+                    "incident_id": {"type": "keyword"},
+                    "tool": {"type": "keyword"},
+                    "status": {"type": "keyword"},
+                    "outcome": {"type": "text"},
+                },
+            },
+        },
+    }
+    try:
+        response = opensearch_request(
+            "PUT",
+            "/_index_template/agentic-dashboard-agent-events",
+            json=template,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        app.logger.warning("OpenSearch agent-event template could not be ensured")
+
+
 def normalize_incident(payload: dict[str, Any], incident_id: str | None = None) -> dict[str, Any]:
     now = utc_now()
     normalized = deepcopy(payload)
@@ -166,6 +206,7 @@ def normalize_incident(payload: dict[str, Any], incident_id: str | None = None) 
     normalized.setdefault("remediation", {})
     normalized.setdefault("timeline", [])
     normalized.setdefault("agentic", {})
+    normalized.setdefault("agent_events", [])
 
     normalized["status"] = str(normalized["status"]).upper()
     normalized["severity"] = str(normalized["severity"]).upper()
@@ -180,6 +221,49 @@ def deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
         else:
             result[key] = value
     return result
+
+
+def agent_definition(identity: str | None) -> dict[str, Any] | None:
+    if not identity:
+        return None
+    normalized = str(identity).strip().lower()
+    for definition in AGENT_TEAM:
+        if normalized in {definition["key"].lower(), definition["jid"].lower()}:
+            return definition
+    return None
+
+
+def normalize_agent_event(
+    payload: dict[str, Any], incident_id: str | None = None
+) -> dict[str, Any]:
+    normalized = deepcopy(payload)
+    identity = normalized.get("agent_jid") or normalized.get("agent")
+    definition = agent_definition(str(identity) if identity else None)
+
+    if definition is not None:
+        jid = definition["jid"]
+    elif identity:
+        jid = str(identity).strip().lower()
+    else:
+        raise ValueError("agent_jid is required")
+
+    timestamp = normalized.get("timestamp") or utc_now()
+    normalized["event_id"] = normalized.get("event_id") or (
+        f"AEV-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8].upper()}"
+    )
+    normalized["timestamp"] = timestamp
+    normalized["agent_jid"] = jid
+    normalized["agent_name"] = normalized.get("agent_name") or (
+        definition["name"] if definition else jid.split("@", 1)[0].replace("-", " ").title()
+    )
+    normalized["action"] = normalized.get("action") or normalized.get("event_type") or "Agent activity"
+    normalized["called_by"] = normalized.get("called_by") or "system"
+    normalized["reason"] = normalized.get("reason") or ""
+    normalized["incident_id"] = normalized.get("incident_id") or incident_id
+    normalized["tool"] = normalized.get("tool") or ""
+    normalized["status"] = str(normalized.get("status") or "COMPLETED").upper()
+    normalized["outcome"] = normalized.get("outcome") or ""
+    return normalized
 
 
 def search_incidents(limit: int = 100) -> list[dict[str, Any]]:
@@ -206,6 +290,39 @@ def search_incidents(limit: int = 100) -> list[dict[str, Any]]:
         return incidents
     except requests.RequestException:
         app.logger.warning("Could not load incidents from OpenSearch")
+        return []
+
+
+def search_agent_events(
+    agent_jid: str | None = None, limit: int = 100
+) -> list[dict[str, Any]]:
+    query: dict[str, Any] = {"match_all": {}}
+    if agent_jid:
+        query = {"term": {"agent_jid": agent_jid.lower()}}
+
+    body = {
+        "size": min(max(limit, 1), 500),
+        "sort": [{"timestamp": {"order": "desc", "unmapped_type": "date"}}],
+        "query": query,
+    }
+    try:
+        response = opensearch_request(
+            "POST",
+            f"/{AGENT_EVENT_INDEX_PREFIX}-*/_search?ignore_unavailable=true&allow_no_indices=true",
+            json=body,
+        )
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        hits = response.json().get("hits", {}).get("hits", [])
+        events = []
+        for hit in hits:
+            source = hit.get("_source", {})
+            source["_index"] = hit.get("_index")
+            events.append(source)
+        return events
+    except requests.RequestException:
+        app.logger.warning("Could not load agent events from OpenSearch")
         return []
 
 
@@ -247,6 +364,38 @@ def save_incident(incident: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+def save_agent_event(event: dict[str, Any]) -> dict[str, Any]:
+    clean = {k: v for k, v in event.items() if not k.startswith("_")}
+    index = event.get("_index") or monthly_index(
+        AGENT_EVENT_INDEX_PREFIX, clean.get("timestamp")
+    )
+    response = opensearch_request(
+        "PUT",
+        f"/{index}/_doc/{clean['event_id']}?refresh=true",
+        json=clean,
+    )
+    response.raise_for_status()
+    clean["_index"] = index
+    return clean
+
+
+def persist_embedded_agent_events(incident: dict[str, Any]) -> int:
+    saved_count = 0
+    for payload in incident.get("agent_events", []) or []:
+        if not isinstance(payload, dict):
+            continue
+        try:
+            event = normalize_agent_event(payload, incident.get("incident_id"))
+            save_agent_event(event)
+            saved_count += 1
+        except (ValueError, requests.RequestException):
+            app.logger.warning(
+                "Embedded agent event could not be persisted for incident %s",
+                incident.get("incident_id"),
+            )
+    return saved_count
+
+
 def tcp_check(host: str, port: int) -> tuple[bool, str]:
     try:
         with socket.create_connection((host, port), timeout=REQUEST_TIMEOUT):
@@ -255,7 +404,9 @@ def tcp_check(host: str, port: int) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def http_check(url: str, expected: tuple[int, ...] = (200,)) -> tuple[bool, str, dict[str, Any] | None]:
+def http_check(
+    url: str, expected: tuple[int, ...] = (200,)
+) -> tuple[bool, str, dict[str, Any] | None]:
     try:
         response = http.get(url, timeout=REQUEST_TIMEOUT)
         ok = response.status_code in expected
@@ -332,11 +483,17 @@ def system_health() -> list[dict[str, Any]]:
 
 def build_overview(incidents: list[dict[str, Any]]) -> dict[str, Any]:
     active = [i for i in incidents if i.get("status", "").upper() in ACTIVE_STATUSES]
-    under_analysis = [i for i in incidents if i.get("status", "").upper() == "UNDER_ANALYSIS"]
-    operator_action = [
-        i for i in incidents if i.get("status", "").upper() == "OPERATOR_ACTION_REQUIRED"
+    under_analysis = [
+        i for i in incidents if i.get("status", "").upper() == "UNDER_ANALYSIS"
     ]
-    resolved = [i for i in incidents if i.get("status", "").upper() in {"RESOLVED", "CLOSED"}]
+    operator_action = [
+        i
+        for i in incidents
+        if i.get("status", "").upper() == "OPERATOR_ACTION_REQUIRED"
+    ]
+    resolved = [
+        i for i in incidents if i.get("status", "").upper() in {"RESOLVED", "CLOSED"}
+    ]
     critical = [i for i in active if i.get("severity", "").upper() == "CRITICAL"]
     return {
         "total": len(incidents),
@@ -411,7 +568,9 @@ def dashboard() -> str:
         incidents=incidents[:100],
         services=health,
         team=build_agent_team(incidents),
-        overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
+        overall_online=all(
+            s["status"] == "ONLINE" for s in health if s["critical"]
+        ),
         now=utc_now(),
     )
 
@@ -454,8 +613,12 @@ def incidents_page() -> str:
 def incident_detail(incident_id: str):
     incident = get_incident(incident_id)
     if incident is None:
-        return render_template("not_found.html", app_name=APP_NAME, incident_id=incident_id), 404
-    return render_template("incident_detail.html", app_name=APP_NAME, incident=incident)
+        return render_template(
+            "not_found.html", app_name=APP_NAME, incident_id=incident_id
+        ), 404
+    return render_template(
+        "incident_detail.html", app_name=APP_NAME, incident=incident
+    )
 
 
 @app.route("/system")
@@ -467,7 +630,9 @@ def system_page() -> str:
         app_name=APP_NAME,
         services=health,
         team=build_agent_team(incidents),
-        overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
+        overall_online=all(
+            s["status"] == "ONLINE" for s in health if s["critical"]
+        ),
         now=utc_now(),
     )
 
@@ -491,7 +656,9 @@ def api_system_health():
     return jsonify(
         {
             "generated_at": utc_now(),
-            "overall_online": all(s["status"] == "ONLINE" for s in services if s["critical"]),
+            "overall_online": all(
+                s["status"] == "ONLINE" for s in services if s["critical"]
+            ),
             "services": services,
         }
     )
@@ -500,7 +667,9 @@ def api_system_health():
 @app.route("/api/incidents", methods=["GET", "POST"])
 def api_incidents():
     if request.method == "GET":
-        return jsonify({"incidents": search_incidents(int(request.args.get("limit", "100")))})
+        return jsonify(
+            {"incidents": search_incidents(int(request.args.get("limit", "100")))}
+        )
 
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
@@ -509,10 +678,15 @@ def api_incidents():
     incident = normalize_incident(payload)
     try:
         saved = save_incident(incident)
-        return jsonify(saved), 201
+        events_saved = persist_embedded_agent_events(saved)
+        response_payload = deepcopy(saved)
+        response_payload["_observability_events_saved"] = events_saved
+        return jsonify(response_payload), 201
     except requests.RequestException as exc:
         app.logger.exception("Incident could not be persisted")
-        return jsonify({"error": "OpenSearch persistence failed", "detail": str(exc)}), 503
+        return jsonify(
+            {"error": "OpenSearch persistence failed", "detail": str(exc)}
+        ), 503
 
 
 @app.route("/api/incidents/<incident_id>", methods=["GET", "PATCH"])
@@ -537,10 +711,75 @@ def api_incident(incident_id: str):
 
     try:
         saved = save_incident(merged)
+        if "agent_events" in patch:
+            persist_embedded_agent_events(saved)
         return jsonify(saved)
     except requests.RequestException as exc:
         app.logger.exception("Incident could not be updated")
-        return jsonify({"error": "OpenSearch persistence failed", "detail": str(exc)}), 503
+        return jsonify(
+            {"error": "OpenSearch persistence failed", "detail": str(exc)}
+        ), 503
+
+
+@app.route("/api/agent-events", methods=["GET", "POST"])
+def api_agent_events():
+    if request.method == "GET":
+        agent_jid = request.args.get("agent_jid", "").strip().lower() or None
+        limit = int(request.args.get("limit", "100"))
+        return jsonify({"events": search_agent_events(agent_jid, limit)})
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "A JSON object is required"}), 400
+
+    try:
+        event = normalize_agent_event(payload)
+        saved = save_agent_event(event)
+        return jsonify(saved), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except requests.RequestException as exc:
+        app.logger.exception("Agent event could not be persisted")
+        return jsonify(
+            {"error": "OpenSearch persistence failed", "detail": str(exc)}
+        ), 503
+
+
+@app.get("/api/agents/<path:agent_jid>/activity")
+def api_agent_activity(agent_jid: str):
+    identity = agent_jid.strip().lower()
+    definition = agent_definition(identity)
+    canonical_jid = definition["jid"] if definition else identity
+
+    incidents = search_incidents(300)
+    team = build_agent_team(incidents)
+    member = next(
+        (
+            item
+            for item in team["members"]
+            if item["jid"].lower() == canonical_jid.lower()
+        ),
+        None,
+    )
+
+    if member is None:
+        member = {
+            "key": canonical_jid.split("@", 1)[0],
+            "name": canonical_jid.split("@", 1)[0].replace("-", " ").title(),
+            "jid": canonical_jid,
+            "role": "Specialised agent",
+            "activity": "IDLE",
+        }
+
+    limit = int(request.args.get("limit", "100"))
+    events = search_agent_events(canonical_jid, limit)
+    return jsonify(
+        {
+            "generated_at": utc_now(),
+            "agent": member,
+            "events": events,
+        }
+    )
 
 
 @app.get("/health")
@@ -555,6 +794,7 @@ def health():
 
 
 ensure_incident_template()
+ensure_agent_event_template()
 
 
 if __name__ == "__main__":
