@@ -1,21 +1,21 @@
 ---
 kb_id: monitored-system.shared.system-architecture
-version: 1
+version: 2
 domain: monitored_system
 document_type: architecture
 agents: [coordinator, evidence, reasoning, critic, remediation]
 services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
 incident_types: [cpu, memory, network-latency, application-latency, availability]
-source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/README.md, src/agentic_system/config/topology.yaml]
+source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/src/api-gateway/app.py, src/monitored_system/src/processing-service/app.py, src/monitored_system/src/data-service/app.py, src/monitored_system/src/traffic-generator/generator.py]
 ---
 
 # Notes Platform Architecture
 
 ## Purpose
 
-The monitored system is a small distributed Notes Platform used as the external workload for AgenticProactiveMonitor. It is intentionally separate from the agentic infrastructure. The application containers produce telemetry, while the monitoring stack observes them through the shared observability network.
+The monitored system is a distributed Notes Platform. It runs independently from the monitoring and agentic infrastructure and exposes application behaviour that can be observed through metrics and logs.
 
-## Runtime application path
+## Runtime request path
 
 The normal HTTP request path is:
 
@@ -32,47 +32,62 @@ processing-service
 data-service
 ```
 
-`worker-service` is an independent synthetic background node. It is not part of the user request path. Its main purpose is to provide a fifth monitored entity and a controlled target for resource faults such as memory exhaustion.
+`worker-service` is an independent background service. It is not part of the Notes HTTP request path.
 
 ## Service responsibilities
 
-- `traffic-generator`: acts as a synthetic user and continuously creates, reads, updates, deletes and lists notes.
-- `api-gateway`: Flask web front end. It receives user traffic and forwards Notes API calls to `processing-service`.
-- `processing-service`: FastAPI application layer. It validates note payloads and forwards persistence operations to `data-service`.
-- `data-service`: FastAPI persistence layer backed by SQLite in the `notes-data` Docker volume.
-- `worker-service`: independent synthetic workload with no HTTP role in the Notes request chain.
+- `traffic-generator`: behaves as a synthetic client and sends real user-like operations to the platform.
+- `api-gateway`: Flask web front end and gateway. It receives requests and forwards note operations to `processing-service`.
+- `processing-service`: FastAPI application layer. It handles note operations and communicates with `data-service` for persistence.
+- `data-service`: FastAPI persistence layer backed by SQLite.
+- `worker-service`: independent background workload that does not participate in the Notes request chain.
 
-## Ports
+## Ports and internal communication
 
 - `api-gateway`: container port 5000, host port 8080.
 - `processing-service`: container port 8000, host port 8002.
 - `data-service`: container port 8000, host port 8003.
 
+Internal dependencies are:
+
+```text
+traffic-generator  -> api-gateway:5000
+api-gateway        -> processing-service:8000
+processing-service -> data-service:8000
+```
+
+A fault in a downstream service can therefore generate symptoms in upstream services. For example, a data-service failure can first appear as a downstream error in processing-service and later as an HTTP failure at api-gateway.
+
+## Persistence
+
+`data-service` stores notes in SQLite at:
+
+```text
+/var/lib/notes/notes.db
+```
+
+The database is mounted on the persistent Docker volume `notes-data`.
+
 ## Request correlation
 
-A request normally carries an `X-Request-ID`. The identifier is created by the traffic generator or API Gateway and propagated through `api-gateway`, `processing-service` and `data-service`. Agents should use `request_id` to correlate application logs across the request path.
+Requests carry an `X-Request-ID`. The identifier is created by the traffic generator or API Gateway and propagated through the request path. The `request_id` field can be used to correlate logs emitted by different services for the same operation.
 
 ## Networks
 
-Every monitored service joins:
+Each monitored container joins:
 
-- `monitored-system-net`: application communication;
-- `observability-net`: shared network used for integration with the monitoring infrastructure.
+- `monitored-system-net`, used for application communication;
+- `observability-net`, used to reach the external monitoring infrastructure.
 
-Only `api-gateway` receives `NET_ADMIN`, because the controlled network-latency scenario injects delay on its application-network egress path.
+The presence of both networks is important during diagnosis because application-path problems and observability-path problems are not equivalent.
 
-## Diagnostic topology note
+## Normal service relationships
 
-The current agentic topology registry lists `processing-service` dependencies as `[data-service, worker-service]`. The actual Notes HTTP application path depends on `data-service`; `worker-service` remains operationally independent. Agents should interpret the worker relation as an investigation-scope relation, not as evidence that user requests traverse the worker.
+During normal operation:
 
-## Normal operating state
+- the four request-path components communicate in the order shown above;
+- `worker-service` remains independent from the HTTP path;
+- `traffic-generator` continuously produces user-like requests;
+- Telegraf and Fluent Bit inside the monitored containers export telemetry to OpenSearch.
 
-During the base scenario:
-
-- all five containers are running;
-- the traffic generator performs actions every 2-5 seconds by default;
-- no controlled fault scenario is active;
-- Telegraf and Fluent Bit run inside every monitored container;
-- application and system telemetry continuously reaches OpenSearch.
-
-A diagnosis should compare current evidence against this base state before attributing a fault to a specific component.
+When diagnosing an incident, use the real runtime dependency direction. An upstream error does not by itself prove that the upstream component is the root cause.
