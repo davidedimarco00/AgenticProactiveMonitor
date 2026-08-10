@@ -9,19 +9,50 @@ The suite validates the monitored system only. It does not test SPADE/XMPP agent
 - normal availability of the five monitored containers;
 - Notes Platform health through `api-gateway`;
 - presence of metrics and logs for every monitored service;
+- absence of leftover controlled fault markers before testing;
 - presence and runtime state of the 13 OpenSearch Anomaly Detection detectors;
 - every detector must be `SINGLE_ENTITY`;
 - CPU spike on `processing-service` -> `CPU-processing-service` anomaly;
-- memory leak on `worker-service` -> `RAM-worker-service` anomaly;
+- memory growth on `worker-service` -> `RAM-worker-service` anomaly;
 - real network latency on `api-gateway -> processing-service` -> `NETLAT-api-gateway-processing-service` anomaly;
 - controlled application latency on `processing-service` -> observable end-to-end HTTP latency;
 - `data-service` outage -> HTTP 503 propagated through the Notes Platform.
 
-`high-latency` and `data-service-down` are currently behavioural fault tests. The current detector set contains CPU, RAM, and network-service-latency detectors, so the suite does not falsely require a dedicated anomaly detector result for those two scenarios.
+`high-latency` and `data-service-down` are behavioural fault tests. The current detector set contains CPU, RAM, and network-service-latency detectors, so the suite does not require a dedicated anomaly result for those two scenarios.
+
+## Why detector tests use recovery windows
+
+OpenSearch Anomaly Detection uses an adaptive Random Cut Forest model over an incoming time series. Repeating the same synthetic fault immediately after recovery is therefore not equivalent to testing a static threshold. The detector has already observed the previous pattern and recent anomalous/recovery buckets can still influence its temporal context.
+
+For this reason, each detector-oriented test now:
+
+1. verifies that the detector is `RUNNING` and `SINGLE_ENTITY`;
+2. restores the monitored system to the normal base scenario;
+3. waits for a configurable clean recovery period before injecting the fault;
+4. records the average baseline metric over the last five minutes;
+5. injects a clearly separated controlled fault;
+6. waits for an OpenSearch result with `anomaly_grade > 0`;
+7. independently verifies that the expected metric change actually occurred;
+8. records both successful detections and detector misses;
+9. restores the base scenario in a `finally` block.
+
+The default clean recovery period is 10 minutes. It can be shortened during development, but the default should be preferred for final experimental runs.
+
+## Default detector experiment profile
+
+The generic scenario scripts remain independently configurable. The test suite uses a stronger profile by default so that a detector experiment is clearly separated from normal traffic:
+
+- CPU: 6 workers on `processing-service`;
+- RAM: progressive allocation up to 1024 MB, 64 MB every 10 seconds on `worker-service`;
+- network latency: 400 ms delay with 50 ms jitter from `api-gateway` to `processing-service`;
+- detector result timeout: 10 minutes;
+- clean recovery before each detector test: 10 minutes.
+
+These values can be overridden from PowerShell without editing source code.
 
 ## Usage
 
-Run the commands from `src/monitored_system`.
+Run commands from `src/monitored_system`.
 
 ### Safe preflight only
 
@@ -29,7 +60,7 @@ Run the commands from `src/monitored_system`.
 .\infrastructure\tests\run-tests.ps1 -Test preflight
 ```
 
-This does not inject any fault.
+The preflight does not inject a fault. It checks containers, Notes health, telemetry, controlled-fault state, and all 13 `SINGLE_ENTITY` detectors.
 
 ### Individual detector tests
 
@@ -39,16 +70,23 @@ This does not inject any fault.
 .\infrastructure\tests\run-tests.ps1 -Test network-latency
 ```
 
-Each detector-oriented test:
+For faster development-only runs, the recovery window can be overridden, for example:
 
-1. finds the detector dynamically by name;
-2. verifies that it is `RUNNING` and `SINGLE_ENTITY`;
-3. reads the real-time detector job `enabled_time` from OpenSearch;
-4. starts the existing controlled scenario;
-5. waits for a real-time anomaly with `anomaly_grade > 0`;
-6. checks the corresponding telemetry;
-7. records anomaly grade, confidence, anomaly score, detector running time at anomaly, and the maximum observed metric value;
-8. restores the base scenario automatically, including on failure.
+```powershell
+.\infrastructure\tests\run-tests.ps1 -Test memory-leak -RecoveryMinutes 5
+```
+
+For a custom RAM experiment:
+
+```powershell
+.\infrastructure\tests\run-tests.ps1 -Test memory-leak -MemoryTotalMB 1280 -MemoryStepMB 64 -MemoryStepSeconds 10
+```
+
+For a custom network experiment:
+
+```powershell
+.\infrastructure\tests\run-tests.ps1 -Test network-latency -NetworkDelayMs 500 -NetworkJitterMs 75
+```
 
 ### Behavioural fault tests
 
@@ -57,17 +95,19 @@ Each detector-oriented test:
 .\infrastructure\tests\run-tests.ps1 -Test data-service-down
 ```
 
+The application latency is configurable:
+
+```powershell
+.\infrastructure\tests\run-tests.ps1 -Test high-latency -ApplicationDelayMs 2000
+```
+
 ### Full suite
 
 ```powershell
 .\infrastructure\tests\run-tests.ps1 -Test all
 ```
 
-The full suite waits five minutes of normal traffic between detector-oriented fault tests. This is configurable:
-
-```powershell
-.\infrastructure\tests\run-tests.ps1 -Test all -RecoveryMinutes 5 -DetectorWaitMinutes 7
-```
+The three detector-based tests each perform their own recovery period, so a full experimental suite intentionally takes longer than a development smoke test.
 
 ## Results
 
@@ -77,29 +117,26 @@ Every execution creates a JSON report under:
 infrastructure/tests/results/
 ```
 
-The JSON report contains PASS/FAIL results and a structured `detector_experiments` section for detector-oriented fault tests.
-
-Each detector observation records:
-
-- scenario and detector identifiers;
-- detector type;
-- detector enabled timestamp;
-- detector running minutes at the anomaly result;
-- fault start timestamp;
-- anomaly execution/data timestamps;
-- anomaly grade;
-- confidence;
-- anomaly score;
-- monitored metric field;
-- maximum metric value observed during the fault;
-- metric unit.
-
-Detector-oriented test runs are also appended to:
+Detector experiments are also appended to:
 
 ```text
 infrastructure/tests/results/detector-confidence-history.csv
 ```
 
-This cumulative CSV is designed for later experimental analysis, including plots of detector running time versus confidence. `detector_running_minutes_at_anomaly` is the elapsed time since the current real-time detector job was enabled; it should be treated as an experimental proxy for detector/model maturation time, not as a direct internal training-time measurement.
+The experiment history contains:
+
+- scenario and fault parameters;
+- whether an anomaly was detected (`detected`);
+- detector ID, type, and enable time;
+- detector running time at fault injection and at anomaly detection;
+- anomaly grade, confidence, and anomaly score;
+- detection latency;
+- baseline metric value;
+- maximum metric value observed during the fault;
+- failure reason for detector misses or insufficient fault telemetry.
+
+Recording misses is intentional: keeping only successful anomalies would bias later analysis of detector confidence and detection reliability.
+
+This dataset can later be used to study relationships such as detector running time vs. confidence and to compare detection behaviour across repeated controlled fault injections.
 
 The `results` directory is intentionally ignored by Git so experimental outputs do not become part of the source repository.
