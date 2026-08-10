@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.diagnostic.data-service-unavailability
-version: 1
+version: 2
 domain: monitored_system
 document_type: diagnostic-guide
-agents: [evidence, reasoning, critic]
+roles: [application_engineer, software_developer, network_engineer, system_engineer, technical_lead]
+domains: [availability, dependencies, network, runtime, software]
 services: [traffic-generator, api-gateway, processing-service, data-service]
 incident_types: [availability, downstream-failure]
 source_files: [src/monitored_system/src/data-service/app.py, src/monitored_system/src/processing-service/app.py, src/monitored_system/src/api-gateway/app.py, src/monitored_system/src/traffic-generator/generator.py, src/monitored_system/docker-compose.yml]
@@ -48,13 +49,15 @@ Similar symptoms can be caused by:
 - network degradation between processing-service and data-service;
 - processing-service failure before the downstream call;
 - an observability-path problem that hides data-service telemetry without stopping the service;
-- application errors that return failures while the service remains reachable.
+- application errors that return failures while the service remains reachable;
+- SQLite/database access failure while the data-service process remains running.
 
 ## Useful diagnostic checks
 
 - inspect processing-service logs for `data_service_unavailable`;
 - inspect `processing-service -> data-service` network-service probe timing and result code;
 - verify whether fresh data-service metrics, application logs and heartbeats are present;
+- inspect the data-service health result when the service remains reachable;
 - correlate api-gateway 5xx responses with downstream errors by time and `request_id`;
 - confirm runtime service availability when telemetry is missing.
 
