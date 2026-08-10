@@ -39,14 +39,16 @@ This does not inject any fault.
 .\infrastructure\tests\run-tests.ps1 -Test network-latency
 ```
 
-Each test:
+Each detector-oriented test:
 
 1. finds the detector dynamically by name;
 2. verifies that it is `RUNNING` and `SINGLE_ENTITY`;
-3. starts the existing controlled scenario;
-4. waits for a real-time anomaly with `anomaly_grade > 0`;
-5. checks the corresponding telemetry;
-6. restores the base scenario automatically, including on failure.
+3. reads the real-time detector job `enabled_time` from OpenSearch;
+4. starts the existing controlled scenario;
+5. waits for a real-time anomaly with `anomaly_grade > 0`;
+6. checks the corresponding telemetry;
+7. records anomaly grade, confidence, anomaly score, detector running time at anomaly, and the maximum observed metric value;
+8. restores the base scenario automatically, including on failure.
 
 ### Behavioural fault tests
 
@@ -75,6 +77,29 @@ Every execution creates a JSON report under:
 infrastructure/tests/results/
 ```
 
-The report records PASS/FAIL results and relevant values such as anomaly grade, confidence, maximum CPU/RAM usage, and maximum network response time.
+The JSON report contains PASS/FAIL results and a structured `detector_experiments` section for detector-oriented fault tests.
+
+Each detector observation records:
+
+- scenario and detector identifiers;
+- detector type;
+- detector enabled timestamp;
+- detector running minutes at the anomaly result;
+- fault start timestamp;
+- anomaly execution/data timestamps;
+- anomaly grade;
+- confidence;
+- anomaly score;
+- monitored metric field;
+- maximum metric value observed during the fault;
+- metric unit.
+
+Detector-oriented test runs are also appended to:
+
+```text
+infrastructure/tests/results/detector-confidence-history.csv
+```
+
+This cumulative CSV is designed for later experimental analysis, including plots of detector running time versus confidence. `detector_running_minutes_at_anomaly` is the elapsed time since the current real-time detector job was enabled; it should be treated as an experimental proxy for detector/model maturation time, not as a direct internal training-time measurement.
 
 The `results` directory is intentionally ignored by Git so experimental outputs do not become part of the source repository.
