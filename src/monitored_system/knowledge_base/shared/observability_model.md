@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.shared.observability-model
-version: 2
+version: 3
 domain: monitored_system
 document_type: observability
 agents: [evidence, reasoning, critic]
@@ -25,7 +25,7 @@ Logs are written to:
 logs-<host_id>-YYYY.MM.DD
 ```
 
-Every record carries system context such as `project`, `environment`, `host_id`, `machine_role` and the collector identity.
+Telemetry contains context such as `project`, `environment`, `host_id`, `machine_role` and collector information.
 
 ## Metric collection
 
@@ -33,16 +33,16 @@ Telegraf collects telemetry every 10 seconds. Important measurements include:
 
 - `docker_container_cpu`: per-container CPU telemetry. The anomaly-relevant field is `usage_percent`.
 - `docker_container_mem`: per-container memory telemetry. The anomaly-relevant field is `usage_percent`.
-- `ping`: raw ICMP RTT and packet-loss telemetry towards the configured dependency. Important fields include `average_response_ms`, `percentile50_ms`, `percentile95_ms`, `percentile99_ms`, `percent_packet_loss` and `result_code`.
-- `network_service_latency`: end-to-end network/service probe produced by Telegraf `net_response` with `name_override`. It opens the configured TCP connection, sends a small HTTP GET request and waits for a valid `200 OK` response. Important fields are `response_time` and `result_code`.
+- `ping`: raw ICMP RTT and packet-loss telemetry. Important fields include `average_response_ms`, `percentile50_ms`, `percentile95_ms`, `percentile99_ms`, `percent_packet_loss` and `result_code`.
+- `network_service_latency`: active end-to-end probe produced by Telegraf `net_response` with `name_override`. It opens the configured TCP connection, sends a small HTTP request and waits for the expected response. Important fields are `response_time` and `result_code`.
 - `net`: interface bytes, packets, errors and drops.
-- `disk`, `diskio`, `system`, `swap`, `processes`, `kernel`: general diagnostic context.
+- `disk`, `diskio`, `system`, `swap`, `processes`, `kernel`: supporting diagnostic context.
 
-System CPU and memory measurements exist, but CPU/RAM anomaly detection is based on Docker container metrics because multiple containers share the same Docker host kernel view.
+System CPU and memory measurements are available, but CPU and RAM anomaly detection uses container-specific Docker metrics. This avoids treating the Docker host view as if it represented one application container.
 
 ## Active network probes
 
-Each monitored service has one configured network target. The three critical application links used by network-latency detection are:
+The three request-path links observed by network-latency detectors are:
 
 ```text
 traffic-generator  -> api-gateway          probe path /notes/new
@@ -50,28 +50,43 @@ api-gateway        -> processing-service   probe path /docs
 processing-service -> data-service         probe path /docs
 ```
 
-The raw `ping` measurement is retained as an independent ICMP reference. The OpenSearch NETLAT detectors do not use `ping` as their primary feature. They use:
+The raw `ping` measurement is an independent ICMP reference. The NETLAT detector feature is:
 
 ```text
 measurement_name = network_service_latency
 field            = network_service_latency.response_time
 ```
 
-The HTTP probe helps measure the complete network/service response path instead of only TCP connection establishment. `result_code` is useful supporting evidence when the target cannot be reached or the expected response is not received.
+`network_service_latency.result_code` provides supporting evidence about probe success or failure.
 
-## Distinguishing network and application latency
+## Network latency versus application latency
 
-For a real network-delay fault on a critical link, both raw ICMP RTT and `network_service_latency.response_time` are expected to increase, with user-visible request latency often increasing as a consequence.
+Different evidence patterns should be kept separate.
 
-For the controlled application-delay fault inside `processing-service`, note-processing request duration increases while the independent ICMP probe and the `/docs` network-service probe should remain close to their normal baselines. The application log event `fault_delay_applied` is strong evidence for that internal delay.
+A network-path degradation is more plausible when:
+
+- `network_service_latency.response_time` increases on the affected source/link;
+- raw ICMP RTT also increases;
+- application request latency rises as a consequence.
+
+An application-processing problem is more plausible when:
+
+- user-visible or downstream request latency increases;
+- network-service probes remain close to baseline;
+- raw ICMP RTT remains close to baseline;
+- application logs contain service-specific warnings or errors that explain the delay.
+
+One signal alone is usually insufficient to distinguish these cases.
 
 ## SINGLE_ENTITY detector rule
 
-OpenSearch Anomaly Detection detectors for this monitored system must be SINGLE_ENTITY. The configured detector model is:
+OpenSearch Anomaly Detection detectors for this monitored system are SINGLE_ENTITY.
 
-- one CPU detector per monitored service: 5 detectors;
-- one RAM detector per monitored service: 5 detectors;
-- one network-latency detector per critical source/link: 3 detectors.
+The configured detector model is:
+
+- 5 CPU detectors, one per monitored service;
+- 5 RAM detectors, one per monitored service;
+- 3 network-latency detectors, one per critical source/link.
 
 The NETLAT detector names are:
 
@@ -79,11 +94,11 @@ The NETLAT detector names are:
 - `NETLAT-api-gateway-processing-service`;
 - `NETLAT-processing-service-data-service`.
 
-Do not reason as if one detector represents multiple services or multiple links.
+A detector result must be interpreted only for the entity or source/link represented by that detector.
 
 ## Application logs
 
-Application code writes JSON Lines to `/var/log/machine/app.log`. Common fields are:
+Application code writes JSON Lines to `/var/log/machine/app.log`. Common fields include:
 
 - `timestamp`
 - `host`
@@ -94,32 +109,33 @@ Application code writes JSON Lines to `/var/log/machine/app.log`. Common fields 
 - `message`
 - `request_id` when available
 
-Additional fields depend on the event, for example `latency_ms`, `downstream`, `status_code`, `error_type`, `note_id`, `delay_ms` or `fault_type`.
+Additional fields can include `latency_ms`, `downstream`, `status_code`, `error_type`, `note_id` and other event-specific values.
 
 System heartbeat records are written to `/var/log/machine/system.log` and include uptime and load information.
 
-## Important event types
+## Useful event types
 
-Useful application events include:
+Important application events include:
 
 - `http_request_completed`
 - `downstream_request_completed`
 - `notes_service_unavailable`
 - `data_service_unavailable`
-- `fault_delay_applied`
 - `synthetic_user_action_completed`
 - `synthetic_user_action_failed`
 - `service_started`
 - `service_stopped`
 
+Other application-specific events should be interpreted together with their timestamp, service, request identifier and surrounding evidence.
+
 ## Evidence interpretation
 
-Metrics show that something changed. Logs help explain what changed. Container inspection can confirm runtime state. Knowledge-base documents provide expected causal relations, but they must not replace current telemetry.
+Metrics indicate that behaviour changed. Logs help explain where and how it changed. Runtime inspection can confirm service availability. The knowledge base provides the expected system relationships, but it does not describe the current incident state.
 
-A strong diagnosis should normally combine at least two independent evidence types when possible, for example:
+Strong diagnosis should combine independent evidence when possible, for example:
 
-- anomaly metric + correlated application log;
+- resource anomaly + service-specific logs;
 - `network_service_latency` anomaly + raw ICMP RTT;
 - network probe + request latency;
-- missing telemetry + container stopped state;
-- resource anomaly + service-specific symptoms.
+- missing telemetry + independent confirmation of service unavailability;
+- downstream error + correlated upstream request failure.
