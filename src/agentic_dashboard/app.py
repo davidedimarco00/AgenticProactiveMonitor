@@ -9,7 +9,7 @@ import requests
 from flask import Flask, jsonify, render_template, request
 
 
-APP_NAME = "Agentic Monitoring Control Room"
+APP_NAME = "Agentic Monitoring Operator Console"
 OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://opensearch:9200").rstrip("/")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333").rstrip("/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").rstrip("/")
@@ -27,6 +27,41 @@ ACTIVE_STATUSES = {
     "DIAGNOSED",
     "OPERATOR_ACTION_REQUIRED",
 }
+
+WORKING_STATUSES = {"TAKEN_IN_CHARGE", "UNDER_ANALYSIS"}
+
+AGENT_TEAM = [
+    {
+        "key": "coordinator",
+        "name": "Coordinator",
+        "jid": "coordinator@xmpp",
+        "role": "Incident orchestration and task coordination",
+    },
+    {
+        "key": "evidence",
+        "name": "Evidence",
+        "jid": "evidence@xmpp",
+        "role": "Telemetry, log and tool evidence collection",
+    },
+    {
+        "key": "reasoning",
+        "name": "Reasoning",
+        "jid": "reasoning@xmpp",
+        "role": "ReAct diagnosis and hypothesis refinement",
+    },
+    {
+        "key": "critic",
+        "name": "Critic",
+        "jid": "critic@xmpp",
+        "role": "Diagnosis validation and contradiction checks",
+    },
+    {
+        "key": "remediation",
+        "name": "Remediation",
+        "jid": "remediation@xmpp",
+        "role": "Operator remediation guidance",
+    },
+]
 
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
@@ -240,7 +275,7 @@ def system_health() -> list[dict[str, Any]]:
     services.append(
         {
             "name": "OpenSearch",
-            "role": "Metrics, logs and anomaly results",
+            "role": "Anomalies, metrics, logs and incident history",
             "status": "ONLINE" if os_ok else "OFFLINE",
             "detail": f"cluster {cluster_status}" if cluster_status else os_detail,
             "critical": True,
@@ -262,7 +297,7 @@ def system_health() -> list[dict[str, Any]]:
     services.append(
         {
             "name": "MCP Server",
-            "role": "Diagnostic tool interface",
+            "role": "Diagnostic tools",
             "status": "ONLINE" if mcp_ok else "OFFLINE",
             "detail": mcp_detail,
             "critical": True,
@@ -285,7 +320,7 @@ def system_health() -> list[dict[str, Any]]:
     services.append(
         {
             "name": "Ollama",
-            "role": "Local LLM reasoning and embeddings",
+            "role": "Local LLM reasoning",
             "status": "ONLINE" if ollama_ok else "OFFLINE",
             "detail": f"{models} model(s) available" if ollama_ok else ollama_detail,
             "critical": True,
@@ -313,6 +348,39 @@ def build_overview(incidents: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_agent_team(incidents: list[dict[str, Any]]) -> dict[str, Any]:
+    working_incidents = [
+        incident
+        for incident in incidents
+        if str(incident.get("status", "")).upper() in WORKING_STATUSES
+    ]
+
+    active_agents: set[str] = set()
+    for incident in working_incidents:
+        agentic = incident.get("agentic") or {}
+        current_agent = agentic.get("current_agent")
+        if current_agent:
+            active_agents.add(str(current_agent).lower())
+        for active_agent in agentic.get("active_agents", []) or []:
+            active_agents.add(str(active_agent).lower())
+
+    if working_incidents and not active_agents:
+        active_agents.add("coordinator@xmpp")
+
+    members = []
+    for definition in AGENT_TEAM:
+        aliases = {definition["key"].lower(), definition["jid"].lower()}
+        working = bool(aliases.intersection(active_agents))
+        members.append({**definition, "activity": "WORKING" if working else "IDLE"})
+
+    return {
+        "state": "WORKING" if working_incidents else "IDLE",
+        "working": bool(working_incidents),
+        "active_incidents": len(working_incidents),
+        "members": members,
+    }
+
+
 @app.template_filter("human_time")
 def human_time(value: str | None) -> str:
     if not value:
@@ -334,14 +402,15 @@ def confidence(value: Any) -> str:
 
 @app.route("/")
 def dashboard() -> str:
-    incidents = search_incidents(200)
+    incidents = search_incidents(300)
     health = system_health()
     return render_template(
         "dashboard.html",
         app_name=APP_NAME,
         overview=build_overview(incidents),
-        incidents=incidents[:7],
+        incidents=incidents[:100],
         services=health,
+        team=build_agent_team(incidents),
         overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
         now=utc_now(),
     )
@@ -367,6 +436,7 @@ def incidents_page() -> str:
                     str(i.get("service", "")),
                     str(i.get("takeover_reason", "")),
                     str(i.get("diagnosis", {}).get("summary", "")),
+                    str(i.get("remediation", {}).get("summary", "")),
                 ]
             ).lower()
         ]
@@ -391,10 +461,12 @@ def incident_detail(incident_id: str):
 @app.route("/system")
 def system_page() -> str:
     health = system_health()
+    incidents = search_incidents(300)
     return render_template(
         "system.html",
         app_name=APP_NAME,
         services=health,
+        team=build_agent_team(incidents),
         overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
         now=utc_now(),
     )
@@ -407,6 +479,7 @@ def api_overview():
         {
             "generated_at": utc_now(),
             "overview": build_overview(incidents),
+            "team": build_agent_team(incidents),
             "recent_incidents": incidents[:7],
         }
     )
