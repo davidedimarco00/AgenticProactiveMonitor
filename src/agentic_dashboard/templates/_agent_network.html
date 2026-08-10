@@ -1,9 +1,9 @@
 <section class="agent-network-card panel">
   <div class="section-header compact">
     <div>
-      <span class="eyebrow">AGENT TEAM</span>
-      <h2>Team activity</h2>
-      <p class="section-description">Select an agent to inspect its operational activity log.</p>
+      <span class="eyebrow">VIRTUAL OPERATIONS TEAM</span>
+      <h2>Agent team activity</h2>
+      <p class="section-description">Specialised agents are presented as the technical roles they emulate inside an IT operations team.</p>
     </div>
     <div class="network-state-block">
       <span class="label">Team state</span>
@@ -12,42 +12,73 @@
     </div>
   </div>
 
-  <div class="agent-network {{ 'working' if team.working else 'idle' }}" id="agent-network" aria-label="Agent team network">
+  {% set profiles = {
+    'coordinator': {
+      'name': 'Technical Lead',
+      'jid': 'technical-lead@xmpp',
+      'role': 'Incident triage, coordination and critical review'
+    },
+    'evidence': {
+      'name': 'System Engineer',
+      'jid': 'system-engineer@xmpp',
+      'role': 'Linux, containers, host resources and runtime diagnostics'
+    },
+    'critic': {
+      'name': 'Network Engineer',
+      'jid': 'network-engineer@xmpp',
+      'role': 'Connectivity, latency, network paths and traffic analysis'
+    },
+    'reasoning': {
+      'name': 'Application Engineer',
+      'jid': 'application-engineer@xmpp',
+      'role': 'Service health, application logs and dependency diagnosis'
+    },
+    'remediation': {
+      'name': 'Software Developer',
+      'jid': 'software-developer@xmpp',
+      'role': 'Code behaviour, defects and application-level corrective guidance'
+    }
+  } %}
+
+  {% set positions = {
+    'coordinator': 'center',
+    'evidence': 'top-left',
+    'critic': 'top-right',
+    'reasoning': 'bottom-left',
+    'remediation': 'bottom-right'
+  } %}
+
+  <div class="agent-network {{ 'working' if team.working else 'idle' }}" id="agent-network" aria-label="Virtual technical team network">
     <svg class="agent-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <line x1="50" y1="50" x2="19" y2="24"></line>
       <line x1="50" y1="50" x2="81" y2="24"></line>
       <line x1="50" y1="50" x2="19" y2="76"></line>
       <line x1="50" y1="50" x2="81" y2="76"></line>
       <line class="peer-link" x1="19" y1="24" x2="81" y2="24"></line>
+      <line class="peer-link" x1="19" y1="76" x2="81" y2="76"></line>
+      <line class="peer-link" x1="19" y1="24" x2="19" y2="76"></line>
       <line class="peer-link" x1="81" y1="24" x2="81" y2="76"></line>
-      <line class="peer-link" x1="81" y1="76" x2="19" y2="76"></line>
-      <line class="peer-link" x1="19" y1="76" x2="19" y2="24"></line>
     </svg>
 
-    {% set positions = {
-      'coordinator': 'center',
-      'evidence': 'top-left',
-      'reasoning': 'top-right',
-      'critic': 'bottom-right',
-      'remediation': 'bottom-left'
-    } %}
-
     {% for agent in team.members %}
+    {% set profile = profiles.get(agent.key, {'name': agent.name, 'jid': agent.jid, 'role': agent.role}) %}
     <button
       type="button"
       class="agent-node {{ positions.get(agent.key, 'center') }} {{ agent.activity|lower }}"
-      data-agent-jid="{{ agent.jid }}"
-      data-agent-name="{{ agent.name }}"
-      data-agent-role="{{ agent.role }}"
-      aria-label="Open observability log for {{ agent.name }} agent"
+      data-agent-runtime-jid="{{ agent.jid }}"
+      data-agent-display-jid="{{ profile.jid }}"
+      data-agent-name="{{ profile.name }}"
+      data-agent-role="{{ profile.role }}"
+      data-agent-key="{{ agent.key }}"
+      aria-label="Open observability log for {{ profile.name }}"
     >
       <span class="agent-avatar" aria-hidden="true">
         <img src="{{ url_for('static', filename='img/agent-mark.svg') }}" alt="">
         <span class="agent-presence-dot"></span>
       </span>
       <span class="agent-node-copy">
-        <strong>{{ agent.name }}</strong>
-        <small>{{ agent.role }}</small>
+        <strong>{{ profile.name }}</strong>
+        <small>{{ profile.role }}</small>
         <span class="activity-pill {{ agent.activity|lower }}" data-agent-activity>{{ agent.activity }}</span>
       </span>
     </button>
@@ -57,7 +88,7 @@
   <div class="network-legend" aria-label="Agent state legend">
     <span><i class="legend-dot working"></i> Working</span>
     <span><i class="legend-dot idle"></i> Idle</span>
-    <span class="network-help">Click an agent to inspect actions, caller and rationale.</span>
+    <span class="network-help">Select a role to inspect who called it, why, which action was executed and its result.</span>
   </div>
 </section>
 
@@ -71,7 +102,7 @@
         </span>
         <div>
           <span class="eyebrow">AGENT OBSERVABILITY</span>
-          <h2 id="agent-modal-name">Agent</h2>
+          <h2 id="agent-modal-name">Technical role</h2>
           <p><span id="agent-modal-jid">—</span> · <span id="agent-modal-role">—</span></p>
         </div>
       </div>
@@ -92,7 +123,7 @@
       <div class="agent-log-title">
         <div>
           <h3>Operational activity log</h3>
-          <p>Actions exposed by the agent runtime for operator audit and observability.</p>
+          <p>Structured execution events for operator audit. The log exposes actions and concise operational rationale, not private model chain-of-thought.</p>
         </div>
         <span id="agent-log-loading" class="agent-log-loading" hidden>Loading…</span>
       </div>
@@ -114,8 +145,8 @@
       </div>
 
       <div class="agent-log-empty" id="agent-log-empty" hidden>
-        <strong>No activity recorded for this agent yet.</strong>
-        <p>The runtime can publish structured events through the dashboard agent-observability API.</p>
+        <strong>No activity recorded for this role yet.</strong>
+        <p>The agent runtime can publish structured observability events through the dashboard API.</p>
       </div>
     </div>
   </section>
