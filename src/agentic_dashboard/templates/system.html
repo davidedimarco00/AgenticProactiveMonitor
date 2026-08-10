@@ -10,22 +10,26 @@
     <div>
       <span class="label">System status</span>
       <strong>{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</strong>
+      <small>Live dependency checks from the dashboard container</small>
     </div>
   </div>
-  <div class="team-summary">
+  <div class="team-summary-inline">
     <span class="label">Agent team</span>
     <strong class="activity-state {{ 'working' if team.working else 'idle' }}">{{ team.state }}</strong>
     <small>{{ team.active_incidents }} incident{{ '' if team.active_incidents == 1 else 's' }} under investigation</small>
   </div>
 </section>
 
+{% include "_agent_network.html" %}
+
 <section class="panel incidents-panel">
   <div class="section-header compact">
     <div>
       <span class="eyebrow">RUNTIME DEPENDENCIES</span>
       <h2>Core services</h2>
+      <p class="section-description">Only components required by the agentic monitoring runtime are shown.</p>
     </div>
-    <span class="muted">Checked {{ now|human_time }}</span>
+    <span class="muted nowrap">Checked {{ now|human_time }}</span>
   </div>
   <div class="table-wrap">
     <table class="simple-table">
@@ -37,29 +41,6 @@
           <td>{{ service.role }}</td>
           <td><span class="status-pill {{ 'online' if service.status == 'ONLINE' else 'degraded' }}">{{ service.status }}</span></td>
           <td class="muted">{{ service.detail }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section class="panel incidents-panel">
-  <div class="section-header compact">
-    <div>
-      <span class="eyebrow">AGENT TEAM</span>
-      <h2>Current activity</h2>
-    </div>
-  </div>
-  <div class="team-table-wrap">
-    <table class="simple-table team-table">
-      <thead><tr><th>Agent</th><th>Role</th><th>Activity</th></tr></thead>
-      <tbody>
-        {% for agent in team.members %}
-        <tr>
-          <td><strong>{{ agent.name }}</strong><small>{{ agent.jid }}</small></td>
-          <td>{{ agent.role }}</td>
-          <td><span class="activity-pill {{ agent.activity|lower }}">{{ agent.activity }}</span></td>
         </tr>
         {% endfor %}
       </tbody>
