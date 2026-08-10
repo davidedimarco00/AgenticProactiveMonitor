@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">APM</div>
+        <div>
+          <strong>Agentic Monitor</strong>
+          <span>Operations Console</span>
+        </div>
+      </div>
+
+      <nav class="nav-stack" aria-label="Primary navigation">
+        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">
+          <span class="nav-icon">◫</span><span>Overview</span>
+        </a>
+        <a class="nav-link {% if request.path.startswith('/incidents') %}active{% endif %}" href="/incidents">
+          <span class="nav-icon">◇</span><span>Incidents</span>
+        </a>
+        <a class="nav-link {% if request.path == '/system' %}active{% endif %}" href="/system">
+          <span class="nav-icon">⌁</span><span>System Health</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-caption">THESIS PROTOTYPE</div>
+        <p>Human-in-the-loop diagnosis and remediation support.</p>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">HYBRID MULTI-AGENT MONITORING</div>
+          <h1>{% block page_title %}Control Room{% endblock %}</h1>
+        </div>
+        <div class="topbar-actions">
+          <div class="live-chip"><span class="pulse-dot"></span> LIVE</div>
+          <div class="clock" id="live-clock">UTC</div>
+        </div>
+      </header>
+
+      <section class="content-wrap">
+        {% block content %}{% endblock %}
+      </section>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
