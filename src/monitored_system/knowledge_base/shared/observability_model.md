@@ -1,12 +1,12 @@
 ---
 kb_id: monitored-system.shared.observability-model
-version: 1
+version: 2
 domain: monitored_system
 document_type: observability
 agents: [evidence, reasoning, critic]
 services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
 incident_types: [cpu, memory, network-latency, application-latency, availability]
-source_files: [src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/infrastructure/fluent-bit.conf, src/monitored_system/src/common/logging_utils.py]
+source_files: [src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/infrastructure/fluent-bit.conf, src/monitored_system/docker-compose.yml, src/monitored_system/src/common/logging_utils.py, src/infrastructure/opensearch/init/create-anomaly-detectors.sh]
 ---
 
 # Observability Model
@@ -33,8 +33,8 @@ Telegraf collects telemetry every 10 seconds. Important measurements include:
 
 - `docker_container_cpu`: per-container CPU telemetry. The anomaly-relevant field is `usage_percent`.
 - `docker_container_mem`: per-container memory telemetry. The anomaly-relevant field is `usage_percent`.
-- `ping`: ICMP latency and packet-loss telemetry towards the configured dependency. Important fields include `average_response_ms` and percentile values such as p50, p95 and p99.
-- `net_response`: TCP reachability and connection response time. Important fields include `response_time` and `result_code`.
+- `ping`: raw ICMP RTT and packet-loss telemetry towards the configured dependency. Important fields include `average_response_ms`, `percentile50_ms`, `percentile95_ms`, `percentile99_ms`, `percent_packet_loss` and `result_code`.
+- `network_service_latency`: end-to-end network/service probe produced by Telegraf `net_response` with `name_override`. It opens the configured TCP connection, sends a small HTTP GET request and waits for a valid `200 OK` response. Important fields are `response_time` and `result_code`.
 - `net`: interface bytes, packets, errors and drops.
 - `disk`, `diskio`, `system`, `swap`, `processes`, `kernel`: general diagnostic context.
 
@@ -42,23 +42,42 @@ System CPU and memory measurements exist, but CPU/RAM anomaly detection is based
 
 ## Active network probes
 
-Each service has one configured network target. Critical application links are:
+Each monitored service has one configured network target. The three critical application links used by network-latency detection are:
 
 ```text
-traffic-generator  -> api-gateway
-api-gateway        -> processing-service
-processing-service -> data-service
+traffic-generator  -> api-gateway          probe path /notes/new
+api-gateway        -> processing-service   probe path /docs
+processing-service -> data-service         probe path /docs
 ```
 
-For network diagnosis, compare ICMP latency, TCP response time and application request latency. A rise only in application latency is different from a rise in packet-level latency.
+The raw `ping` measurement is retained as an independent ICMP reference. The OpenSearch NETLAT detectors do not use `ping` as their primary feature. They use:
+
+```text
+measurement_name = network_service_latency
+field            = network_service_latency.response_time
+```
+
+The HTTP probe helps measure the complete network/service response path instead of only TCP connection establishment. `result_code` is useful supporting evidence when the target cannot be reached or the expected response is not received.
+
+## Distinguishing network and application latency
+
+For a real network-delay fault on a critical link, both raw ICMP RTT and `network_service_latency.response_time` are expected to increase, with user-visible request latency often increasing as a consequence.
+
+For the controlled application-delay fault inside `processing-service`, note-processing request duration increases while the independent ICMP probe and the `/docs` network-service probe should remain close to their normal baselines. The application log event `fault_delay_applied` is strong evidence for that internal delay.
 
 ## SINGLE_ENTITY detector rule
 
 OpenSearch Anomaly Detection detectors for this monitored system must be SINGLE_ENTITY. The configured detector model is:
 
-- one CPU detector per monitored service;
-- one RAM detector per monitored service;
-- one network-latency detector per critical source/link.
+- one CPU detector per monitored service: 5 detectors;
+- one RAM detector per monitored service: 5 detectors;
+- one network-latency detector per critical source/link: 3 detectors.
+
+The NETLAT detector names are:
+
+- `NETLAT-traffic-generator-api-gateway`;
+- `NETLAT-api-gateway-processing-service`;
+- `NETLAT-processing-service-data-service`.
 
 Do not reason as if one detector represents multiple services or multiple links.
 
@@ -100,6 +119,7 @@ Metrics show that something changed. Logs help explain what changed. Container i
 A strong diagnosis should normally combine at least two independent evidence types when possible, for example:
 
 - anomaly metric + correlated application log;
+- `network_service_latency` anomaly + raw ICMP RTT;
 - network probe + request latency;
 - missing telemetry + container stopped state;
 - resource anomaly + service-specific symptoms.

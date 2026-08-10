@@ -1,12 +1,12 @@
 ---
 kb_id: monitored-system.agent.evidence
-version: 1
+version: 2
 domain: monitored_system
 document_type: agent-context
 agents: [evidence]
 services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
 incident_types: [cpu, memory, network-latency, application-latency, availability]
-source_files: [src/agentic_system/simple/services.py, src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/infrastructure/fluent-bit.conf]
+source_files: [src/agentic_system/simple/services.py, src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/infrastructure/fluent-bit.conf, src/infrastructure/opensearch/init/create-anomaly-detectors.sh]
 ---
 
 # Evidence Agent Collection Guide
@@ -32,12 +32,20 @@ Use container-specific metrics for resource incidents:
 
 Use network probes for link incidents:
 
-- ICMP RTT: `ping.average_response_ms` and percentile fields.
-- TCP connection latency: `net_response.response_time`.
-- TCP reachability: `net_response.result_code`.
+- NETLAT detector feature: `network_service_latency.response_time`.
+- Network/service probe status: `network_service_latency.result_code`.
+- Independent raw ICMP reference: `ping.average_response_ms`, `ping.percentile95_ms`, packet loss and `ping.result_code`.
 - Interface context: `net` packets, bytes, errors and drops.
 
+The `network_service_latency` measurement is produced by Telegraf `net_response` with a measurement override. It sends a small HTTP request to the configured target path and waits for a valid response. Do not query the old `net_response.response_time` field when investigating current NETLAT detectors.
+
 Use general system metrics only as supporting context, not as the primary CPU/RAM signal for a container anomaly.
+
+## Network-latency evidence pattern
+
+For the three critical detector links, first retrieve `network_service_latency.response_time` from the source service index. Then compare it with raw ICMP RTT and user-visible application latency.
+
+A real packet-path delay should normally affect both the detector feature and ICMP RTT. A delay internal to the Notes processing logic can increase application `latency_ms` without a comparable change in these independent network probes.
 
 ## Log correlation
 
@@ -53,6 +61,8 @@ Search application logs by `request_id` when investigating propagated request fa
 ## Missing telemetry
 
 If a service stops completely, its fresh metrics, application logs and system heartbeats may disappear. Missing telemetry can be evidence of unavailability, but it is not sufficient alone. Confirm container state when possible.
+
+When checking a downstream outage, use the upstream source's `network_service_latency.result_code` as supporting evidence because the source-side Telegraf process can continue probing a target that has stopped.
 
 ## Evidence quality rules
 

@@ -1,12 +1,12 @@
 ---
 kb_id: monitored-system.agent.reasoning
-version: 1
+version: 2
 domain: monitored_system
 document_type: agent-context
 agents: [reasoning]
 services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
 incident_types: [cpu, memory, network-latency, application-latency, availability]
-source_files: [src/agentic_system/simple/services.py, src/monitored_system/infrastructure/scenarios/README.md]
+source_files: [src/agentic_system/simple/services.py, src/monitored_system/infrastructure/scenarios/README.md, src/monitored_system/infrastructure/telegraf.conf, src/infrastructure/opensearch/init/create-anomaly-detectors.sh]
 ---
 
 # Reasoning Agent Diagnostic Guide
@@ -34,19 +34,29 @@ A fault observed upstream is therefore not automatically an upstream root cause.
 
 ### CPU saturation vs downstream failure
 
-High `processing-service` container CPU with normal network RTT and no data-service reachability errors supports a local CPU-load hypothesis. Downstream errors without abnormal CPU weaken that hypothesis.
+High `processing-service` container CPU with normal network probes and no data-service reachability errors supports a local CPU-load hypothesis. Downstream errors without abnormal container CPU weaken that hypothesis.
+
+The primary CPU signal is `docker_container_cpu.usage_percent`, not host-level CPU.
 
 ### Memory exhaustion
 
 Progressive and retained growth in `worker-service` container memory supports a memory-leak or retained-allocation hypothesis. The expected controlled scenario is bounded and does not require an HTTP failure.
 
+The primary memory signal is `docker_container_mem.usage_percent`.
+
 ### Network latency vs application latency
 
-Network latency should increase packet/TCP timing on the affected link. Application latency injected inside processing-service should increase request duration while ICMP RTT remains near baseline. The `fault_delay_applied` event is strong evidence for the controlled application-delay scenario.
+The current NETLAT detectors use `network_service_latency.response_time` from the source service index. Raw `ping.average_response_ms` and its percentiles are independent ICMP references.
+
+A real network-delay fault on a critical link should normally increase both `network_service_latency.response_time` and ICMP RTT, while user-visible request latency may rise as a consequence.
+
+The controlled application-delay scenario is different: `processing-service` sleeps inside the Notes forwarding path. Application `latency_ms` increases and `fault_delay_applied` is emitted, while raw ICMP RTT and the independent `/docs` network-service probe should remain close to baseline.
+
+Do not use the old `net_response.response_time` field as the current NETLAT detector feature.
 
 ### Service unavailable
 
-If data-service is stopped, processing-service should report connection failure, api-gateway can return 503, and traffic-generator can report failed actions. Missing fresh data-service telemetry plus stopped-container state strongly supports service unavailability.
+If data-service is stopped, processing-service should report connection failure, api-gateway can return 503, and traffic-generator can report failed actions. Missing fresh data-service telemetry plus stopped-container state strongly supports service unavailability. A failed source-side `network_service_latency` probe can provide additional evidence.
 
 ## Hypothesis discipline
 
