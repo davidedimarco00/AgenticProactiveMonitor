@@ -3,56 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#07111f">
+  <meta name="theme-color" content="#0a0d12">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">APM</div>
-        <div>
-          <strong>Agentic Monitor</strong>
-          <span>Operations Console</span>
-        </div>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="Agentic Monitor home">
+      <span class="brand-mark">APM</span>
+      <span class="brand-copy">
+        <strong>Agentic Monitor</strong>
+        <small>Operator Console</small>
+      </span>
+    </a>
+
+    <nav class="header-nav" aria-label="Primary navigation">
+      <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Operations</a>
+      <a class="nav-link {% if request.path == '/system' %}active{% endif %}" href="/system">System</a>
+    </nav>
+
+    <div class="header-meta">
+      <span class="live-indicator"><i></i> LIVE</span>
+      <span class="clock" id="live-clock">UTC</span>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <div class="page-heading">
+      <div>
+        <span class="eyebrow">HYBRID MULTI-AGENT MONITORING</span>
+        <h1>{% block page_title %}Operator Console{% endblock %}</h1>
       </div>
+      {% block page_actions %}{% endblock %}
+    </div>
 
-      <nav class="nav-stack" aria-label="Primary navigation">
-        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">
-          <span class="nav-icon">◫</span><span>Overview</span>
-        </a>
-        <a class="nav-link {% if request.path.startswith('/incidents') %}active{% endif %}" href="/incidents">
-          <span class="nav-icon">◇</span><span>Incidents</span>
-        </a>
-        <a class="nav-link {% if request.path == '/system' %}active{% endif %}" href="/system">
-          <span class="nav-icon">⌁</span><span>System Health</span>
-        </a>
-      </nav>
-
-      <div class="sidebar-footer">
-        <div class="sidebar-caption">THESIS PROTOTYPE</div>
-        <p>Human-in-the-loop diagnosis and remediation support.</p>
-      </div>
-    </aside>
-
-    <main class="main-panel">
-      <header class="topbar">
-        <div>
-          <div class="eyebrow">HYBRID MULTI-AGENT MONITORING</div>
-          <h1>{% block page_title %}Control Room{% endblock %}</h1>
-        </div>
-        <div class="topbar-actions">
-          <div class="live-chip"><span class="pulse-dot"></span> LIVE</div>
-          <div class="clock" id="live-clock">UTC</div>
-        </div>
-      </header>
-
-      <section class="content-wrap">
-        {% block content %}{% endblock %}
-      </section>
-    </main>
-  </div>
+    {% block content %}{% endblock %}
+  </main>
 
   <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
   {% block scripts %}{% endblock %}
