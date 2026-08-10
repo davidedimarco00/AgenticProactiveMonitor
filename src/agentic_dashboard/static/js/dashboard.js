@@ -1,6 +1,42 @@
 (() => {
   const clock = document.getElementById("live-clock");
-  let selectedAgentJid = null;
+  let selectedAgentProfile = null;
+
+  const ROLE_DIRECTORY = {
+    "coordinator@xmpp": {
+      name: "Technical Lead",
+      jid: "technical-lead@xmpp",
+      role: "Incident triage, coordination and critical review",
+    },
+    "evidence@xmpp": {
+      name: "System Engineer",
+      jid: "system-engineer@xmpp",
+      role: "Linux, containers, host resources and runtime diagnostics",
+    },
+    "critic@xmpp": {
+      name: "Network Engineer",
+      jid: "network-engineer@xmpp",
+      role: "Connectivity, latency, network paths and traffic analysis",
+    },
+    "reasoning@xmpp": {
+      name: "Application Engineer",
+      jid: "application-engineer@xmpp",
+      role: "Service health, application logs and dependency diagnosis",
+    },
+    "remediation@xmpp": {
+      name: "Software Developer",
+      jid: "software-developer@xmpp",
+      role: "Code behaviour, defects and application-level corrective guidance",
+    },
+  };
+
+  const CALLER_DIRECTORY = {
+    ...ROLE_DIRECTORY,
+    "opensearch-ad": { name: "OpenSearch AD" },
+    "opensearch": { name: "OpenSearch" },
+    "operator": { name: "Human Operator" },
+    "system": { name: "System" },
+  };
 
   const updateClock = () => {
     if (!clock) return;
@@ -29,6 +65,14 @@
       second: "2-digit",
       hour12: false,
     });
+  };
+
+  const humanizeIdentity = (value) => {
+    if (!value) return "System";
+    const normalized = String(value).trim().toLowerCase();
+    const profile = CALLER_DIRECTORY[normalized];
+    if (profile?.name) return profile.name;
+    return String(value);
   };
 
   const bindRows = () => {
@@ -88,7 +132,7 @@
       }
 
       (team.members || []).forEach((member) => {
-        const node = document.querySelector(`[data-agent-jid="${member.jid}"]`);
+        const node = document.querySelector(`[data-agent-runtime-jid="${member.jid}"]`);
         if (!node) return;
 
         const working = member.activity === "WORKING";
@@ -158,7 +202,7 @@
 
     rows.forEach((event) => {
       const action = escapeHtml(event.action || event.event_type || "Agent activity");
-      const calledBy = escapeHtml(event.called_by || "system");
+      const calledBy = escapeHtml(humanizeIdentity(event.called_by || "system"));
       const reason = escapeHtml(event.reason || "—");
       const tool = escapeHtml(event.tool || "");
       const outcome = escapeHtml(event.outcome || event.status || "—");
@@ -172,7 +216,7 @@
       row.innerHTML = `
         <td class="nowrap">${escapeHtml(formatTimestamp(event.timestamp))}</td>
         <td><strong>${action}</strong>${event.status ? `<small>${escapeHtml(event.status)}</small>` : ""}</td>
-        <td>${calledBy}</td>
+        <td><strong>${calledBy}</strong></td>
         <td class="agent-log-reason">${reason}</td>
         <td>${toolOutcome}</td>
         <td>${incidentCell}</td>
@@ -181,25 +225,26 @@
     });
   };
 
-  const loadAgentActivity = async (jid) => {
-    if (!jid || !modal) return;
-    selectedAgentJid = jid;
+  const loadAgentActivity = async (profile) => {
+    if (!profile?.runtimeJid || !modal) return;
+    selectedAgentProfile = profile;
     if (logLoading) logLoading.hidden = false;
     if (logEmpty) logEmpty.hidden = true;
 
     try {
-      const response = await fetch(`/api/agents/${encodeURIComponent(jid)}/activity?limit=100`, {
-        cache: "no-store",
-      });
+      const response = await fetch(
+        `/api/agents/${encodeURIComponent(profile.runtimeJid)}/activity?limit=100`,
+        { cache: "no-store" },
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       const agent = payload.agent || {};
       const events = payload.events || [];
 
-      if (modalName) modalName.textContent = agent.name || jid;
-      if (modalJid) modalJid.textContent = agent.jid || jid;
-      if (modalRole) modalRole.textContent = agent.role || "Specialised agent";
-      setModalState(agent.activity || "IDLE");
+      if (modalName) modalName.textContent = profile.name;
+      if (modalJid) modalJid.textContent = profile.displayJid;
+      if (modalRole) modalRole.textContent = profile.role;
+      setModalState(agent.activity || (profile.node?.classList.contains("working") ? "WORKING" : "IDLE"));
       if (eventCount) eventCount.textContent = String(events.length);
       if (lastActivity) lastActivity.textContent = events.length ? formatTimestamp(events[0].timestamp) : "—";
       if (currentIncident) currentIncident.textContent = events.find((event) => event.incident_id)?.incident_id || "—";
@@ -218,12 +263,21 @@
 
   const openAgentModal = (node) => {
     if (!modal || !node) return;
-    const jid = node.dataset.agentJid;
-    if (!jid) return;
+    const runtimeJid = node.dataset.agentRuntimeJid;
+    if (!runtimeJid) return;
 
-    if (modalName) modalName.textContent = node.dataset.agentName || jid;
-    if (modalJid) modalJid.textContent = jid;
-    if (modalRole) modalRole.textContent = node.dataset.agentRole || "Specialised agent";
+    const fallback = ROLE_DIRECTORY[runtimeJid.toLowerCase()] || {};
+    const profile = {
+      runtimeJid,
+      displayJid: node.dataset.agentDisplayJid || fallback.jid || runtimeJid,
+      name: node.dataset.agentName || fallback.name || runtimeJid,
+      role: node.dataset.agentRole || fallback.role || "Specialised technical role",
+      node,
+    };
+
+    if (modalName) modalName.textContent = profile.name;
+    if (modalJid) modalJid.textContent = profile.displayJid;
+    if (modalRole) modalRole.textContent = profile.role;
     setModalState(node.classList.contains("working") ? "WORKING" : "IDLE");
     if (eventCount) eventCount.textContent = "—";
     if (lastActivity) lastActivity.textContent = "—";
@@ -232,20 +286,20 @@
 
     modal.hidden = false;
     document.body.classList.add("modal-open");
-    loadAgentActivity(jid);
+    loadAgentActivity(profile);
   };
 
   const closeAgentModal = () => {
     if (!modal) return;
     modal.hidden = true;
     document.body.classList.remove("modal-open");
-    selectedAgentJid = null;
+    selectedAgentProfile = null;
   };
 
   const bindAgentObservability = () => {
     if (!modal) return;
 
-    document.querySelectorAll(".agent-node[data-agent-jid]").forEach((node) => {
+    document.querySelectorAll(".agent-node[data-agent-runtime-jid]").forEach((node) => {
       node.addEventListener("click", () => openAgentModal(node));
     });
 
@@ -255,7 +309,7 @@
 
     const refreshButton = document.getElementById("agent-modal-refresh");
     refreshButton?.addEventListener("click", () => {
-      if (selectedAgentJid) loadAgentActivity(selectedAgentJid);
+      if (selectedAgentProfile) loadAgentActivity(selectedAgentProfile);
     });
 
     document.addEventListener("keydown", (event) => {
