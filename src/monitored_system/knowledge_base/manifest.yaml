@@ -1,7 +1,8 @@
-version: 1
+version: 2
 domain: monitored_system
 system: notes-platform
 branch: feature/monitored_system
+purpose: diagnostic-rag
 
 agent_roles:
   - coordinator
@@ -17,6 +18,17 @@ services:
   - data-service
   - worker-service
 
+excluded_sources:
+  - src/monitored_system/infrastructure/tests/**
+  - src/monitored_system/infrastructure/scenarios/**
+  - src/agentic_system/**
+
+exclusion_reason: >
+  Test-suite files, controlled fault-injection ground truth and agent-runtime
+  implementation details must not be embedded in the monitored-system knowledge
+  base because they can leak evaluation answers or implementation policy into
+  diagnosis.
+
 documents:
   - path: shared/system_architecture.md
     agents: [coordinator, evidence, reasoning, critic, remediation]
@@ -24,36 +36,21 @@ documents:
   - path: shared/observability_model.md
     agents: [evidence, reasoning, critic]
     document_type: observability
-  - path: agents/coordinator_context.md
-    agents: [coordinator]
-    document_type: agent-context
-  - path: agents/evidence_collection.md
-    agents: [evidence]
-    document_type: agent-context
-  - path: agents/reasoning_diagnosis.md
-    agents: [reasoning]
-    document_type: agent-context
-  - path: agents/critic_validation.md
-    agents: [critic]
-    document_type: agent-context
-  - path: agents/remediation_policy.md
-    agents: [remediation]
-    document_type: agent-context
   - path: services/service_reference.md
     agents: [coordinator, evidence, reasoning, critic, remediation]
     document_type: service-reference
-  - path: runbooks/cpu_spike_processing_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/memory_leak_worker_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/network_latency_api_gateway_processing_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/high_application_latency_processing_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/data_service_down.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
+  - path: diagnostics/cpu_saturation_processing_service.md
+    agents: [evidence, reasoning, critic]
+    document_type: diagnostic-guide
+  - path: diagnostics/memory_pressure_worker_service.md
+    agents: [evidence, reasoning, critic]
+    document_type: diagnostic-guide
+  - path: diagnostics/network_degradation_api_gateway_processing_service.md
+    agents: [evidence, reasoning, critic]
+    document_type: diagnostic-guide
+  - path: diagnostics/application_latency_processing_service.md
+    agents: [evidence, reasoning, critic]
+    document_type: diagnostic-guide
+  - path: diagnostics/data_service_unavailability.md
+    agents: [evidence, reasoning, critic]
+    document_type: diagnostic-guide
