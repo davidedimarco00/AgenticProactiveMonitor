@@ -30,6 +30,7 @@ $resetScript = Join-Path $scenariosRoot "reset-to-base.ps1"
 $resultsRoot = Join-Path $testsRoot "results"
 
 $script:results = New-Object System.Collections.Generic.List[object]
+$script:experiments = New-Object System.Collections.Generic.List[object]
 
 function Write-Step {
     param([string]$Message)
@@ -72,6 +73,25 @@ function Invoke-OpenSearchPost {
         -Method Post `
         -ContentType "application/json" `
         -Body $json
+}
+
+function Convert-EpochMillisecondsToIso {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    try {
+        $epochMs = [int64]$Value
+        if ($epochMs -le 0) {
+            return $null
+        }
+        return [DateTimeOffset]::FromUnixTimeMilliseconds($epochMs).UtcDateTime.ToString("o")
+    }
+    catch {
+        return $null
+    }
 }
 
 function Get-DetectorInfo {
@@ -122,11 +142,34 @@ function Get-DetectorInfo {
         $state = [string]$profile.state
     }
 
+    $jobDetail = Invoke-RestMethod `
+        -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/$detectorId`?job=true" `
+        -Method Get
+
+    $enabledTimeMs = $null
+    if ($jobDetail.PSObject.Properties.Name -contains "anomaly_detector_job") {
+        $job = $jobDetail.anomaly_detector_job
+        if ($null -ne $job -and $job.PSObject.Properties.Name -contains "enabled_time") {
+            $enabledTimeMs = [int64]$job.enabled_time
+        }
+    }
+
+    $runningMinutes = $null
+    if ($null -ne $enabledTimeMs -and $enabledTimeMs -gt 0) {
+        $runningMinutes = [math]::Round(
+            ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $enabledTimeMs) / 60000.0,
+            2
+        )
+    }
+
     return [pscustomobject]@{
         Name = $Name
         Id = $detectorId
         Type = $detectorType
         State = $state
+        EnabledTimeMs = $enabledTimeMs
+        EnabledAtUtc = Convert-EpochMillisecondsToIso -Value $enabledTimeMs
+        RunningMinutes = $runningMinutes
     }
 }
 
@@ -144,6 +187,70 @@ function Assert-DetectorReady {
     }
 
     return $detector
+}
+
+function Add-ExperimentObservation {
+    param(
+        [string]$Scenario,
+        [object]$Detector,
+        [object]$Anomaly,
+        [DateTimeOffset]$FaultStartedAt,
+        [string]$MetricField,
+        [double]$MaxMetricValue,
+        [string]$MetricUnit
+    )
+
+    $executionStartMs = $null
+    if ($Anomaly.PSObject.Properties.Name -contains "execution_start_time") {
+        $executionStartMs = [int64]$Anomaly.execution_start_time
+    }
+
+    $dataEndTimeMs = $null
+    if ($Anomaly.PSObject.Properties.Name -contains "data_end_time") {
+        $dataEndTimeMs = [int64]$Anomaly.data_end_time
+    }
+
+    $runningMinutesAtAnomaly = $null
+    if ($null -ne $Detector.EnabledTimeMs -and $Detector.EnabledTimeMs -gt 0) {
+        $referenceMs = if ($null -ne $executionStartMs -and $executionStartMs -gt 0) {
+            $executionStartMs
+        }
+        else {
+            [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        }
+
+        $runningMinutesAtAnomaly = [math]::Round(
+            ($referenceMs - [int64]$Detector.EnabledTimeMs) / 60000.0,
+            2
+        )
+    }
+
+    $anomalyScore = $null
+    if ($Anomaly.PSObject.Properties.Name -contains "anomaly_score") {
+        $anomalyScore = [double]$Anomaly.anomaly_score
+    }
+
+    $record = [pscustomobject]@{
+        observed_at_utc = [DateTimeOffset]::UtcNow.ToString("o")
+        scenario = $Scenario
+        detector_name = $Detector.Name
+        detector_id = $Detector.Id
+        detector_type = $Detector.Type
+        detector_enabled_at_utc = $Detector.EnabledAtUtc
+        detector_running_minutes_at_anomaly = $runningMinutesAtAnomaly
+        fault_started_at_utc = $FaultStartedAt.UtcDateTime.ToString("o")
+        anomaly_execution_time_utc = Convert-EpochMillisecondsToIso -Value $executionStartMs
+        anomaly_data_end_time_utc = Convert-EpochMillisecondsToIso -Value $dataEndTimeMs
+        anomaly_grade = [math]::Round([double]$Anomaly.anomaly_grade, 6)
+        confidence = [math]::Round([double]$Anomaly.confidence, 6)
+        anomaly_score = if ($null -eq $anomalyScore) { $null } else { [math]::Round($anomalyScore, 6) }
+        metric_field = $MetricField
+        max_metric_value = [math]::Round($MaxMetricValue, 6)
+        metric_unit = $MetricUnit
+    }
+
+    $script:experiments.Add($record) | Out-Null
+    return $record
 }
 
 function Get-IndexDocumentCount {
@@ -414,10 +521,19 @@ function Test-CpuSpike {
             throw "CPU telemetry did not show the expected spike. Max value: $maxCpu"
         }
 
+        $experiment = Add-ExperimentObservation `
+            -Scenario "cpu-spike" `
+            -Detector $detector `
+            -Anomaly $anomaly `
+            -FaultStartedAt $faultStartedAt `
+            -MetricField "docker_container_cpu.usage_percent" `
+            -MaxMetricValue ([double]$maxCpu) `
+            -MetricUnit "%"
+
         Add-Result `
             -Name "cpu-spike" `
             -Status PASS `
-            -Detail ("grade={0:N3}, confidence={1:N3}, max_cpu={2:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$maxCpu)
+            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, max_cpu={3:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, [double]$maxCpu)
     }
     finally {
         Reset-ToBase
@@ -454,10 +570,19 @@ function Test-MemoryLeak {
             throw "RAM telemetry is missing during the memory-leak scenario."
         }
 
+        $experiment = Add-ExperimentObservation `
+            -Scenario "memory-leak" `
+            -Detector $detector `
+            -Anomaly $anomaly `
+            -FaultStartedAt $faultStartedAt `
+            -MetricField "docker_container_mem.usage_percent" `
+            -MaxMetricValue ([double]$maxRam) `
+            -MetricUnit "%"
+
         Add-Result `
             -Name "memory-leak" `
             -Status PASS `
-            -Detail ("grade={0:N3}, confidence={1:N3}, max_ram={2:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$maxRam)
+            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, max_ram={3:N2}%" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, [double]$maxRam)
     }
     finally {
         Reset-ToBase
@@ -491,10 +616,19 @@ function Test-NetworkLatency {
             throw "Network latency telemetry did not show the injected delay. Max value: $maxLatency"
         }
 
+        $experiment = Add-ExperimentObservation `
+            -Scenario "network-latency" `
+            -Detector $detector `
+            -Anomaly $anomaly `
+            -FaultStartedAt $faultStartedAt `
+            -MetricField "network_service_latency.response_time" `
+            -MaxMetricValue ([double]$maxLatency) `
+            -MetricUnit "s"
+
         Add-Result `
             -Name "network-latency" `
             -Status PASS `
-            -Detail ("grade={0:N3}, confidence={1:N3}, max_response_time={2:N3}s" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$maxLatency)
+            -Detail ("grade={0:N3}, confidence={1:N3}, detector_running={2:N2} min, max_response_time={3:N3}s" -f [double]$anomaly.anomaly_grade, [double]$anomaly.confidence, [double]$experiment.detector_running_minutes_at_anomaly, [double]$maxLatency)
     }
     finally {
         Reset-ToBase
@@ -559,20 +693,37 @@ function Save-TestReport {
 
     $timestamp = [DateTimeOffset]::Now.ToString("yyyyMMdd-HHmmss")
     $reportPath = Join-Path $resultsRoot "test-report-$timestamp.json"
+    $historyPath = Join-Path $resultsRoot "detector-confidence-history.csv"
     $reportResults = $script:results.ToArray()
+    $reportExperiments = $script:experiments.ToArray()
 
     $report = [pscustomobject]@{
         selected_test = $Test
         generated_at = [DateTimeOffset]::UtcNow.ToString("o")
         results = $reportResults
+        detector_experiments = $reportExperiments
     }
 
     $report |
         ConvertTo-Json -Depth 20 |
         Set-Content -Path $reportPath -Encoding UTF8
 
+    if ($reportExperiments.Count -gt 0) {
+        if (Test-Path $historyPath) {
+            $reportExperiments |
+                Export-Csv -Path $historyPath -NoTypeInformation -Encoding UTF8 -Append
+        }
+        else {
+            $reportExperiments |
+                Export-Csv -Path $historyPath -NoTypeInformation -Encoding UTF8
+        }
+    }
+
     Write-Host ""
     Write-Host "Report: $reportPath"
+    if ($reportExperiments.Count -gt 0) {
+        Write-Host "Experiment history: $historyPath"
+    }
 }
 
 $failed = $false
