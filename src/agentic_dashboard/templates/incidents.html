@@ -52,12 +52,17 @@
           <td>{{ incident.entity or incident.service }}</td>
           <td>
             <strong>{{ incident.anomaly.metric or 'Unknown signal' }}</strong>
-            <div class="row-subtext">grade {{ incident.anomaly.grade if incident.anomaly.grade is not none else '—' }} · AD conf. {{ incident.anomaly.confidence|confidence }}</div>
+            <div class="row-subtext">
+              grade {{ incident.anomaly.grade if incident.anomaly.grade is defined and incident.anomaly.grade is not none else '—' }} ·
+              AD conf. {{ incident.anomaly.confidence|default(none)|confidence }}
+            </div>
           </td>
           <td class="summary-cell">{{ incident.takeover_reason or 'Pending triage rationale' }}</td>
           <td class="summary-cell">
             {{ incident.diagnosis.summary or 'Diagnosis not completed' }}
-            {% if incident.diagnosis.confidence is not none %}<div class="row-subtext">Diagnosis confidence {{ incident.diagnosis.confidence|confidence }}</div>{% endif %}
+            {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
+            <div class="row-subtext">Diagnosis confidence {{ incident.diagnosis.confidence|confidence }}</div>
+            {% endif %}
           </td>
           <td><span class="status-pill compact status-{{ (incident.status or 'new')|lower|replace('_','-') }}">{{ (incident.status or 'NEW')|replace('_',' ') }}</span></td>
           <td class="muted">{{ incident.updated_at|human_time }}</td>
