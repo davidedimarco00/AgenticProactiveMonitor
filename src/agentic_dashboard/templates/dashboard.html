@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Overview · {{ app_name }}{% endblock %}
+{% block page_title %}Agentic Monitoring Control Room{% endblock %}
+
+{% block content %}
+<section class="hero-grid">
+  <article class="hero-card">
+    <div class="hero-copy">
+      <div class="section-kicker">OPERATIONS OVERVIEW</div>
+      <h2>From anomaly detection to explainable remediation.</h2>
+      <p>
+        The operator sees which anomalies were taken in charge, why the agents investigated them,
+        what evidence was collected during the ReAct loop, and the remediation recommended before any action is executed.
+      </p>
+      <div class="hero-tags">
+        <span>OpenSearch AD</span><span>SPADE / XMPP</span><span>MCP Tools</span><span>RAG</span><span>Local LLM</span>
+      </div>
+    </div>
+    <div class="hero-orbit" aria-hidden="true">
+      <div class="orbit-ring ring-a"></div>
+      <div class="orbit-ring ring-b"></div>
+      <div class="orbit-core">ReAct</div>
+      <div class="orbit-node n1">R</div>
+      <div class="orbit-node n2">A</div>
+      <div class="orbit-node n3">O</div>
+    </div>
+  </article>
+
+  <article class="system-summary-card">
+    <div class="card-heading">
+      <div>
+        <span class="section-kicker">SYSTEM STATUS</span>
+        <h3>Core services</h3>
+      </div>
+      <span class="status-pill {{ 'online' if overall_online else 'degraded' }}">
+        {{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}
+      </span>
+    </div>
+    <div class="service-mini-list" id="service-mini-list">
+      {% for service in services %}
+      <div class="service-mini-row">
+        <div>
+          <strong>{{ service.name }}</strong>
+          <span>{{ service.role }}</span>
+        </div>
+        <span class="health-dot {{ service.status|lower }}"></span>
+      </div>
+      {% endfor %}
+    </div>
+    <a class="text-link" href="/system">Open system health →</a>
+  </article>
+</section>
+
+<section class="metrics-grid" aria-label="Incident summary">
+  <article class="metric-card accent-red">
+    <span class="metric-label">Active incidents</span>
+    <strong class="metric-value" data-metric="active">{{ overview.active }}</strong>
+    <span class="metric-note">{{ overview.critical }} critical now</span>
+  </article>
+  <article class="metric-card accent-blue">
+    <span class="metric-label">Under analysis</span>
+    <strong class="metric-value" data-metric="under_analysis">{{ overview.under_analysis }}</strong>
+    <span class="metric-note">Agentic investigation in progress</span>
+  </article>
+  <article class="metric-card accent-amber">
+    <span class="metric-label">Awaiting operator</span>
+    <strong class="metric-value" data-metric="operator_action">{{ overview.operator_action }}</strong>
+    <span class="metric-note">Remediation decision required</span>
+  </article>
+  <article class="metric-card accent-green">
+    <span class="metric-label">Resolved</span>
+    <strong class="metric-value" data-metric="resolved">{{ overview.resolved }}</strong>
+    <span class="metric-note">Closed incidents in history</span>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel span-2">
+    <div class="card-heading">
+      <div>
+        <span class="section-kicker">RECENT ACTIVITY</span>
+        <h3>Incident queue</h3>
+      </div>
+      <a class="ghost-button" href="/incidents">View all incidents</a>
+    </div>
+
+    {% if incidents %}
+    <div class="incident-table-wrap">
+      <table class="incident-table">
+        <thead>
+          <tr>
+            <th>Incident</th><th>Entity</th><th>Signal</th><th>Severity</th><th>Status</th><th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for incident in incidents %}
+          <tr class="click-row" data-href="/incidents/{{ incident.incident_id }}">
+            <td><strong>{{ incident.incident_id }}</strong></td>
+            <td>{{ incident.entity or incident.service }}</td>
+            <td>{{ incident.anomaly.metric or '—' }}</td>
+            <td><span class="severity {{ (incident.severity or 'medium')|lower }}">{{ incident.severity or 'MEDIUM' }}</span></td>
+            <td><span class="status-pill compact status-{{ (incident.status or 'new')|lower|replace('_','-') }}">{{ (incident.status or 'NEW')|replace('_',' ') }}</span></td>
+            <td class="muted">{{ incident.updated_at|human_time }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-symbol">◇</div>
+      <h4>No incident records yet</h4>
+      <p>The dashboard is ready. Incidents will appear here as soon as the agentic runtime persists them in OpenSearch.</p>
+    </div>
+    {% endif %}
+  </article>
+
+  <article class="panel react-panel">
+    <div class="card-heading">
+      <div>
+        <span class="section-kicker">AGENTIC CORE</span>
+        <h3>ReAct investigation loop</h3>
+      </div>
+      <span class="loop-badge">ITERATIVE</span>
+    </div>
+    <div class="react-loop">
+      <div class="react-step"><span>01</span><div><strong>Reason</strong><small>Evaluate current beliefs and missing evidence.</small></div></div>
+      <div class="react-line"></div>
+      <div class="react-step"><span>02</span><div><strong>Act</strong><small>Select and invoke the next diagnostic tool.</small></div></div>
+      <div class="react-line"></div>
+      <div class="react-step"><span>03</span><div><strong>Observe</strong><small>Capture tool output and environment feedback.</small></div></div>
+      <div class="react-line"></div>
+      <div class="react-step"><span>04</span><div><strong>Update</strong><small>Revise beliefs, hypothesis and next intention.</small></div></div>
+    </div>
+    <div class="loop-footer">Repeat until evidence is sufficient for a diagnosis or escalation.</div>
+  </article>
+</section>
+
+<section class="pipeline-panel panel">
+  <div class="card-heading">
+    <div>
+      <span class="section-kicker">HUMAN-IN-THE-LOOP WORKFLOW</span>
+      <h3>Incident lifecycle</h3>
+    </div>
+    <span class="muted small">Autonomous execution intentionally disabled</span>
+  </div>
+  <div class="pipeline">
+    <div class="pipeline-stage"><span>01</span><strong>Detect</strong><small>Single-entity OpenSearch detector</small></div>
+    <div class="pipeline-arrow">→</div>
+    <div class="pipeline-stage"><span>02</span><strong>Take in charge</strong><small>Explain why investigation starts</small></div>
+    <div class="pipeline-arrow">→</div>
+    <div class="pipeline-stage active"><span>03</span><strong>Investigate</strong><small>ReAct + MCP + RAG evidence</small></div>
+    <div class="pipeline-arrow">→</div>
+    <div class="pipeline-stage"><span>04</span><strong>Diagnose</strong><small>Cause, evidence and confidence</small></div>
+    <div class="pipeline-arrow">→</div>
+    <div class="pipeline-stage"><span>05</span><strong>Recommend</strong><small>Precise operator remediation</small></div>
+  </div>
+</section>
+{% endblock %}
