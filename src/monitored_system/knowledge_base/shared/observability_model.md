@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.shared.observability-model
-version: 3
+version: 4
 domain: monitored_system
 document_type: observability
-agents: [evidence, reasoning, critic]
+roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+domains: [observability, metrics, logs, network, containers]
 services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
 incident_types: [cpu, memory, network-latency, application-latency, availability]
 source_files: [src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/infrastructure/fluent-bit.conf, src/monitored_system/docker-compose.yml, src/monitored_system/src/common/logging_utils.py, src/infrastructure/opensearch/init/create-anomaly-detectors.sh]
