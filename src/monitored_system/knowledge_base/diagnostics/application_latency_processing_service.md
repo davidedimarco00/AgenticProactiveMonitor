@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.diagnostic.application-latency-processing-service
-version: 1
+version: 2
 domain: monitored_system
 document_type: diagnostic-guide
-agents: [evidence, reasoning, critic]
+roles: [application_engineer, software_developer, system_engineer, technical_lead]
+domains: [application, latency, dependencies, logs, cpu]
 services: [traffic-generator, api-gateway, processing-service, data-service]
 incident_types: [application-latency, performance]
 source_files: [src/monitored_system/src/api-gateway/app.py, src/monitored_system/src/processing-service/app.py, src/monitored_system/src/data-service/app.py, src/monitored_system/src/traffic-generator/generator.py, src/monitored_system/infrastructure/telegraf.conf]
