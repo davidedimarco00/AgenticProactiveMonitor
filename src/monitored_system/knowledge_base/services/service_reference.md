@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.services.reference
-version: 3
+version: 4
 domain: monitored_system
 document_type: service-reference
-agents: [coordinator, evidence, reasoning, critic, remediation]
+roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+domains: [services, dependencies, api, logs, network]
 services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
 incident_types: [cpu, memory, network-latency, application-latency, availability]
 source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/src/api-gateway/app.py, src/monitored_system/src/processing-service/app.py, src/monitored_system/src/data-service/app.py, src/monitored_system/src/traffic-generator/generator.py, src/monitored_system/infrastructure/entrypoint.sh, src/monitored_system/infrastructure/telegraf.conf]
@@ -86,7 +87,7 @@ Downstream dependency:
 data-service:8000
 ```
 
-The service handles note operations and forwards persistence work to `data-service`.
+The service validates note payloads and forwards persistence work to `data-service`.
 
 Important logs:
 
