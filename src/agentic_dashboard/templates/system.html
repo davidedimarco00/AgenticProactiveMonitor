@@ -19,7 +19,7 @@
   {% for service in services %}
   <article class="health-card">
     <div class="health-card-top">
-      <div class="health-icon">{{ loop.index|string|zfill(2) if false else '0' ~ loop.index }}</div>
+      <div class="health-icon">{{ '%02d'|format(loop.index) }}</div>
       <span class="status-pill compact {{ 'online' if service.status == 'ONLINE' else 'degraded' }}">{{ service.status }}</span>
     </div>
     <h3>{{ service.name }}</h3>
