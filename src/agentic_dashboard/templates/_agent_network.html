@@ -1,0 +1,61 @@
+<section class="agent-network-card panel">
+  <div class="section-header compact">
+    <div>
+      <span class="eyebrow">AGENT TEAM</span>
+      <h2>Team activity</h2>
+      <p class="section-description">Live operational view of the specialised SPADE agents.</p>
+    </div>
+    <div class="network-state-block">
+      <span class="label">Team state</span>
+      <strong id="team-activity-state" class="activity-state {{ 'working' if team.working else 'idle' }}">{{ team.state }}</strong>
+      <small id="team-active-incidents">{{ team.active_incidents }} incident{{ '' if team.active_incidents == 1 else 's' }} under investigation</small>
+    </div>
+  </div>
+
+  <div class="agent-network {{ 'working' if team.working else 'idle' }}" id="agent-network" aria-label="Agent team network">
+    <svg class="agent-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="50" y1="50" x2="19" y2="24"></line>
+      <line x1="50" y1="50" x2="81" y2="24"></line>
+      <line x1="50" y1="50" x2="19" y2="76"></line>
+      <line x1="50" y1="50" x2="81" y2="76"></line>
+      <line class="peer-link" x1="19" y1="24" x2="81" y2="24"></line>
+      <line class="peer-link" x1="81" y1="24" x2="81" y2="76"></line>
+      <line class="peer-link" x1="81" y1="76" x2="19" y2="76"></line>
+      <line class="peer-link" x1="19" y1="76" x2="19" y2="24"></line>
+    </svg>
+
+    {% set positions = {
+      'coordinator': 'center',
+      'evidence': 'top-left',
+      'reasoning': 'top-right',
+      'critic': 'bottom-right',
+      'remediation': 'bottom-left'
+    } %}
+    {% set initials = {
+      'coordinator': 'CO',
+      'evidence': 'EV',
+      'reasoning': 'RE',
+      'critic': 'CR',
+      'remediation': 'RM'
+    } %}
+
+    {% for agent in team.members %}
+    <article class="agent-node {{ positions.get(agent.key, 'center') }} {{ agent.activity|lower }}" data-agent-jid="{{ agent.jid }}">
+      <div class="agent-circle">
+        <span class="agent-initials">{{ initials.get(agent.key, agent.name[:2]|upper) }}</span>
+        <span class="agent-presence-dot"></span>
+      </div>
+      <div class="agent-node-copy">
+        <strong>{{ agent.name }}</strong>
+        <small>{{ agent.role }}</small>
+        <span class="activity-pill {{ agent.activity|lower }}" data-agent-activity>{{ agent.activity }}</span>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+
+  <div class="network-legend" aria-label="Agent state legend">
+    <span><i class="legend-dot working"></i> Working</span>
+    <span><i class="legend-dot idle"></i> Idle</span>
+  </div>
+</section>
