@@ -2,6 +2,20 @@
 
 Flask-based operator interface for the thesis prototype. The dashboard is intentionally separated from the agentic control loop: it observes and presents incident and agent activity state, while the SPADE agents remain responsible for autonomous investigation.
 
+## Virtual operations team
+
+The operator-facing dashboard presents the multi-agent system as a realistic IT technical team instead of exposing implementation-oriented names such as `EvidenceAgent` or `ReasoningAgent`.
+
+The current dashboard roles are:
+
+- **Technical Lead** — incident triage, coordination and critical review;
+- **System Engineer** — Linux, containers, host resources and runtime diagnostics;
+- **Network Engineer** — connectivity, latency, network paths and traffic analysis;
+- **Application Engineer** — service health, application logs and dependency diagnosis;
+- **Software Developer** — code behaviour, defects and application-level corrective guidance.
+
+The visual model is deliberately role-oriented because this is the abstraction the operator should understand. The current prototype runtime still uses the legacy XMPP identities `coordinator@xmpp`, `evidence@xmpp`, `critic@xmpp`, `reasoning@xmpp` and `remediation@xmpp`. The dashboard contains a temporary compatibility mapping so that the UI can already use the target enterprise roles without changing the agent runtime in this branch. When the agentic system is refactored to the new roles, this compatibility layer can be removed.
+
 ## What the operator can inspect
 
 - incidents taken in charge and their current lifecycle state;
@@ -10,8 +24,8 @@ Flask-based operator interface for the thesis prototype. The dashboard is intent
 - final diagnosis, supporting evidence and diagnosis confidence;
 - remediation recommendation, verification steps and operational risks;
 - live health of OpenSearch, Qdrant, MCP Server, Prosody/XMPP and Ollama;
-- the specialised agent network and current `WORKING` / `IDLE` state;
-- per-agent operational activity: timestamp, action, caller, reason, tool/outcome and incident.
+- the virtual technical team and current `WORKING` / `IDLE` state;
+- per-role operational activity: timestamp, action, caller, reason, tool/outcome and incident.
 
 The interface does **not** store or display raw private model chain-of-thought. Agent observability records only expose concise operational rationale and externally observable actions useful for audit and troubleshooting.
 
@@ -69,19 +83,20 @@ Incident endpoints:
 
 Agent observability endpoints:
 
-- `GET /api/agent-events?agent_jid=reasoning@xmpp`
+- `GET /api/agent-events?agent_jid=<runtime-jid>`
 - `POST /api/agent-events`
 - `GET /api/agents/<agent_jid>/activity`
 
-Each agent can publish a structured event whenever it is invoked, selects a tool, receives a delegated task, completes an operation or hands control to another agent. Example payload:
+Each agent can publish a structured event whenever it is invoked, selects a tool, receives a delegated task, completes an operation or hands control to another agent. Example payload using the current compatibility identity for the System Engineer:
 
 ```json
 {
   "agent_jid": "evidence@xmpp",
+  "agent_name": "System Engineer",
   "timestamp": "2026-08-10T12:32:12+00:00",
   "action": "Validate runtime CPU saturation",
   "called_by": "coordinator@xmpp",
-  "reason": "The OpenSearch anomaly must be confirmed against live telemetry.",
+  "reason": "The Technical Lead requires host and container evidence before involving application specialists.",
   "incident_id": "INC-001",
   "tool": "get_runtime_stats",
   "status": "COMPLETED",
@@ -93,27 +108,28 @@ The `reason` field is an operational explanation for the action, not raw hidden 
 
 ## Load the thesis demo incident
 
-`examples/demo-incident.json` includes both the incident and a complete multi-agent activity trace. From `src/infrastructure` in PowerShell:
+`examples/demo-incident.json` includes both the incident and a complete cross-role activity trace. From `src/infrastructure` in PowerShell:
 
 ```powershell
 $body = Get-Content "..\agentic_dashboard\examples\demo-incident.json" -Raw
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5050/api/incidents" -ContentType "application/json; charset=utf-8" -Body $body
 ```
 
-The incident POST also persists the embedded `agent_events` into the dedicated agent-event OpenSearch index. After loading the demo, select any agent in the network to inspect its activity window.
+The incident POST also persists the embedded `agent_events` into the dedicated agent-event OpenSearch index. After loading the demo, select Technical Lead, System Engineer, Network Engineer, Application Engineer or Software Developer in the team graph to inspect the corresponding activity window.
 
 ## Current autonomy boundary
 
-The thesis baseline follows a human-in-the-loop model:
+The dashboard reflects a human-in-the-loop operating model:
 
 ```text
 OpenSearch anomaly
-      -> agent takes incident in charge
-      -> ReAct investigation
-         Reason -> Act/tool -> Observe -> update -> repeat
+      -> Technical Lead triage
+      -> specialist investigation / consultation
+      -> cross-role evidence collection
+      -> Technical Lead critical review
       -> explainable diagnosis
       -> remediation recommendation
       -> operator decision
 ```
 
-Automatic remediation execution is intentionally not part of this dashboard. A future `ExecutionAgent` can be added later without changing the operator-facing incident or observability model.
+The exact specialist path is not meant to be a fixed pipeline. In the final agentic runtime, specialists can be involved dynamically according to the anomaly and the evidence collected during the investigation.
