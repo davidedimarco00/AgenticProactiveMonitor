@@ -3,7 +3,7 @@
     <div>
       <span class="eyebrow">AGENT TEAM</span>
       <h2>Team activity</h2>
-      <p class="section-description">Live operational view of the specialised SPADE agents.</p>
+      <p class="section-description">Select an agent to inspect its operational activity log.</p>
     </div>
     <div class="network-state-block">
       <span class="label">Team state</span>
@@ -31,31 +31,92 @@
       'critic': 'bottom-right',
       'remediation': 'bottom-left'
     } %}
-    {% set initials = {
-      'coordinator': 'CO',
-      'evidence': 'EV',
-      'reasoning': 'RE',
-      'critic': 'CR',
-      'remediation': 'RM'
-    } %}
 
     {% for agent in team.members %}
-    <article class="agent-node {{ positions.get(agent.key, 'center') }} {{ agent.activity|lower }}" data-agent-jid="{{ agent.jid }}">
-      <div class="agent-circle">
-        <span class="agent-initials">{{ initials.get(agent.key, agent.name[:2]|upper) }}</span>
+    <button
+      type="button"
+      class="agent-node {{ positions.get(agent.key, 'center') }} {{ agent.activity|lower }}"
+      data-agent-jid="{{ agent.jid }}"
+      data-agent-name="{{ agent.name }}"
+      data-agent-role="{{ agent.role }}"
+      aria-label="Open observability log for {{ agent.name }} agent"
+    >
+      <span class="agent-avatar" aria-hidden="true">
+        <img src="{{ url_for('static', filename='img/agent-mark.svg') }}" alt="">
         <span class="agent-presence-dot"></span>
-      </div>
-      <div class="agent-node-copy">
+      </span>
+      <span class="agent-node-copy">
         <strong>{{ agent.name }}</strong>
         <small>{{ agent.role }}</small>
         <span class="activity-pill {{ agent.activity|lower }}" data-agent-activity>{{ agent.activity }}</span>
-      </div>
-    </article>
+      </span>
+    </button>
     {% endfor %}
   </div>
 
   <div class="network-legend" aria-label="Agent state legend">
     <span><i class="legend-dot working"></i> Working</span>
     <span><i class="legend-dot idle"></i> Idle</span>
+    <span class="network-help">Click an agent to inspect actions, caller and rationale.</span>
   </div>
 </section>
+
+<div class="agent-modal" id="agent-observability-modal" hidden>
+  <div class="agent-modal-backdrop" data-agent-modal-close></div>
+  <section class="agent-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-modal-name">
+    <header class="agent-modal-header">
+      <div class="agent-modal-identity">
+        <span class="agent-modal-logo" aria-hidden="true">
+          <img src="{{ url_for('static', filename='img/agent-mark.svg') }}" alt="">
+        </span>
+        <div>
+          <span class="eyebrow">AGENT OBSERVABILITY</span>
+          <h2 id="agent-modal-name">Agent</h2>
+          <p><span id="agent-modal-jid">—</span> · <span id="agent-modal-role">—</span></p>
+        </div>
+      </div>
+      <div class="agent-modal-actions">
+        <span class="activity-pill idle" id="agent-modal-state">IDLE</span>
+        <button type="button" class="icon-button" id="agent-modal-refresh" aria-label="Refresh agent log">↻</button>
+        <button type="button" class="icon-button" data-agent-modal-close aria-label="Close agent log">×</button>
+      </div>
+    </header>
+
+    <div class="agent-modal-summary">
+      <div><span>Recorded events</span><strong id="agent-event-count">0</strong></div>
+      <div><span>Last activity</span><strong id="agent-last-activity">—</strong></div>
+      <div><span>Current incident</span><strong id="agent-current-incident">—</strong></div>
+    </div>
+
+    <div class="agent-log-shell">
+      <div class="agent-log-title">
+        <div>
+          <h3>Operational activity log</h3>
+          <p>Actions exposed by the agent runtime for operator audit and observability.</p>
+        </div>
+        <span id="agent-log-loading" class="agent-log-loading" hidden>Loading…</span>
+      </div>
+
+      <div class="agent-log-table-wrap">
+        <table class="agent-log-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Called by</th>
+              <th>Why</th>
+              <th>Tool / Outcome</th>
+              <th>Incident</th>
+            </tr>
+          </thead>
+          <tbody id="agent-log-body"></tbody>
+        </table>
+      </div>
+
+      <div class="agent-log-empty" id="agent-log-empty" hidden>
+        <strong>No activity recorded for this agent yet.</strong>
+        <p>The runtime can publish structured events through the dashboard agent-observability API.</p>
+      </div>
+    </div>
+  </section>
+</div>
