@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.diagnostic.cpu-saturation-processing-service
-version: 1
+version: 2
 domain: monitored_system
 document_type: diagnostic-guide
-agents: [evidence, reasoning, critic]
+roles: [system_engineer, application_engineer, software_developer, technical_lead]
+domains: [cpu, containers, runtime, application-performance]
 services: [processing-service]
 incident_types: [cpu, resource-exhaustion]
 source_files: [src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/docker-compose.yml, src/monitored_system/src/processing-service/app.py]
