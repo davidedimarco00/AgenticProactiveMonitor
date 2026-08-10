@@ -1,9 +1,10 @@
 ---
 kb_id: monitored-system.diagnostic.memory-pressure-worker-service
-version: 1
+version: 2
 domain: monitored_system
 document_type: diagnostic-guide
-agents: [evidence, reasoning, critic]
+roles: [system_engineer, technical_lead]
+domains: [memory, containers, runtime, resource-exhaustion]
 services: [worker-service]
 incident_types: [memory, resource-exhaustion]
 source_files: [src/monitored_system/infrastructure/telegraf.conf, src/monitored_system/docker-compose.yml, src/monitored_system/infrastructure/entrypoint.sh]
