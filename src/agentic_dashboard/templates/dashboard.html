@@ -9,67 +9,34 @@
     <div>
       <span class="label">Agentic system</span>
       <strong id="system-overall-state">{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</strong>
+      <small>Core monitoring, reasoning and diagnostic services</small>
     </div>
   </div>
 
   <div class="service-strip" id="service-strip">
     {% for service in services %}
-    <div class="service-state" data-service-name="{{ service.name }}">
+    <div class="service-state" data-service-name="{{ service.name }}" title="{{ service.role }}">
       <span class="status-dot small {{ service.status|lower }}"></span>
       <span>{{ service.name }}</span>
     </div>
     {% endfor %}
   </div>
-
-  <div class="team-summary">
-    <span class="label">Agent team</span>
-    <strong id="team-activity-state" class="activity-state {{ 'working' if team.working else 'idle' }}">
-      {{ team.state }}
-    </strong>
-    <small id="team-active-incidents">
-      {{ team.active_incidents }} incident{{ '' if team.active_incidents == 1 else 's' }} under investigation
-    </small>
-  </div>
 </section>
 
-<details class="panel team-panel">
-  <summary>
-    <span>
-      <strong>Agent team</strong>
-      <small>{{ team.members|length }} specialised agents</small>
-    </span>
-    <span class="summary-hint">Show team</span>
-  </summary>
-  <div class="team-table-wrap">
-    <table class="simple-table team-table">
-      <thead>
-        <tr><th>Agent</th><th>Role</th><th>Activity</th></tr>
-      </thead>
-      <tbody>
-        {% for agent in team.members %}
-        <tr data-agent-jid="{{ agent.jid }}">
-          <td><strong>{{ agent.name }}</strong><small>{{ agent.jid }}</small></td>
-          <td>{{ agent.role }}</td>
-          <td><span class="activity-pill {{ agent.activity|lower }}" data-agent-activity>{{ agent.activity }}</span></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</details>
+{% include "_agent_network.html" %}
 
 <section class="panel incidents-panel">
   <div class="section-header">
     <div>
       <span class="eyebrow">INCIDENT HISTORY</span>
       <h2>Incidents</h2>
-      <p>
+      <p class="section-description">
         {{ overview.active }} active · {{ overview.operator_action }} awaiting operator action · {{ overview.resolved }} resolved
       </p>
     </div>
     <div class="table-tools">
-      <input id="incident-search" class="search-input" type="search" placeholder="Search incidents">
-      <a class="secondary-button" href="/incidents">Filters</a>
+      <input id="incident-search" class="search-input" type="search" placeholder="Search incident, target or diagnosis" aria-label="Search incidents">
+      <a class="secondary-button" href="/incidents">Advanced filters</a>
     </div>
   </div>
 
