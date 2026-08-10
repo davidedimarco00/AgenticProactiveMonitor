@@ -1,0 +1,122 @@
+{
+  "incident_id": "DEMO-CPU-001",
+  "created_at": "2026-08-10T12:32:10+00:00",
+  "status": "OPERATOR_ACTION_REQUIRED",
+  "severity": "HIGH",
+  "entity": "processing-service",
+  "service": "processing-service",
+  "machine_role": "backend-processing",
+  "host_id": "processing-service",
+  "takeover_reason": "The single-entity CPU detector reported a high-grade deviation with sufficient confidence and the abnormal CPU level persisted across consecutive observations, so the anomaly was accepted for autonomous investigation.",
+  "takeover_factors": [
+    "OpenSearch anomaly grade 1.0",
+    "AD confidence above triage threshold",
+    "CPU deviation persisted",
+    "Monitored backend service affected"
+  ],
+  "anomaly": {
+    "detector_id": "Dlkh4p8BVlYqtOWfwgBF",
+    "metric": "docker_container_cpu.usage_percent",
+    "grade": 1.0,
+    "confidence": 0.7633,
+    "observed_value": 391.81,
+    "baseline_value": 18.2
+  },
+  "agentic": {
+    "current_agent": "reasoning@xmpp",
+    "iterations": 4,
+    "loop": "ReAct"
+  },
+  "timeline": [
+    {
+      "timestamp": "2026-08-10T12:32:12+00:00",
+      "phase": "Reason → Act",
+      "action": "Validate whether the anomaly reflects real runtime CPU saturation.",
+      "tool": "get_runtime_stats",
+      "observation": "processing-service CPU is approximately 392%; memory usage is stable and the container remains running.",
+      "decision_rationale": "The OpenSearch signal is confirmed at runtime. More evidence is required to distinguish workload saturation from an application fault."
+    },
+    {
+      "timestamp": "2026-08-10T12:32:16+00:00",
+      "phase": "Reason → Act",
+      "action": "Inspect recent application logs for exceptions, crash loops or repeated failures.",
+      "tool": "get_logs",
+      "observation": "No critical application error is present. Processing requests continue successfully while CPU remains saturated.",
+      "decision_rationale": "The absence of application errors reduces the likelihood of an exception-driven failure. Workload behaviour should be investigated next."
+    },
+    {
+      "timestamp": "2026-08-10T12:32:20+00:00",
+      "phase": "Reason → Act",
+      "action": "Retrieve service-specific troubleshooting knowledge for sustained processing CPU saturation.",
+      "tool": "search_knowledge",
+      "observation": "The service knowledge base identifies abnormal request volume and CPU-bound processing loops as primary checks when high CPU occurs without memory pressure or error logs.",
+      "decision_rationale": "The retrieved runbook supports a workload hypothesis, but current telemetry must confirm that traffic increased."
+    },
+    {
+      "timestamp": "2026-08-10T12:32:24+00:00",
+      "phase": "Reason → Act",
+      "action": "Correlate CPU behaviour with recent service workload metrics.",
+      "tool": "get_metrics",
+      "observation": "The processing workload increased sharply during the same time window in which CPU rose from the normal baseline to sustained saturation.",
+      "decision_rationale": "Metric correlation, healthy memory and the absence of application errors provide sufficient evidence for a workload-induced CPU saturation diagnosis.",
+      "outcome": "Evidence threshold reached; investigation can terminate with an explainable diagnosis."
+    }
+  ],
+  "diagnosis": {
+    "summary": "The processing-service is CPU-saturated because of an abnormal increase in processing workload rather than an application crash or memory-related failure.",
+    "confidence": 0.88,
+    "evidence": [
+      "Runtime CPU confirmed at approximately 392%, far above the normal baseline.",
+      "Memory remained stable during the anomaly.",
+      "Recent application logs contained no critical exceptions or crash-loop evidence.",
+      "Workload growth was temporally correlated with the CPU increase.",
+      "Service-specific RAG documentation identifies workload saturation as the expected troubleshooting path for this signal combination."
+    ],
+    "alternatives": [
+      {
+        "name": "Memory pressure or leak",
+        "status": "REJECTED",
+        "reason": "Memory usage remained stable and no memory-pressure evidence was observed."
+      },
+      {
+        "name": "Application exception loop",
+        "status": "UNLIKELY",
+        "reason": "No repeated errors or crash-loop messages were present in recent application logs."
+      }
+    ]
+  },
+  "remediation": {
+    "summary": "Reduce the abnormal input workload first, verify CPU recovery, and restart processing-service only if saturation persists after workload normalization.",
+    "steps": [
+      {
+        "title": "Confirm the active CPU saturation",
+        "description": "From the Windows host, capture the current container resource snapshot before changing the workload.",
+        "command": "docker stats processing-service --no-stream"
+      },
+      {
+        "title": "Inspect and reduce the abnormal workload",
+        "description": "Check the traffic-generator scenario and stop or return it to the normal profile if the increase is not expected.",
+        "command": "docker compose stop traffic-generator"
+      },
+      {
+        "title": "Observe recovery before restarting",
+        "description": "Wait for the processing queue to drain and confirm that CPU returns close to its learned baseline."
+      },
+      {
+        "title": "Restart only if saturation persists",
+        "description": "If CPU remains abnormally high after workload normalization, restart processing-service and continue monitoring for recurrence.",
+        "command": "docker compose restart processing-service"
+      }
+    ],
+    "verification": [
+      "processing-service CPU returns close to the normal learned range",
+      "request processing remains successful after workload normalization",
+      "no new high-grade CPU anomaly is generated by the single-entity detector",
+      "application logs remain free of new critical errors"
+    ],
+    "risks": [
+      "Stopping the traffic generator changes the workload and should be done only when the current traffic increase is not intentional.",
+      "Restarting processing-service can interrupt in-flight processing and should remain a secondary action after workload reduction."
+    ]
+  }
+}
