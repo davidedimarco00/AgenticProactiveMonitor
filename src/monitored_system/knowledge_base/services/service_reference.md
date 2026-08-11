@@ -1,12 +1,37 @@
 ---
 kb_id: monitored-system.services.reference
-version: 2
+version: 4
 domain: monitored_system
 document_type: service-reference
-agents: [coordinator, evidence, reasoning, critic, remediation]
-services: [traffic-generator, api-gateway, processing-service, data-service, worker-service]
-incident_types: [cpu, memory, network-latency, application-latency, availability]
-source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/src/api-gateway/app.py, src/monitored_system/src/processing-service/app.py, src/monitored_system/src/data-service/app.py, src/monitored_system/src/traffic-generator/generator.py, src/monitored_system/infrastructure/entrypoint.sh, src/monitored_system/infrastructure/telegraf.conf]
+roles:
+  [
+    technical_lead,
+    system_engineer,
+    network_engineer,
+    application_engineer,
+    software_developer,
+  ]
+domains: [services, dependencies, api, logs, network]
+services:
+  [
+    traffic-generator,
+    api-gateway,
+    processing-service,
+    data-service,
+    worker-service,
+  ]
+incident_types:
+  [cpu, memory, network-latency, application-latency, availability]
+source_files:
+  [
+    src/monitored_system/docker-compose.yml,
+    src/monitored_system/src/api-gateway/app.py,
+    src/monitored_system/src/processing-service/app.py,
+    src/monitored_system/src/data-service/app.py,
+    src/monitored_system/src/traffic-generator/generator.py,
+    src/monitored_system/infrastructure/entrypoint.sh,
+    src/monitored_system/infrastructure/telegraf.conf,
+  ]
 ---
 
 # Service Reference
@@ -22,7 +47,11 @@ Important logs:
 - `synthetic_user_action_completed`
 - `synthetic_user_action_failed`
 
-Direct application target: `api-gateway:5000`.
+Direct application target:
+
+```text
+api-gateway:5000
+```
 
 Active network-service probe:
 
@@ -31,9 +60,7 @@ target: api-gateway:5000
 path:   /notes/new
 ```
 
-This is one of the three critical NETLAT source/link detectors.
-
-A traffic-generator failure is usually a symptom source. When it reports errors, inspect the downstream chain before declaring the generator as root cause.
+Failures reported by the traffic generator can be symptoms of downstream problems. The request path should be inspected before assigning the root cause to this component.
 
 ## api-gateway
 
@@ -41,7 +68,11 @@ Purpose: Flask web interface and upstream gateway.
 
 Host port: 8080. Container port: 5000.
 
-Downstream: `processing-service:8000`.
+Downstream dependency:
+
+```text
+processing-service:8000
+```
 
 Important endpoints:
 
@@ -66,9 +97,7 @@ target: processing-service:8000
 path:   /docs
 ```
 
-This is one of the three critical NETLAT source/link detectors. `api-gateway` also has `NET_ADMIN` because it is the source used by the controlled `tc/netem` network-latency scenario.
-
-If processing-service is unreachable, the gateway can return HTTP 503.
+If `processing-service` is unreachable or fails to answer correctly, api-gateway can return HTTP 503. Such an error can therefore be a propagated symptom rather than a gateway root cause.
 
 ## processing-service
 
@@ -76,19 +105,19 @@ Purpose: FastAPI application layer for note operations.
 
 Host port: 8002. Container port: 8000.
 
-Downstream: `data-service:8000`.
+Downstream dependency:
 
-It validates note payloads and forwards health, list, get, create, update and delete requests. It also supports the controlled application-delay fault through `/var/run/monitored-faults/processing-delay-ms`.
+```text
+data-service:8000
+```
+
+The service validates note payloads and forwards persistence work to `data-service`.
 
 Important logs:
 
 - `downstream_request_completed`
 - `data_service_unavailable`
-- `fault_delay_applied`
-- `notes_listed`
-- `note_created`
-- `note_updated`
-- `note_deleted`
+- note-operation events such as `notes_listed`, `note_created`, `note_updated` and `note_deleted`
 
 Active network-service probe:
 
@@ -97,9 +126,7 @@ target: data-service:8000
 path:   /docs
 ```
 
-This is one of the three critical NETLAT source/link detectors.
-
-This service is the target of the CPU-spike and high-application-latency scenarios.
+High resource usage, local processing delay or downstream failures can all affect request latency. Network evidence and data-service evidence should be checked before attributing slow requests to processing-service itself.
 
 ## data-service
 
@@ -107,7 +134,13 @@ Purpose: persistence layer.
 
 Host port: 8003. Container port: 8000.
 
-Storage: SQLite database at `/var/lib/notes/notes.db` on the persistent `notes-data` volume.
+Storage:
+
+```text
+/var/lib/notes/notes.db
+```
+
+The SQLite database is stored on the persistent `notes-data` Docker volume.
 
 Important endpoints:
 
@@ -118,42 +151,41 @@ Important endpoints:
 - `PUT /notes/{id}`
 - `DELETE /notes/{id}`
 
-Important logs include `note_created`, `note_read`, `note_updated`, `note_deleted`, `notes_listed` and `note_not_found`.
+Important logs include:
 
-Active diagnostic network-service probe:
+- `note_created`
+- `note_read`
+- `note_updated`
+- `note_deleted`
+- `notes_listed`
+- `note_not_found`
 
-```text
-target: processing-service:8000
-path:   /docs
-```
-
-This probe is collected as telemetry but is not one of the three configured NETLAT detectors.
-
-If this service is unavailable, failures propagate to processing-service and then upstream.
+If this service becomes unavailable, errors can propagate first to `processing-service`, then to `api-gateway`, and finally to the synthetic client.
 
 ## worker-service
 
-Purpose: independent synthetic background node.
+Purpose: independent background workload.
 
-It runs the generic synthetic workload from the monitored container entrypoint rather than a Notes HTTP API. It emits synthetic application events and system heartbeats. It is intentionally not part of the request chain.
+`worker-service` does not participate in the Notes HTTP request chain. It emits its own application events and system heartbeats and is monitored as an independent service.
 
-Active diagnostic network-service probe:
-
-```text
-target: api-gateway:5000
-path:   /notes/new
-```
-
-This probe is collected as telemetry but is not one of the three configured NETLAT detectors.
-
-This service is the target of the controlled memory-leak scenario. High worker memory should not be interpreted as direct proof of a Notes request-path failure.
+Its telemetry should normally be interpreted locally. A resource anomaly on worker-service is not sufficient evidence of a Notes request-path fault unless other live evidence shows shared resource contention or impact on additional services.
 
 ## Network probe naming
 
-All service probes above are stored using the Telegraf measurement:
+Active service probes are stored using the Telegraf measurement:
 
 ```text
 network_service_latency
 ```
 
-The main timing field is `network_service_latency.response_time`; `network_service_latency.result_code` provides probe-status evidence.
+The main timing field is:
+
+```text
+network_service_latency.response_time
+```
+
+Probe outcome is available in:
+
+```text
+network_service_latency.result_code
+```

@@ -1,14 +1,30 @@
-version: 1
+version: 3
 domain: monitored_system
 system: notes-platform
 branch: feature/monitored_system
+purpose: diagnostic-rag
 
-agent_roles:
-  - coordinator
-  - evidence
-  - reasoning
-  - critic
-  - remediation
+roles:
+  - technical_lead
+  - system_engineer
+  - network_engineer
+  - application_engineer
+  - software_developer
+
+role_profiles:
+  technical_lead:
+    preferred_domains: [architecture, observability, diagnostics, dependencies]
+  system_engineer:
+    preferred_domains:
+      [infrastructure, runtime, containers, cpu, memory, disk, processes]
+  network_engineer:
+    preferred_domains: [network, connectivity, latency, probes, ports]
+  application_engineer:
+    preferred_domains:
+      [application, services, dependencies, health, logs, latency]
+  software_developer:
+    preferred_domains:
+      [software, api, validation, error-handling, persistence, application-logs]
 
 services:
   - traffic-generator
@@ -17,43 +33,91 @@ services:
   - data-service
   - worker-service
 
+excluded_sources:
+  - src/monitored_system/infrastructure/tests/**
+  - src/monitored_system/infrastructure/scenarios/**
+  - src/agentic_system/**
+
+exclusion_reason: >
+  Test-suite files, controlled fault-injection ground truth and agent-runtime
+  implementation details must not be embedded in the monitored-system knowledge
+  base because they can leak evaluation answers or implementation policy into
+  diagnosis.
+
 documents:
   - path: shared/system_architecture.md
-    agents: [coordinator, evidence, reasoning, critic, remediation]
+    roles:
+      [
+        technical_lead,
+        system_engineer,
+        network_engineer,
+        application_engineer,
+        software_developer,
+      ]
     document_type: architecture
   - path: shared/observability_model.md
-    agents: [evidence, reasoning, critic]
+    roles:
+      [
+        technical_lead,
+        system_engineer,
+        network_engineer,
+        application_engineer,
+        software_developer,
+      ]
     document_type: observability
-  - path: agents/coordinator_context.md
-    agents: [coordinator]
-    document_type: agent-context
-  - path: agents/evidence_collection.md
-    agents: [evidence]
-    document_type: agent-context
-  - path: agents/reasoning_diagnosis.md
-    agents: [reasoning]
-    document_type: agent-context
-  - path: agents/critic_validation.md
-    agents: [critic]
-    document_type: agent-context
-  - path: agents/remediation_policy.md
-    agents: [remediation]
-    document_type: agent-context
   - path: services/service_reference.md
-    agents: [coordinator, evidence, reasoning, critic, remediation]
+    roles:
+      [
+        technical_lead,
+        system_engineer,
+        network_engineer,
+        application_engineer,
+        software_developer,
+      ]
     document_type: service-reference
-  - path: runbooks/cpu_spike_processing_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/memory_leak_worker_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/network_latency_api_gateway_processing_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/high_application_latency_processing_service.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
-  - path: runbooks/data_service_down.md
-    agents: [evidence, reasoning, critic, remediation]
-    document_type: incident-runbook
+  - path: domains/infrastructure_runtime.md
+    roles: [system_engineer, technical_lead]
+    document_type: domain-reference
+  - path: domains/network_connectivity.md
+    roles: [network_engineer, technical_lead, application_engineer]
+    document_type: domain-reference
+  - path: domains/application_operations.md
+    roles: [application_engineer, technical_lead, software_developer]
+    document_type: domain-reference
+  - path: domains/software_behavior.md
+    roles: [software_developer, application_engineer]
+    document_type: domain-reference
+  - path: diagnostics/cpu_saturation_processing_service.md
+    roles:
+      [
+        system_engineer,
+        application_engineer,
+        software_developer,
+        technical_lead,
+      ]
+    document_type: diagnostic-guide
+  - path: diagnostics/memory_pressure_worker_service.md
+    roles: [system_engineer, technical_lead]
+    document_type: diagnostic-guide
+  - path: diagnostics/network_degradation_api_gateway_processing_service.md
+    roles: [network_engineer, application_engineer, technical_lead]
+    document_type: diagnostic-guide
+  - path: diagnostics/application_latency_processing_service.md
+    roles:
+      [
+        application_engineer,
+        software_developer,
+        system_engineer,
+        technical_lead,
+      ]
+    document_type: diagnostic-guide
+  - path: diagnostics/data_service_unavailability.md
+    roles:
+      [
+        application_engineer,
+        software_developer,
+        network_engineer,
+        system_engineer,
+        technical_lead,
+      ]
+    document_type: diagnostic-guide

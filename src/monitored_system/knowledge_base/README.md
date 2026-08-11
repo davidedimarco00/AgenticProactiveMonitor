@@ -1,10 +1,47 @@
 # Monitored System Knowledge Base
 
-This directory contains the operational knowledge of the Notes Platform monitored by AgenticProactiveMonitor. The documents are written for later ingestion into Qdrant and retrieval through RAG.
+This directory contains stable technical knowledge about the Notes Platform monitored by AgenticProactiveMonitor. The documents are intended for ingestion into Qdrant and retrieval through RAG during incident analysis.
 
-The knowledge base is intentionally separated from the source code so that agents can retrieve stable descriptions of the system, its telemetry, known failure modes and safe recovery procedures.
+The knowledge base must help a virtual technical team understand the system, interpret live evidence and formulate competing diagnostic hypotheses. It must not contain the answer to an evaluation scenario.
 
-## Knowledge groups
+## Virtual technical team
+
+Knowledge retrieval is aligned with five real operational roles:
+
+- `technical_lead`: cross-domain architecture, incident scope, dependency impact and evidence needed to compare specialist hypotheses;
+- `system_engineer`: Linux/container runtime, CPU, memory, disk, processes and service state;
+- `network_engineer`: connectivity, active probes, RTT, service latency, ports and network-path evidence;
+- `application_engineer`: service health, dependency chain, request flow, application timing and operational logs;
+- `software_developer`: expected software behaviour, API semantics, validation, error handling, persistence behaviour and code-level symptoms.
+
+These names describe professional perspectives used for retrieval. The knowledge base does not describe the internal implementation, prompts or workflow of the agents.
+
+## Scope
+
+The knowledge base contains only stable knowledge that can support diagnosis:
+
+- system architecture and runtime dependencies;
+- service responsibilities, ports, endpoints and persistence;
+- container and runtime characteristics relevant to troubleshooting;
+- telemetry sources and metric semantics;
+- network links and active probe semantics;
+- log fields and event meanings;
+- OpenSearch detector semantics;
+- expected application behaviour and error propagation;
+- known failure patterns and discriminating evidence;
+- causal relations between downstream faults and upstream symptoms.
+
+The following content is intentionally excluded:
+
+- test-suite implementation and results;
+- controlled fault-injection scripts and parameters;
+- scenario ground truth;
+- expected evaluation outcomes used as labels;
+- agent-runtime implementation details, workflow limits, confidence thresholds and allowlists.
+
+Files under `src/monitored_system/infrastructure/tests/` and `src/monitored_system/infrastructure/scenarios/` are evaluation/support material and must not be ingested into the monitored-system RAG collection.
+
+## Knowledge structure
 
 ```text
 knowledge_base/
@@ -13,51 +50,67 @@ knowledge_base/
 ├── shared/
 │   ├── system_architecture.md
 │   └── observability_model.md
-├── agents/
-│   ├── coordinator_context.md
-│   ├── evidence_collection.md
-│   ├── reasoning_diagnosis.md
-│   ├── critic_validation.md
-│   └── remediation_policy.md
 ├── services/
 │   └── service_reference.md
-└── runbooks/
-    ├── cpu_spike_processing_service.md
-    ├── memory_leak_worker_service.md
-    ├── network_latency_api_gateway_processing_service.md
-    ├── high_application_latency_processing_service.md
-    └── data_service_down.md
+├── domains/
+│   ├── infrastructure_runtime.md
+│   ├── network_connectivity.md
+│   ├── application_operations.md
+│   └── software_behavior.md
+└── diagnostics/
+    ├── cpu_saturation_processing_service.md
+    ├── memory_pressure_worker_service.md
+    ├── network_degradation_api_gateway_processing_service.md
+    ├── application_latency_processing_service.md
+    └── data_service_unavailability.md
 ```
 
-## Agent differentiation
+## Role-aware RAG
 
-Each document starts with YAML-style metadata. The `agents` field identifies the roles for which the document is most useful:
+Each ingestible Markdown document starts with YAML-style metadata. The `roles` field identifies the professional roles for which that document is especially relevant. The `domains`, `services` and `incident_types` fields provide additional retrieval filters.
 
-- `coordinator`: incident scope, topology and workflow context;
-- `evidence`: telemetry sources, expected signals and evidence collection;
-- `reasoning`: hypotheses, causal relations and fault discrimination;
-- `critic`: validation rules, contradictions and minimum evidence requirements;
-- `remediation`: safe, bounded and reversible recovery knowledge.
+A single Qdrant collection can therefore support role-aware retrieval. For example:
 
-Shared documents can be retrieved by all roles.
+```text
+Network Engineer
+  role = network_engineer
+  service = api-gateway
+  incident_type = network-latency
+```
 
-## RAG design
+should privilege network topology, active probe semantics and network diagnostic patterns.
 
-The current knowledge-base uploader accepts Markdown and chunks text by words. Therefore, the metadata below is currently embedded as normal text and remains searchable. A later ingestion step can parse the same fields and copy them into Qdrant payloads without changing the documents.
+A Software Developer investigating the same service should instead privilege application behaviour, API semantics, error handling and service-specific documentation.
 
-Recommended future Qdrant payload fields are:
+Role filtering should guide retrieval, not create isolated knowledge silos. Cross-domain documents can be relevant to more than one role, and specialists can retrieve broader knowledge when an incident crosses domain boundaries.
+
+## Recommended Qdrant payload
+
+For each chunk, preserve at least:
 
 - `kb_id`
 - `domain`
 - `document_type`
-- `agents`
+- `roles`
+- `domains`
 - `services`
 - `incident_types`
 - `source_files`
 - `version`
 
-This makes it possible to combine semantic similarity with metadata filters, for example retrieving only `reasoning` documents related to `processing-service` and `latency`.
+Semantic similarity can then be combined with metadata filters such as role, service and incident type.
 
 ## Retrieval principle
 
-Agents should use this knowledge as contextual guidance, not as live state. Current metrics, logs and container state remain the source of truth for the active incident. Knowledge-base content explains what signals mean, which dependencies exist, which hypotheses are plausible and which remediation actions are expected to be safe.
+The knowledge base is static context. Live OpenSearch metrics, logs and runtime observations remain the source of truth for an active incident.
+
+Retrieved knowledge should help a specialist answer questions such as:
+
+- Which component is upstream or downstream of the affected service?
+- Which metric represents the resource or link being investigated?
+- Which logs should correlate with the symptom?
+- Which evidence distinguishes a network problem from an application problem?
+- Could an upstream error be a consequence of a downstream failure?
+- Does the observed behaviour match the normal software contract?
+
+The agent must not infer that a known failure pattern is present only because a similar document was retrieved. A diagnosis must be supported by current evidence.
