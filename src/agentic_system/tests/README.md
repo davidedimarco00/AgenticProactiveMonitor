@@ -75,10 +75,52 @@ The runtime also performs a repeated XMPP REQUEST/AGREE health probe between the
 
 The tests verify that all five health endpoints are distinct, report the expected SPADE/XMPP identity, expose `ONLINE` when communication is verified, and stream the same state through WebSocket.
 
+### Opt-in single-agent XMPP fault test
+
+Implemented in `integration/test_agent_faults.py` and marked `fault`, so it is not included in the normal `-m integration` regression run.
+
+The test deliberately targets only `network-engineer@xmpp` and verifies that:
+
+- the agent starts ONLINE;
+- disabling the Prosody account and closing only its c2s session makes its WebSocket report `OFFLINE`;
+- `spade_alive` remains true while `xmpp_connected` becomes false, proving that process liveness and XMPP connectivity are different states;
+- the other specialist agents remain ONLINE;
+- the Technical Lead becomes DEGRADED because one specialist no longer answers the periodic REQUEST/AGREE probe;
+- cleanup always re-enables the account, restarts the backend and verifies that the agent returns ONLINE.
+
+Run it explicitly from `src\agentic_system`:
+
+```powershell
+python -m pytest -m fault -v
+```
+
+## Manual single-agent XMPP fault on Windows
+
+For a deterministic fault that remains visible long enough in the dashboard, use the Network Engineer as an example:
+
+```powershell
+docker exec agentic-xmpp prosodyctl shell user disable network-engineer@xmpp
+docker exec agentic-xmpp prosodyctl shell c2s close network-engineer@xmpp
+```
+
+Inspect its health endpoint:
+
+```powershell
+curl.exe http://127.0.0.1:8103/health
+```
+
+Restore the environment:
+
+```powershell
+docker exec agentic-xmpp prosodyctl shell user enable network-engineer@xmpp
+docker restart agentic-system-backend
+```
+
 ## Planned incremental coverage
 
 The suite will grow together with the backend:
 
+- automatic XMPP reconnection/recovery after a single-agent transport fault;
 - TEST F - AgentSpeak(L) / SPADE-BDI integration and isolated BDI state;
 - TEST G - ReAct loop and autonomous action/tool selection;
 - MCP tool execution and observation feedback;
@@ -86,7 +128,7 @@ The suite will grow together with the backend:
 - incident delegation from Technical Lead to specialist agents;
 - multi-step diagnosis and final evidence-based result.
 
-## Running the integration suite on Windows
+## Running the normal integration suite on Windows
 
 The Docker infrastructure must already be running and the Agentic System backend must be healthy.
 
@@ -123,7 +165,8 @@ tests/
     ├── conftest.py
     ├── test_runtime.py
     ├── test_agent_communication.py
-    └── test_agent_health.py
+    ├── test_agent_health.py
+    └── test_agent_faults.py
 ```
 
 Future integration tests should remain grouped by architectural concern instead of creating one large end-to-end test file.
