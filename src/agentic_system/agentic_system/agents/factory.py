@@ -13,7 +13,7 @@ from .roles import (
 )
 
 
-AgentConstructor = Callable[[str, str, str], BaseRoleAgent]
+AgentConstructor = Callable[[str, str, str, int], BaseRoleAgent]
 
 ROLE_CONSTRUCTORS: dict[str, AgentConstructor] = {
     "technical_lead": TechnicalLeadAgent,
@@ -32,6 +32,13 @@ def build_agents(specs: tuple[AgentSpec, ...]) -> list[BaseRoleAgent]:
         if constructor is None:
             raise RuntimeError(f"No SPADE agent implementation for role: {spec.role}")
 
-        agents.append(constructor(spec.jid, spec.password, spec.display_name))
+        agents.append(
+            constructor(
+                spec.jid,
+                spec.password,
+                spec.display_name,
+                spec.health_port,
+            )
+        )
 
     return agents
