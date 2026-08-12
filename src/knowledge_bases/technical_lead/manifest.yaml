@@ -1,0 +1,9 @@
+version: 1
+collection: kb-technical-lead
+kind: professional-domain-knowledge
+primary_role: technical_lead
+documents: []
+content_policy:
+  descriptive_only: true
+  diagnosis_answers: forbidden
+  scenario_ground_truth: forbidden
