@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.api-gateway
-version: 1
+version: 2
 domain: monitored_system
 document_type: service-reference
 roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
@@ -35,35 +35,27 @@ Important routes include:
 - `GET|POST /notes/<id>/edit`;
 - `POST /notes/<id>/delete`.
 
-The health endpoint is not purely local: it calls `processing-service /health`. Therefore, an unhealthy health response can be caused by a downstream problem.
+The `/health` endpoint calls `processing-service /health`. Its result therefore reflects more than the local Flask process.
 
 ## Request correlation
 
 If an incoming request has `X-Request-ID`, the gateway reuses it. Otherwise it creates a new identifier. The same identifier is sent to `processing-service` and returned in the response header.
 
-This makes `request_id` the primary correlation key between user-visible failures at the gateway and downstream application evidence.
-
 ## Important log events
 
 `http_request_completed` records the final web request status and total gateway-side latency.
 
-`downstream_request_completed` records the request sent to `processing-service`, including downstream status and latency.
+`downstream_request_completed` records the call to `processing-service`, including downstream status and latency.
 
-`notes_service_unavailable` means that the HTTP client could not contact `processing-service` or the request failed before receiving a valid response.
+`notes_service_unavailable` is emitted when the HTTP request to `processing-service` fails before a valid response is received.
 
-`request_failed` is emitted when a user-facing request returns HTTP 503 because a required downstream service was unavailable.
+`request_failed` is emitted when a user-facing request returns HTTP 503 because a required downstream operation could not be completed.
 
 ## Error propagation
 
-A 503 at `api-gateway` is not sufficient evidence that the gateway is the root cause.
+When the gateway cannot contact `processing-service`, it returns HTTP 503. When `processing-service` returns an error status, that status is propagated through the gateway according to the application code.
 
-If the gateway cannot contact `processing-service`, it returns HTTP 503. If processing-service itself returns an error status, the gateway propagates the downstream status through the web request path.
-
-A useful diagnostic distinction is therefore:
-
-```text
-gateway process healthy != complete application path healthy
-```
+Therefore the HTTP status emitted by the gateway can represent either local gateway behaviour or a downstream result. The log field `downstream` identifies `processing-service` for the forwarded call.
 
 ## Network observations
 
@@ -75,25 +67,23 @@ target: processing-service:8000
 HTTP path: /docs
 ```
 
-The corresponding anomaly detector is:
+The corresponding OpenSearch detector is:
 
 ```text
 NETLAT-api-gateway-processing-service
 ```
 
-It is SINGLE_ENTITY and represents only this source/link.
+It is SINGLE_ENTITY and represents only this configured source/link.
 
-Raw ICMP RTT and `network_service_latency.response_time` should be compared with `downstream_request_completed.latency_ms` when distinguishing network delay from application processing delay.
+Raw ICMP RTT, `network_service_latency.response_time` and `downstream_request_completed.latency_ms` are different observations: the first is ICMP timing, the second is the configured active service probe, and the third is application-call timing produced by the gateway.
 
-## Diagnostic interpretation
+## Resource telemetry
 
-Evidence supporting a local gateway issue includes abnormal gateway runtime/resource behaviour with normal downstream connectivity and normal processing-service evidence.
+Container CPU and memory are available through:
 
-Evidence supporting a downstream issue includes:
+```text
+docker_container_cpu.usage_percent
+docker_container_mem.usage_percent
+```
 
-- `notes_service_unavailable`;
-- abnormal network evidence towards processing-service;
-- processing-service errors correlated by `request_id`;
-- a processing-service or deeper dependency failure that precedes the gateway 5xx response.
-
-The root cause should be assigned to the earliest component or link whose live evidence explains the propagated failure.
+These fields describe resource usage of the api-gateway container and do not by themselves describe downstream service state.
