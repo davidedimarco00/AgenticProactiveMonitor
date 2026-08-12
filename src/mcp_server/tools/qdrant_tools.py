@@ -9,33 +9,10 @@ QDRANT_URL = os.getenv(
     "http://qdrant:6333",
 ).rstrip("/")
 
-MONITORED_SYSTEM_COLLECTION = os.getenv(
+QDRANT_COLLECTION = os.getenv(
     "QDRANT_MONITORED_SYSTEM_COLLECTION",
     os.getenv("QDRANT_COLLECTION", "monitored-system"),
 )
-
-ROLE_COLLECTIONS = {
-    "technical_lead": os.getenv(
-        "QDRANT_TECHNICAL_LEAD_COLLECTION",
-        "kb-technical-lead",
-    ),
-    "system_engineer": os.getenv(
-        "QDRANT_SYSTEM_ENGINEER_COLLECTION",
-        "kb-system-engineer-linux",
-    ),
-    "network_engineer": os.getenv(
-        "QDRANT_NETWORK_ENGINEER_COLLECTION",
-        "kb-network-engineer",
-    ),
-    "application_engineer": os.getenv(
-        "QDRANT_APPLICATION_ENGINEER_COLLECTION",
-        "kb-application-engineer",
-    ),
-    "software_developer": os.getenv(
-        "QDRANT_SOFTWARE_DEVELOPER_COLLECTION",
-        "kb-software-developer",
-    ),
-}
 
 OLLAMA_URL = os.getenv(
     "OLLAMA_URL",
@@ -74,15 +51,14 @@ async def _embed_query(query: str) -> list[float]:
 
 
 async def _query_qdrant(
-    collection: str,
     vector: list[float],
     limit: int,
 ) -> list[dict]:
-    """Search one configured Qdrant collection."""
+    """Search the monitored-system Qdrant collection."""
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
-            f"{QDRANT_URL}/collections/{collection}/points/query",
+            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/query",
             json={
                 "query": vector,
                 "limit": limit,
@@ -96,41 +72,11 @@ async def _query_qdrant(
     return data.get("result", {}).get("points", [])
 
 
-def _select_collections(
-    role: str | None,
-    scope: str,
-) -> list[str]:
-    normalized_scope = scope.strip().lower()
-    if normalized_scope not in {"auto", "shared", "role", "both"}:
-        raise ValueError("scope must be one of: auto, shared, role, both")
-
-    normalized_role = role.strip().lower() if role else None
-    if normalized_role and normalized_role not in ROLE_COLLECTIONS:
-        raise ValueError(
-            "role must be one of: " + ", ".join(sorted(ROLE_COLLECTIONS))
-        )
-
-    if normalized_scope == "auto":
-        normalized_scope = "both" if normalized_role else "shared"
-
-    if normalized_scope == "shared":
-        return [MONITORED_SYSTEM_COLLECTION]
-
-    if not normalized_role:
-        raise ValueError("role is required when scope is role or both")
-
-    role_collection = ROLE_COLLECTIONS[normalized_role]
-    if normalized_scope == "role":
-        return [role_collection]
-
-    return [MONITORED_SYSTEM_COLLECTION, role_collection]
-
-
-def _format_point(collection: str, point: dict) -> dict:
+def _format_point(point: dict) -> dict:
     payload = point.get("payload") or {}
     return {
         "score": round(float(point.get("score", 0.0)), 4),
-        "collection": collection,
+        "collection": QDRANT_COLLECTION,
         "document_id": payload.get("document_id"),
         "filename": payload.get("filename"),
         "file_type": payload.get("file_type"),
@@ -140,11 +86,9 @@ def _format_point(collection: str, point: dict) -> dict:
         "uploaded_at": payload.get("uploaded_at"),
         "kb_id": payload.get("kb_id"),
         "document_type": payload.get("document_type"),
-        "roles": payload.get("roles"),
         "domains": payload.get("domains"),
         "services": payload.get("services"),
-        "topics": payload.get("topics"),
-        "platform": payload.get("platform"),
+        "source_path": payload.get("source_path"),
     }
 
 
@@ -154,26 +98,17 @@ def register_qdrant_tools(mcp: MCPServer) -> None:
     async def search_knowledge(
         query: str,
         limit: int = 5,
-        role: str | None = None,
-        scope: str = "auto",
     ) -> dict:
         """
-        Search Qdrant knowledge using semantic vector search.
+        Search documentation of the monitored system using semantic retrieval.
 
-        Knowledge is separated into a shared monitored-system collection and
-        one professional collection per specialist role.
+        The collection contains external knowledge specific to the monitored
+        Notes Platform. General Linux, networking and software knowledge is
+        expected to come from the LLM itself rather than from role-specific RAG.
 
-        scope="auto" searches only monitored-system when role is omitted, and
-        searches monitored-system plus the role-specific collection when a
-        valid role is supplied.
-
-        `limit` is applied per searched collection. Results are returned both
-        grouped by collection and as one score-sorted merged list, so role
-        knowledge cannot disappear only because shared chunks score higher.
-
-        This tool is read-only. Retrieved knowledge provides system/domain
-        context; live telemetry and tool observations remain the source of
-        truth for incident diagnosis.
+        This tool is read-only. Retrieved knowledge provides system context;
+        live telemetry and tool observations remain the source of truth for an
+        active incident and the agent must generate the diagnosis itself.
         """
 
         query = query.strip()
@@ -185,39 +120,18 @@ def register_qdrant_tools(mcp: MCPServer) -> None:
             raise ValueError("limit must be between 1 and 10")
 
         try:
-            collections = _select_collections(role, scope)
             query_vector = await _embed_query(query)
-
-            results_by_collection: dict[str, list[dict]] = {}
-            merged_results: list[dict] = []
-
-            for collection in collections:
-                points = await _query_qdrant(
-                    collection=collection,
-                    vector=query_vector,
-                    limit=limit,
-                )
-                formatted = [_format_point(collection, point) for point in points]
-                results_by_collection[collection] = formatted
-                merged_results.extend(formatted)
-
-            merged_results.sort(
-                key=lambda item: item.get("score", 0.0),
-                reverse=True,
-            )
+            points = await _query_qdrant(query_vector, limit)
+            results = [_format_point(point) for point in points]
 
             return {
                 "status": "ok",
                 "query": query,
-                "role": role,
-                "scope": scope,
-                "collections": collections,
-                "limit_per_collection": limit,
+                "collection": QDRANT_COLLECTION,
                 "embedding_model": OLLAMA_EMBEDDING_MODEL,
                 "embedding_dimensions": len(query_vector),
-                "returned_results": len(merged_results),
-                "results_by_collection": results_by_collection,
-                "results": merged_results,
+                "returned_results": len(results),
+                "results": results,
             }
 
         except httpx.HTTPStatusError as exc:
