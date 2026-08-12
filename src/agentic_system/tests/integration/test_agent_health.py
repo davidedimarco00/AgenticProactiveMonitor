@@ -68,6 +68,11 @@ def test_global_backend_snapshot_reports_real_agent_communication_health(
         assert agent["health_port"] == port
         assert agent["last_communication_at"]
 
+    # Complete team reachability is deliberately distinct from any one agent's
+    # own health. In the healthy baseline every specialist must be reachable.
+    assert backend_health["team_communication_ok"] is True
+    assert backend_health["unreachable_specialists"] == []
+
 
 @pytest.mark.integration
 def test_each_agent_streams_health_over_websocket(
