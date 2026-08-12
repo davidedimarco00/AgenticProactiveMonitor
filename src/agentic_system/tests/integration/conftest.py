@@ -53,9 +53,53 @@ def wait_for_backend_ready(
     )
 
 
+def _assert_test_e_capabilities(payload: dict[str, Any]) -> None:
+    probe = payload.get("communication_probe")
+    agents = payload.get("agents")
+
+    missing: list[str] = []
+    if not isinstance(probe, dict):
+        missing.append("communication_probe")
+
+    if isinstance(agents, list):
+        by_role = {
+            agent.get("role"): agent
+            for agent in agents
+            if isinstance(agent, dict)
+        }
+        for role in ("technical_lead", "system_engineer"):
+            agent = by_role.get(role)
+            if not isinstance(agent, dict):
+                missing.append(f"agents[{role}]")
+                continue
+            for field in ("messages_sent", "messages_received", "last_message_at"):
+                if field not in agent:
+                    missing.append(f"agents[{role}].{field}")
+    else:
+        missing.append("agents")
+
+    if missing:
+        pytest.fail(
+            "Running backend does not expose TEST E communication capabilities. "
+            "The Docker container is probably using an older agentic-backend image. "
+            "Rebuild and recreate it with: "
+            "docker compose build agentic-backend ; "
+            "docker compose up -d --force-recreate agentic-backend. "
+            f"Missing fields: {', '.join(missing)}"
+        )
+
+
 @pytest.fixture(scope="session")
 def backend_health() -> dict[str, Any]:
     return wait_for_backend_ready()
+
+
+@pytest.fixture(scope="session")
+def backend_communication_health(
+    backend_health: dict[str, Any],
+) -> dict[str, Any]:
+    _assert_test_e_capabilities(backend_health)
+    return backend_health
 
 
 @pytest.fixture
