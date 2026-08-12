@@ -16,7 +16,7 @@ Specialist Agent / LLM
    |              |                  |
 OpenSearch      Docker            Qdrant
    |              |                  |
-Metrics/Logs   Live State     Knowledge Collections
+Metrics/Logs   Live State      monitored-system
                                       |
                                    Ollama
                                   Embeddings
@@ -47,32 +47,17 @@ http://127.0.0.1:8000/mcp
 
 ### Knowledge Base / RAG
 
-`search_knowledge(query, limit=5, role=None, scope="auto")` embeds the query using Ollama and retrieves relevant chunks from Qdrant.
-
-Knowledge is separated into:
+`search_knowledge(query, limit=5)` embeds the query using Ollama and retrieves relevant chunks from the single shared Qdrant collection:
 
 ```text
 monitored-system
-    shared documentation of the concrete monitored Notes Platform
-
-kb-system-engineer-linux
-kb-network-engineer
-kb-application-engineer
-kb-software-developer
-kb-technical-lead
-    professional/domain collections associated with specialist roles
 ```
 
-The supported scopes are:
+This collection contains documentation specific to the concrete monitored Notes Platform: architecture, services, dependencies, telemetry semantics and implemented application behaviour.
 
-- `auto`: shared collection only when no role is supplied; shared + role collection when a role is supplied;
-- `shared`: `monitored-system` only;
-- `role`: only the professional collection for the supplied role;
-- `both`: shared + professional collection.
+There are no role-specific knowledge collections. General Linux, networking, application and software knowledge is expected to come from the LLM's pretrained knowledge. Agent specialisation is implemented through role, responsibilities, reasoning and available tools rather than separate RAG corpora.
 
-`limit` is applied per searched collection. Results are returned grouped by collection and as a score-sorted merged list. This prevents higher-scoring shared chunks from hiding all role-specific context.
-
-The knowledge tool is read-only. Retrieved documents provide technical context; live OpenSearch, Docker and other runtime observations remain the evidence used by the agents to formulate a diagnosis.
+The knowledge tool is read-only. Retrieved documents provide system-specific context; live OpenSearch, Docker and other runtime observations remain the evidence used by the agents to formulate a diagnosis.
 
 ## Allowed Monitored Targets
 
