@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -55,3 +56,8 @@ def wait_for_backend_ready(
 @pytest.fixture(scope="session")
 def backend_health() -> dict[str, Any]:
     return wait_for_backend_ready()
+
+
+@pytest.fixture
+def backend_get_json() -> Callable[[str], dict[str, Any]]:
+    return get_json
