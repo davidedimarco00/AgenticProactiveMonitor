@@ -24,6 +24,17 @@ class ManifestModelTests(unittest.TestCase):
         self.assertEqual(metadata["roles"], ["system_engineer"])
         self.assertEqual(body, "# Title\nBody text")
 
+    def test_parse_markdown_supports_windows_line_endings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "windows.md"
+            path.write_bytes(
+                b"---\r\nkb_id: test.windows\r\n---\r\n# Title\r\nBody text"
+            )
+            metadata, body = parse_markdown(path)
+
+        self.assertEqual(metadata["kb_id"], "test.windows")
+        self.assertEqual(body, "# Title\nBody text")
+
     def test_chunk_text_applies_overlap(self):
         text = "one two three four five six seven eight"
         chunks = chunk_text(text, chunk_size_words=4, overlap_words=1)
