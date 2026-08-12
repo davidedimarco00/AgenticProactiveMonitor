@@ -112,6 +112,8 @@ async def _run_backend() -> None:
         mcp_url=config.mcp_url,
         reasoning_model=config.reasoning_model,
         tool_model=config.tool_model,
+        team_communication_ok=False,
+        unreachable_specialists=[],
     )
 
     try:
@@ -123,6 +125,8 @@ async def _run_backend() -> None:
             agents_running=runtime.running_count,
             agents=runtime.snapshot(),
             communication_probe=runtime.communication_probe,
+            team_communication_ok=runtime.team_communication_ok,
+            unreachable_specialists=runtime.unreachable_specialists,
         )
         LOGGER.info("Agentic backend is ready with five active SPADE agents")
 
@@ -131,6 +135,8 @@ async def _run_backend() -> None:
                 agents_running=runtime.running_count,
                 agents=runtime.snapshot(),
                 communication_probe=runtime.communication_probe,
+                team_communication_ok=runtime.team_communication_ok,
+                unreachable_specialists=runtime.unreachable_specialists,
             )
             await asyncio.sleep(1)
     finally:
@@ -139,6 +145,8 @@ async def _run_backend() -> None:
         _set_health(
             agents_running=0,
             agents=runtime.snapshot(),
+            team_communication_ok=runtime.team_communication_ok,
+            unreachable_specialists=runtime.unreachable_specialists,
         )
         health_server.shutdown()
         health_server.server_close()
