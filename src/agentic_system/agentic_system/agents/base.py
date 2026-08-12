@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import logging
 from typing import Any
 
+from aiohttp import web as aioweb
 from spade.agent import Agent
 from spade.behaviour import CyclicBehaviour, OneShotBehaviour
 
@@ -21,8 +22,9 @@ def _utc_now() -> str:
 class BaseRoleAgent(Agent):
     """Common SPADE runtime for every logical role in the MAS.
 
-    This layer provides lifecycle and transport concerns only. BDI deliberation and
-    ReAct execution are added later instead of being simulated here.
+    This layer provides lifecycle, transport and per-agent observability concerns
+    only. BDI deliberation and ReAct execution are added later instead of being
+    simulated here.
     """
 
     class LifecycleBehaviour(CyclicBehaviour):
@@ -31,13 +33,7 @@ class BaseRoleAgent(Agent):
             await asyncio.sleep(5)
 
     class SendMessageBehaviour(OneShotBehaviour):
-        """Send one semantic AgentMessage through SPADE's Behaviour API.
-
-        SPADE exposes message sending on Behaviour.send(), not directly on Agent.
-        Keeping transport inside a real behaviour preserves the agent/behaviour
-        execution model while still exposing a convenient agent-level helper to
-        higher architectural layers.
-        """
+        """Send one semantic AgentMessage through SPADE's Behaviour API."""
 
         def __init__(
             self,
@@ -71,27 +67,61 @@ class BaseRoleAgent(Agent):
         *,
         role: str,
         display_name: str,
+        health_port: int,
     ) -> None:
         super().__init__(jid, password, verify_security=False)
         self.role = role
         self.display_name = display_name
+        self.health_port = health_port
         self.lifecycle_state = "created"
         self.started_at: str | None = None
         self.last_heartbeat_at: str | None = None
         self.messages_sent = 0
         self.messages_received = 0
         self.last_message_at: str | None = None
+        self.communication_ok = False
+        self.last_communication_at: str | None = None
 
     async def setup(self) -> None:
         self.lifecycle_state = "running"
         self.started_at = _utc_now()
         self.last_heartbeat_at = self.started_at
         self.add_behaviour(self.LifecycleBehaviour())
+
+        self.web.add_get("/health", self._health_controller, template=None)
+        self.web.add_get(
+            "/ws/health",
+            self._health_websocket_controller,
+            template=None,
+            raw=True,
+        )
+        await self.web.start(hostname="0.0.0.0", port=self.health_port)
+
         LOGGER.info(
-            "%s connected to XMPP as %s",
+            "%s connected to XMPP as %s; health endpoint on port %d",
             self.display_name,
             self.jid,
+            self.health_port,
         )
+
+    async def _health_controller(self, _request: Any) -> dict[str, Any]:
+        return self.health_snapshot()
+
+    async def _health_websocket_controller(
+        self,
+        request: Any,
+    ) -> aioweb.WebSocketResponse:
+        websocket = aioweb.WebSocketResponse(heartbeat=15)
+        await websocket.prepare(request)
+
+        try:
+            while not websocket.closed:
+                await websocket.send_json(self.health_snapshot())
+                await asyncio.sleep(1)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+
+        return websocket
 
     async def send_agent_message(
         self,
@@ -100,11 +130,7 @@ class BaseRoleAgent(Agent):
         performative: Performative,
         timeout: float = 5.0,
     ) -> None:
-        """Send a semantic message using a one-shot SPADE behaviour.
-
-        Higher layers can request a send from the agent object, but the actual XMPP
-        send is always executed by a SPADE Behaviour, as required by SPADE's API.
-        """
+        """Send a semantic message using a one-shot SPADE behaviour."""
 
         behaviour = self.SendMessageBehaviour(envelope, performative)
         self.add_behaviour(behaviour)
@@ -121,12 +147,49 @@ class BaseRoleAgent(Agent):
     def mark_message_received(self) -> None:
         self.messages_received += 1
         self.last_message_at = _utc_now()
+        self.mark_communication_ok()
+
+    def mark_communication_ok(self) -> None:
+        self.communication_ok = True
+        self.last_communication_at = _utc_now()
+
+    def mark_communication_failed(self) -> None:
+        self.communication_ok = False
 
     def mark_stopping(self) -> None:
         self.lifecycle_state = "stopping"
 
     def mark_stopped(self) -> None:
         self.lifecycle_state = "stopped"
+        self.communication_ok = False
+
+    def health_snapshot(self) -> dict[str, Any]:
+        spade_alive = self.is_alive()
+        if not spade_alive:
+            status = "OFFLINE"
+        elif self.communication_ok:
+            status = "ONLINE"
+        else:
+            status = "DEGRADED"
+
+        return {
+            "type": "agent_health",
+            "role": self.role,
+            "display_name": self.display_name,
+            "jid": str(self.jid),
+            "status": status,
+            "spade_alive": spade_alive,
+            "xmpp_connected": spade_alive,
+            "communication_ok": self.communication_ok,
+            "health_port": self.health_port,
+            "started_at": self.started_at,
+            "last_heartbeat_at": self.last_heartbeat_at,
+            "last_communication_at": self.last_communication_at,
+            "messages_sent": self.messages_sent,
+            "messages_received": self.messages_received,
+            "last_message_at": self.last_message_at,
+            "timestamp": _utc_now(),
+        }
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -139,4 +202,7 @@ class BaseRoleAgent(Agent):
             "messages_sent": self.messages_sent,
             "messages_received": self.messages_received,
             "last_message_at": self.last_message_at,
+            "communication_ok": self.communication_ok,
+            "last_communication_at": self.last_communication_at,
+            "health_port": self.health_port,
         }
