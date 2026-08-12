@@ -72,11 +72,56 @@
   height: 15px;
   border-width: 3px;
   border-color: #ffffff;
+  transition: background-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
 
-.agent-node.working .agent-presence-dot {
-  background: #2563eb;
-  border-color: #eff6ff;
+/* Presence is independent from WORKING/IDLE. It represents the live SPADE/XMPP
+   health stream coming directly from the corresponding agent. */
+.agent-node.presence-online .agent-presence-dot,
+.agent-node.working.presence-online .agent-presence-dot {
+  background: #22c55e;
+  border-color: #ffffff;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, .16);
+  animation: agent-presence-pulse 1.8s ease-in-out infinite;
+}
+
+.agent-node.presence-degraded .agent-presence-dot,
+.agent-node.working.presence-degraded .agent-presence-dot {
+  background: #f59e0b;
+  border-color: #ffffff;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, .14);
+  animation: none;
+}
+
+.agent-node.presence-offline .agent-presence-dot,
+.agent-node.working.presence-offline .agent-presence-dot {
+  background: #e11d48;
+  border-color: #ffffff;
+  box-shadow: 0 0 0 4px rgba(225, 29, 72, .12);
+  animation: none;
+}
+
+.agent-node.presence-unknown .agent-presence-dot,
+.agent-node.working.presence-unknown .agent-presence-dot {
+  background: #94a3b8;
+  border-color: #ffffff;
+  box-shadow: none;
+  animation: none;
+}
+
+.legend-dot.presence-online { background: #22c55e; }
+.legend-dot.presence-degraded { background: #f59e0b; }
+.legend-dot.presence-offline { background: #e11d48; }
+
+@keyframes agent-presence-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, .14);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 7px rgba(34, 197, 94, .06);
+  }
 }
 
 .network-help {
