@@ -32,6 +32,7 @@ def load_yaml(path: Path) -> dict:
 
 def parse_markdown(path: Path) -> tuple[dict, str]:
     raw = path.read_text(encoding="utf-8")
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
     if not raw.startswith("---\n"):
         return {}, raw.strip()
 
