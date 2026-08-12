@@ -1,0 +1,75 @@
+# Agentic System Test Suite
+
+This directory contains the incremental verification suite for the real Agentic System backend.
+
+The integration tests intentionally exercise the running Dockerized system instead of mocking SPADE, Prosody/XMPP, MCP or the LLM runtime. New architectural layers should be added here as they are implemented.
+
+## Current coverage
+
+### TEST D - Multi-Agent SPADE runtime
+
+Implemented in `integration/test_runtime.py`.
+
+The suite verifies that:
+
+- the Agentic System backend reaches `status=ok` and `phase=agents-running`;
+- exactly five SPADE agents are configured and running;
+- the expected roles are present;
+- every role has its own distinct XMPP JID;
+- every agent is in the `running` lifecycle state;
+- every SPADE lifecycle behaviour continues updating its heartbeat;
+- the `/ready` endpoint reports the active runtime;
+- the Prosody client-to-server port is reachable.
+
+Because an agent enters the `running` state only from its SPADE `setup()` method after successful XMPP startup, these tests validate the real SPADE/Prosody boundary rather than only checking static configuration.
+
+## Planned incremental coverage
+
+The suite will grow together with the backend:
+
+- TEST E - inter-agent XMPP communication and message correlation;
+- TEST F - independent BDI state for all five agents;
+- TEST G - ReAct loop and autonomous action/tool selection;
+- MCP tool execution and observation feedback;
+- autonomous RAG selection versus general LLM knowledge;
+- incident delegation from Technical Lead to specialist agents;
+- multi-step diagnosis and final evidence-based result.
+
+## Running the integration suite on Windows
+
+The Docker infrastructure must already be running and the Agentic System backend must be healthy.
+
+From `src\agentic_system` in PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-test.txt
+python -m pytest -m integration -v
+```
+
+The default test endpoints are:
+
+- Agentic backend: `http://127.0.0.1:8081`
+- Prosody/XMPP: `127.0.0.1:5222`
+
+They can be overridden when needed:
+
+```powershell
+$env:AGENTIC_BACKEND_TEST_URL = "http://127.0.0.1:8081"
+$env:AGENTIC_XMPP_TEST_HOST = "127.0.0.1"
+$env:AGENTIC_XMPP_TEST_PORT = "5222"
+python -m pytest -m integration -v
+```
+
+## Test organization
+
+```text
+tests/
+├── README.md
+└── integration/
+    ├── conftest.py
+    └── test_runtime.py
+```
+
+Future integration tests should remain grouped by architectural concern instead of creating one large end-to-end test file.
