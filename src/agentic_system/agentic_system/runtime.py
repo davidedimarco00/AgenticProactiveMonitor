@@ -157,11 +157,9 @@ class AgentRuntime:
 
             specialist.mark_communication_ok()
             return True
-        except (TimeoutError, asyncio.TimeoutError, RuntimeError) as exc:
-            specialist.mark_communication_failed()
-            LOGGER.warning("Health probe failed for %s: %s", specialist.role, exc)
-            return False
-        except BaseException as exc:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
             specialist.mark_communication_failed()
             LOGGER.warning("Health probe failed for %s: %s", specialist.role, exc)
             return False
