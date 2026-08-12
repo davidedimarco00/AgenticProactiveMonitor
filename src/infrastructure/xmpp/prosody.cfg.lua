@@ -1,23 +1,13 @@
 -- Prosody configuration for the isolated thesis Docker network.
--- SPADE agents use JIDs such as technical-lead@xmpp and can register automatically.
+-- The five SPADE agents use pre-provisioned accounts on the Docker-local
+-- VirtualHost "xmpp" (or XMPP_DOMAIN when overridden).
 --
--- IMPORTANT:
--- This Prosody instance is reachable only inside the local Docker thesis network.
--- TLS is intentionally disabled for client-to-server traffic in this lab setup so
--- SPADE/Slixmpp does not have to trust a self-signed certificate for the synthetic
--- Docker-only domain "xmpp". Do not reuse this policy on an exposed XMPP server.
+-- This configuration intentionally mirrors the SPADE/Prosody setup previously
+-- validated in the project: STARTTLS is enabled and required, the self-signed
+-- Docker-local certificate is accepted by SPADE with verify_security=False,
+-- and agent accounts are provisioned before the backend starts.
 
 local xmpp_domain = Lua.os.getenv("XMPP_DOMAIN") or "xmpp"
-
-local registration_value = Lua.string.lower(
-  Lua.os.getenv("XMPP_ALLOW_REGISTRATION") or "true"
-)
-
-local registration_enabled =
-  registration_value == "true"
-  or registration_value == "1"
-  or registration_value == "yes"
-  or registration_value == "on"
 
 
 -- =====================================================================
@@ -28,6 +18,7 @@ admins = {}
 
 pidfile = "/tmp/prosody.pid"
 data_path = "/var/lib/prosody"
+certificates = "/etc/prosody/certs"
 
 
 -- =====================================================================
@@ -44,14 +35,10 @@ storage = "internal"
 
 c2s_ports = { 5222 }
 
--- Local Docker thesis lab only.
--- No STARTTLS is advertised because mod_tls is not enabled below.
-c2s_require_encryption = false
-
--- SPADE authenticates with SASL PLAIN. Since this isolated instance has TLS
--- intentionally disabled, Prosody must explicitly allow that mechanism on the
--- unencrypted Docker bridge connection.
-allow_unencrypted_plain_auth = true
+-- The previously validated SPADE setup uses STARTTLS. This avoids Slixmpp
+-- rejecting every SASL mechanism as unsafe on an unencrypted connection.
+c2s_require_encryption = true
+allow_unencrypted_plain_auth = false
 
 
 -- =====================================================================
@@ -71,6 +58,7 @@ modules_disabled = {
 modules_enabled = {
   "roster";
   "saslauth";
+  "tls";
   "disco";
   "private";
   "blocklist";
@@ -80,7 +68,6 @@ modules_enabled = {
   "uptime";
   "time";
   "ping";
-  "register";
   "admin_shell";
 }
 
@@ -89,15 +76,11 @@ modules_enabled = {
 -- REGISTRATION
 -- =====================================================================
 
--- SPADE agents can be started using:
---
--- await agent.start(auto_register=True)
---
--- Keep this enabled only inside the isolated Docker network.
-allow_registration = registration_enabled
-
--- Disable registration rate limiting for the local thesis lab.
-min_seconds_between_registrations = 0
+-- Accounts are provisioned explicitly by the xmpp-bootstrap Docker service.
+-- SPADE therefore connects with auto_register=False. Keeping in-band
+-- registration disabled makes startup deterministic and keeps identity
+-- provisioning separate from normal agent execution.
+allow_registration = false
 
 
 -- =====================================================================
