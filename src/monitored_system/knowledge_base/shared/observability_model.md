@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.shared.observability-model
-version: 4
+version: 5
 domain: monitored_system
 document_type: observability
 roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
@@ -32,14 +32,14 @@ Telemetry contains context such as `project`, `environment`, `host_id`, `machine
 
 Telegraf collects telemetry every 10 seconds. Important measurements include:
 
-- `docker_container_cpu`: per-container CPU telemetry. The anomaly-relevant field is `usage_percent`.
-- `docker_container_mem`: per-container memory telemetry. The anomaly-relevant field is `usage_percent`.
-- `ping`: raw ICMP RTT and packet-loss telemetry. Important fields include `average_response_ms`, `percentile50_ms`, `percentile95_ms`, `percentile99_ms`, `percent_packet_loss` and `result_code`.
-- `network_service_latency`: active end-to-end probe produced by Telegraf `net_response` with `name_override`. It opens the configured TCP connection, sends a small HTTP request and waits for the expected response. Important fields are `response_time` and `result_code`.
-- `net`: interface bytes, packets, errors and drops.
-- `disk`, `diskio`, `system`, `swap`, `processes`, `kernel`: supporting diagnostic context.
+- `docker_container_cpu`: per-container CPU telemetry. The anomaly-relevant field is `usage_percent`;
+- `docker_container_mem`: per-container memory telemetry. The anomaly-relevant field is `usage_percent`;
+- `ping`: ICMP RTT and packet-loss telemetry. Important fields include `average_response_ms`, `percentile50_ms`, `percentile95_ms`, `percentile99_ms`, `percent_packet_loss` and `result_code`;
+- `network_service_latency`: active service probe produced by Telegraf `net_response` with `name_override`. It opens the configured TCP connection, sends a small HTTP request and waits for the expected response. Important fields are `response_time` and `result_code`;
+- `net`: interface bytes, packets, errors and drops;
+- `disk`, `diskio`, `system`, `swap`, `processes`, `kernel`: additional runtime measurements.
 
-System CPU and memory measurements are available, but CPU and RAM anomaly detection uses container-specific Docker metrics. This avoids treating the Docker host view as if it represented one application container.
+System CPU and memory measurements are available, but CPU and RAM anomaly detection uses container-specific Docker metrics. Host-style system measurements and container measurements therefore represent different scopes.
 
 ## Active network probes
 
@@ -51,33 +51,25 @@ api-gateway        -> processing-service   probe path /docs
 processing-service -> data-service         probe path /docs
 ```
 
-The raw `ping` measurement is an independent ICMP reference. The NETLAT detector feature is:
+The NETLAT detector feature is:
 
 ```text
 measurement_name = network_service_latency
 field            = network_service_latency.response_time
 ```
 
-`network_service_latency.result_code` provides supporting evidence about probe success or failure.
+`network_service_latency.result_code` records the outcome of the configured service probe.
 
-## Network latency versus application latency
+## Timing semantics
 
-Different evidence patterns should be kept separate.
+The system exposes several timing measurements with different meanings:
 
-A network-path degradation is more plausible when:
+- `ping.*` measures ICMP reachability and round-trip timing;
+- `network_service_latency.response_time` measures the configured TCP/HTTP probe response time;
+- application `latency_ms` fields measure time spent in application requests or downstream calls;
+- traffic-generator `latency_ms` measures the user-facing request duration seen by the synthetic client.
 
-- `network_service_latency.response_time` increases on the affected source/link;
-- raw ICMP RTT also increases;
-- application request latency rises as a consequence.
-
-An application-processing problem is more plausible when:
-
-- user-visible or downstream request latency increases;
-- network-service probes remain close to baseline;
-- raw ICMP RTT remains close to baseline;
-- application logs contain service-specific warnings or errors that explain the delay.
-
-One signal alone is usually insufficient to distinguish these cases.
+These measurements can change independently because they observe different protocol layers and portions of the request path. Similar numerical values do not mean that they measure the same operation. No single timing field identifies a root cause by itself.
 
 ## SINGLE_ENTITY detector rule
 
@@ -95,48 +87,42 @@ The NETLAT detector names are:
 - `NETLAT-api-gateway-processing-service`;
 - `NETLAT-processing-service-data-service`.
 
-A detector result must be interpreted only for the entity or source/link represented by that detector.
+A detector result belongs only to the entity or source/link represented by that detector.
 
 ## Application logs
 
 Application code writes JSON Lines to `/var/log/machine/app.log`. Common fields include:
 
-- `timestamp`
-- `host`
-- `machine_role`
-- `service`
-- `event_type`
-- `level`
-- `message`
-- `request_id` when available
+- `timestamp`;
+- `host`;
+- `machine_role`;
+- `service`;
+- `event_type`;
+- `level`;
+- `message`;
+- `request_id` when available.
 
-Additional fields can include `latency_ms`, `downstream`, `status_code`, `error_type`, `note_id` and other event-specific values.
+Additional fields can include `latency_ms`, `downstream`, `status_code`, `error_type`, `note_id` and event-specific values.
 
 System heartbeat records are written to `/var/log/machine/system.log` and include uptime and load information.
 
-## Useful event types
+## Important event types
 
-Important application events include:
+Application events include:
 
-- `http_request_completed`
-- `downstream_request_completed`
-- `notes_service_unavailable`
-- `data_service_unavailable`
-- `synthetic_user_action_completed`
-- `synthetic_user_action_failed`
-- `service_started`
-- `service_stopped`
+- `http_request_completed`;
+- `downstream_request_completed`;
+- `notes_service_unavailable`;
+- `data_service_unavailable`;
+- `synthetic_user_action_completed`;
+- `synthetic_user_action_failed`;
+- `service_started`;
+- `service_stopped`.
 
-Other application-specific events should be interpreted together with their timestamp, service, request identifier and surrounding evidence.
+The meaning of each event depends on the service that emitted it. For example, `data_service_unavailable` records a failed client operation from processing-service to data-service; it is an observation of that failed call, not a precomputed root-cause label.
 
-## Evidence interpretation
+## Correlation fields
 
-Metrics indicate that behaviour changed. Logs help explain where and how it changed. Runtime inspection can confirm service availability. The knowledge base provides the expected system relationships, but it does not describe the current incident state.
+`request_id` connects application events belonging to the same request across services. `host_id`, `service`, `downstream`, timestamps and network target metadata provide additional scope.
 
-Strong diagnosis should combine independent evidence when possible, for example:
-
-- resource anomaly + service-specific logs;
-- `network_service_latency` anomaly + raw ICMP RTT;
-- network probe + request latency;
-- missing telemetry + independent confirmation of service unavailability;
-- downstream error + correlated upstream request failure.
+Metrics and logs are observations of the running environment. The knowledge base only defines their structure and semantics; it does not define which combination of observations constitutes a particular incident diagnosis.
