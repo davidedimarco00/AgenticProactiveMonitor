@@ -295,6 +295,11 @@ services:
       OLLAMA_FALLBACK_TOOL_MODEL: ${OLLAMA_FALLBACK_TOOL_MODEL:-qwen2.5:latest}
     ports:
       - "127.0.0.1:${AGENTIC_BACKEND_HEALTH_PORT:-8081}:8081"
+      - "127.0.0.1:${TECHNICAL_LEAD_HEALTH_PORT:-8101}:8101"
+      - "127.0.0.1:${SYSTEM_ENGINEER_HEALTH_PORT:-8102}:8102"
+      - "127.0.0.1:${NETWORK_ENGINEER_HEALTH_PORT:-8103}:8103"
+      - "127.0.0.1:${APPLICATION_ENGINEER_HEALTH_PORT:-8104}:8104"
+      - "127.0.0.1:${SOFTWARE_DEVELOPER_HEALTH_PORT:-8105}:8105"
     depends_on:
       xmpp:
         condition: service_healthy
@@ -341,6 +346,8 @@ services:
       mcp-server:
         condition: service_started
       xmpp:
+        condition: service_healthy
+      agentic-backend:
         condition: service_healthy
     networks:
       - monitoring-net
