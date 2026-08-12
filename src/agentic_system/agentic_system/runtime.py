@@ -25,6 +25,8 @@ class AgentRuntime:
         self.agents = build_agents(config.agents)
         self.started = False
         self.communication_probe: dict[str, Any] | None = None
+        self.team_communication_ok = False
+        self.unreachable_specialists: list[str] = []
         self._health_probe_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -165,22 +167,40 @@ class AgentRuntime:
             return False
 
     async def _run_health_probe_cycle(self, *, strict: bool) -> None:
+        """Probe specialist reachability without conflating it with TL health.
+
+        Per-agent ``communication_ok`` answers whether that specific SPADE/XMPP
+        endpoint is alive and has recently exchanged traffic. Team reachability is
+        tracked separately so a single failed specialist does not incorrectly turn
+        the Technical Lead's own presence indicator yellow/red.
+        """
+
         technical_lead = self._technical_lead()
         failures: list[str] = []
+        successes = 0
 
         for specialist in self._specialists():
-            if not await self._probe_specialist(technical_lead, specialist):
+            if await self._probe_specialist(technical_lead, specialist):
+                successes += 1
+            else:
                 failures.append(specialist.role)
 
-        if failures:
-            technical_lead.mark_communication_failed()
-            if strict:
-                raise RuntimeError(
-                    "XMPP health probe failed for specialist agents: "
-                    + ", ".join(failures)
-                )
-        else:
+        self.unreachable_specialists = failures
+        self.team_communication_ok = not failures
+
+        # The Technical Lead's own health is independent from complete team
+        # reachability. If it can still exchange XMPP traffic with at least one peer,
+        # its own presence remains healthy. Team degradation is exposed separately.
+        if successes > 0:
             technical_lead.mark_communication_ok()
+        else:
+            technical_lead.mark_communication_failed()
+
+        if failures and strict:
+            raise RuntimeError(
+                "XMPP health probe failed for specialist agents: "
+                + ", ".join(failures)
+            )
 
     async def _health_probe_loop(self) -> None:
         try:
@@ -217,6 +237,10 @@ class AgentRuntime:
             agent.mark_stopped()
 
         self.started = False
+        self.team_communication_ok = False
+        self.unreachable_specialists = [
+            agent.role for agent in self.agents if agent.role != "technical_lead"
+        ]
 
     @property
     def running_count(self) -> int:
