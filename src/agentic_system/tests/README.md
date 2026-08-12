@@ -50,13 +50,36 @@ The test verifies that:
 - REQUEST and AGREE use the same `correlation_id`;
 - both agents report bidirectional message activity.
 
-This is intentionally a communication-layer test only. The System Engineer acknowledges the request but does not yet perform BDI deliberation, ReAct reasoning, MCP calls or diagnosis.
+This is intentionally a communication-layer test only. It does not yet perform BDI deliberation, ReAct reasoning, MCP calls or diagnosis.
+
+### Agent health and dashboard presence
+
+Implemented in `integration/test_agent_health.py`.
+
+Every SPADE role exposes an independent observability port:
+
+```text
+8101  Technical Lead
+8102  System Engineer
+8103  Network Engineer
+8104  Application Engineer
+8105  Software Developer
+```
+
+Each port provides:
+
+- `GET /health` for deterministic integration checks;
+- `WS /ws/health` for the dashboard real-time presence indicator.
+
+The runtime also performs a repeated XMPP REQUEST/AGREE health probe between the Technical Lead and every specialist. Therefore `communication_ok=true` means that a real inter-agent XMPP round trip has recently succeeded, not only that TCP port 5222 is reachable.
+
+The tests verify that all five health endpoints are distinct, report the expected SPADE/XMPP identity, expose `ONLINE` when communication is verified, and stream the same state through WebSocket.
 
 ## Planned incremental coverage
 
 The suite will grow together with the backend:
 
-- TEST F - independent BDI state for all five agents;
+- TEST F - AgentSpeak(L) / SPADE-BDI integration and isolated BDI state;
 - TEST G - ReAct loop and autonomous action/tool selection;
 - MCP tool execution and observation feedback;
 - autonomous RAG selection versus general LLM knowledge;
@@ -80,6 +103,7 @@ The default test endpoints are:
 
 - Agentic backend: `http://127.0.0.1:8081`
 - Prosody/XMPP: `127.0.0.1:5222`
+- Per-agent health: `http://127.0.0.1:8101` through `http://127.0.0.1:8105`
 
 They can be overridden when needed:
 
@@ -98,7 +122,8 @@ tests/
 └── integration/
     ├── conftest.py
     ├── test_runtime.py
-    └── test_agent_communication.py
+    ├── test_agent_communication.py
+    └── test_agent_health.py
 ```
 
 Future integration tests should remain grouped by architectural concern instead of creating one large end-to-end test file.
