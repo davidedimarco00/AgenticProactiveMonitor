@@ -24,6 +24,7 @@ class AgentSpec:
     jid: str
     password_env: str
     password: str
+    health_port: int
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ def load_runtime_config() -> RuntimeConfig:
     agents: list[AgentSpec] = []
     seen_roles: set[str] = set()
     seen_jids: set[str] = set()
+    seen_health_ports: set[int] = set()
 
     for item in configured_agents:
         if not isinstance(item, dict):
@@ -97,8 +99,9 @@ def load_runtime_config() -> RuntimeConfig:
         display_name = str(item.get("display_name", "")).strip()
         jid_localpart = str(item.get("jid_localpart", "")).strip()
         password_env = str(item.get("password_env", "")).strip()
+        health_port = int(item.get("health_port", 0))
 
-        if not all((role, display_name, jid_localpart, password_env)):
+        if not all((role, display_name, jid_localpart, password_env, health_port)):
             raise RuntimeError(f"Incomplete agent configuration: {item}")
 
         if role in seen_roles:
@@ -107,6 +110,8 @@ def load_runtime_config() -> RuntimeConfig:
         jid = f"{jid_localpart}@{xmpp_domain}"
         if jid in seen_jids:
             raise RuntimeError(f"Duplicate agent JID: {jid}")
+        if health_port in seen_health_ports:
+            raise RuntimeError(f"Duplicate per-agent health port: {health_port}")
 
         password = os.getenv(password_env, "").strip()
         if not password:
@@ -116,6 +121,7 @@ def load_runtime_config() -> RuntimeConfig:
 
         seen_roles.add(role)
         seen_jids.add(jid)
+        seen_health_ports.add(health_port)
         agents.append(
             AgentSpec(
                 role=role,
@@ -123,6 +129,7 @@ def load_runtime_config() -> RuntimeConfig:
                 jid=jid,
                 password_env=password_env,
                 password=password,
+                health_port=health_port,
             )
         )
 
