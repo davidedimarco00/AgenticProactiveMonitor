@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.domain.network-connectivity
-version: 1
+version: 2
 domain: monitored_system
 document_type: domain-reference
 roles: [network_engineer, technical_lead, application_engineer]
@@ -14,7 +14,7 @@ source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/inf
 
 ## Application links
 
-The normal request path contains three critical network links:
+The normal Notes request path contains three critical network links:
 
 ```text
 traffic-generator  -> api-gateway:5000
@@ -22,33 +22,35 @@ api-gateway        -> processing-service:8000
 processing-service -> data-service:8000
 ```
 
-Network evidence must always be interpreted for the specific source and target involved in the incident.
+Each link has a distinct source, destination and application dependency direction.
 
-## Active network evidence
+## ICMP observations
 
-Each critical source collects two complementary forms of network evidence.
+The `ping` measurement provides ICMP-oriented information. Useful fields include:
 
-Raw ICMP evidence is stored under the `ping` measurement. Useful fields include:
+- `average_response_ms`;
+- `percentile50_ms`;
+- `percentile95_ms`;
+- `percentile99_ms`;
+- `percent_packet_loss`;
+- `result_code`.
 
-- `average_response_ms`
-- `percentile50_ms`
-- `percentile95_ms`
-- `percentile99_ms`
-- `percent_packet_loss`
-- `result_code`
+ICMP reachability and RTT describe network-layer behaviour. They do not execute the service's application request path.
 
-Service-level network evidence is stored under:
+## Service-level network observations
+
+The `network_service_latency` measurement is produced by the configured Telegraf `net_response` probe.
+
+Important fields are:
 
 ```text
-measurement_name = network_service_latency
-field            = network_service_latency.response_time
+network_service_latency.response_time
+network_service_latency.result_code
 ```
 
-The corresponding `network_service_latency.result_code` provides probe outcome information.
+The probe opens the configured TCP connection, sends a small HTTP request and waits for the expected response. It therefore observes a different path from ICMP ping and includes more than network-layer RTT alone.
 
-## Probe targets
-
-The three links used by network-latency detectors are:
+## Configured probe targets
 
 ```text
 traffic-generator  -> api-gateway          /notes/new
@@ -56,48 +58,41 @@ api-gateway        -> processing-service   /docs
 processing-service -> data-service         /docs
 ```
 
-The service-level probe opens the configured TCP connection and waits for the expected HTTP response. It therefore provides a different signal from raw ICMP RTT.
+The probe paths are observability endpoints/requests and are not equivalent to every user operation handled by the Notes Platform.
 
-## Detector semantics
+## SINGLE_ENTITY detector scope
 
-Network-latency detectors are SINGLE_ENTITY. The configured detectors are:
+The configured network-latency detectors are:
 
-- `NETLAT-traffic-generator-api-gateway`
-- `NETLAT-api-gateway-processing-service`
-- `NETLAT-processing-service-data-service`
+- `NETLAT-traffic-generator-api-gateway`;
+- `NETLAT-api-gateway-processing-service`;
+- `NETLAT-processing-service-data-service`.
 
-Each detector uses the metrics index of its source service and represents only that configured source/link.
+Each detector is SINGLE_ENTITY and uses telemetry from its configured source/link. A result from one detector must not be interpreted as a measurement of another link.
 
-## Network versus application symptoms
+## Ports and service reachability
 
-A network-path problem becomes more plausible when several signals move together:
+The main application ports are:
 
-- `network_service_latency.response_time` increases;
-- raw ICMP RTT increases for the same target;
-- application request latency also increases after the network signals change.
+- `api-gateway`: container port 5000;
+- `processing-service`: container port 8000;
+- `data-service`: container port 8000.
 
-An application-side explanation becomes more plausible when user-visible latency rises while raw ICMP RTT and the service-level network probe remain near baseline.
+A successful TCP connection indicates that the destination port accepted the connection. It does not by itself confirm correct business behaviour of the complete application.
 
-## Connectivity versus service failure
+Likewise, a failed application request can reflect transport, destination-service or downstream application conditions. These are distinct technical possibilities and require live evidence to distinguish.
 
-A failed service-level probe can mean that the target is unreachable or is not returning the expected service response. It should therefore be correlated with:
+## Timing boundaries
 
-- ICMP reachability;
-- application logs on the source and target;
-- target service state;
-- request status codes;
-- fresh target telemetry.
+The system exposes multiple latency values:
 
-A failed probe alone does not identify whether the root cause is the network path or the destination service.
+- ICMP RTT from `ping`;
+- service-probe response time from `network_service_latency`;
+- downstream application latency from service logs;
+- end-to-end user-visible latency from traffic-generator.
 
-## Diagnostic principles
+Because these values observe different layers and scopes, differences between them are expected and must be interpreted in context by the agent.
 
-When investigating connectivity or latency:
+## Network knowledge boundary
 
-- identify the exact source and target first;
-- keep each SINGLE_ENTITY detector separate;
-- compare service-level latency with independent ICMP evidence;
-- use application timing only as supporting impact evidence;
-- inspect `result_code` when reachability is uncertain;
-- avoid calling an application slowdown a network problem when network probes remain normal;
-- avoid calling a target service down only because an upstream request failed.
+This document defines topology, ports, probe behaviour and measurement semantics. It does not define a symptom pattern that should be mapped directly to a network root cause.
