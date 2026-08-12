@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.processing-service
-version: 1
+version: 2
 domain: monitored_system
 document_type: service-reference
 roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
@@ -33,21 +33,19 @@ title:   1 to 120 characters
 content: 1 to 10000 characters
 ```
 
-Validation failures are application-level input problems and should be separated from infrastructure, network or downstream availability incidents.
+Validation errors are generated before a valid persistence operation is completed and are distinct from transport failures to `data-service`.
 
 ## Request correlation
 
 The service reuses the incoming `X-Request-ID` when present and creates one otherwise. The same identifier is propagated to `data-service`.
 
-This permits one request to be correlated across `api-gateway`, `processing-service` and `data-service`.
-
 ## Important log events
 
 `downstream_request_completed` records the status and latency of calls to `data-service`.
 
-`data_service_unavailable` means the HTTP client could not successfully contact `data-service`.
+`data_service_unavailable` means the HTTP client could not successfully contact `data-service` and no normal downstream response was obtained.
 
-Successful operations also produce application-specific events such as:
+Successful operations also produce events such as:
 
 - `notes_listed`;
 - `note_created`;
@@ -58,9 +56,9 @@ Successful operations also produce application-specific events such as:
 
 ## Error propagation
 
-When `data-service` cannot be contacted, processing-service returns HTTP 503. When data-service returns an HTTP error, processing-service propagates that downstream status and available detail.
+When the request to `data-service` raises a client/network error, processing-service returns HTTP 503. When data-service returns an HTTP error response, processing-service propagates the downstream status and available error detail.
 
-Therefore, an error emitted by processing-service can be a local problem or a propagated downstream problem. The distinction requires data-service and network evidence.
+The presence of an error in processing-service logs therefore describes where the error was observed and how the application handled it; it does not by itself identify the root cause.
 
 ## Network observations
 
@@ -80,7 +78,7 @@ NETLAT-processing-service-data-service
 
 It is SINGLE_ENTITY and represents only this source/link.
 
-## Resource interpretation
+## Resource telemetry
 
 Container CPU is observed through:
 
@@ -94,21 +92,15 @@ Container memory is observed through:
 docker_container_mem.usage_percent
 ```
 
-A local resource anomaly should be correlated with request timing and downstream evidence before being declared the root cause of user-visible latency.
+These metrics describe resource usage of the processing-service container.
 
-## Latency interpretation
+## Timing semantics
 
-Slow requests observed at processing-service can originate from different domains:
+Application timing and network timing are distinct observations:
 
-- local application processing;
-- local CPU or memory pressure;
-- network degradation towards data-service;
-- slow or unavailable data-service.
+- api-gateway `downstream_request_completed.latency_ms` measures the complete call from api-gateway to processing-service;
+- processing-service `downstream_request_completed.latency_ms` measures the call from processing-service to data-service;
+- `network_service_latency.response_time` measures the configured active service probe;
+- `ping` measures ICMP timing.
 
-Useful discrimination comes from comparing processing-service runtime metrics, application logs, `processing-service -> data-service` probes and correlated upstream latency at api-gateway.
-
-## Diagnostic interpretation
-
-A local processing-service hypothesis becomes stronger when the first abnormal evidence appears in its own runtime or application behaviour while downstream network and data-service evidence remain normal.
-
-A downstream hypothesis becomes stronger when `data_service_unavailable`, failed probes, missing data-service activity or downstream 5xx evidence appears before the upstream symptom.
+These values can overlap in time but they represent different parts of the request and observation path.
