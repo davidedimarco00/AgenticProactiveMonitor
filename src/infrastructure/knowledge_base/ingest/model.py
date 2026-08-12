@@ -10,7 +10,6 @@ PAYLOAD_METADATA_FIELDS = {
     "kb_id",
     "domain",
     "document_type",
-    "roles",
     "domains",
     "services",
     "topics",
@@ -100,7 +99,10 @@ def build_document_metadata(
     merged["managed_by"] = MANAGED_BY
     merged.setdefault("kb_id", derived_kb_id(collection, relative_path))
 
-    # Deliberately do not persist incident_types as a diagnosis-oriented label.
+    # Role labels and incident labels are deliberately excluded. Retrieval is
+    # shared across all agents and diagnosis must come from reasoning over live
+    # evidence, not from classification tags.
+    merged.pop("roles", None)
     merged.pop("incident_types", None)
     return merged
 
