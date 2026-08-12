@@ -1,184 +1,245 @@
-# 3 Domain Driven Design to Microservices
+# Design
 
-> In following subsections we describe how we created the microservices architecture starting
-> from the definition of the domain and subdomains described in previous sections.
+The system is designed as a set of loosely coupled layers. The monitored workload, telemetry pipeline, diagnostic tools, knowledge base, agent runtime, and operator interface are intentionally separated so that each part can evolve independently.
 
-## 3.1 System Operations
+## 1. High-level architecture
 
-> In this section are shown the mais systems operations identified in the smart gym
-> system. Operations are derived use cases and represent the main commands that guides
-> the behaviour of the system.
+```mermaid
+flowchart TB
+    subgraph HOST[Windows Host]
+        OLLAMA[Ollama\nLocal LLM + Embeddings]
+    end
 
-| Actor      | Related Use Case   | Command                                   | Description                                                            |
-| ---------- | ------------------ | ----------------------------------------- | ---------------------------------------------------------------------- |
-| Gym Member | Access Gym         | `startGymSession(badgeId)`                | Creates a new GymSession when badge is validated at entrance turnstile |
-| Gym Member | Exit Gym           | `endGymSession(badgeId)`                  | Closes active GymSession and updates gym count                         |
-| Gym Member | Access Area        | `enterArea(badgeId, areaId)`              | Registers AreaEntered event and increments area count                  |
-| Gym Member | Exit Area          | `exitArea(badgeId, areaId)`               | Registers AreaExited event and decrements area count                   |
-| Gym Member | Use Machine        | `startMachineSession(machineId, badgeId)` | Sets machine status to Occupied and creates MachineSession             |
-| Gym Member | Stop Using Machine | `endMachineSession(machineId)`            | Closes MachineSession and sets machine status to Free                  |
-| Admin      | Set Maintenance    | `setMachineMaintenance(machineId)`        | Changes machine state to Maintenance                                   |
-| Admin      | Login              | `authenticateAdmin(credentials)`          | Validates admin credentials                                            |
+    subgraph MON[Monitored System]
+        TG[traffic-generator]
+        API[api-gateway]
+        PROC[processing-service]
+        DATA[data-service]
+        WORK[worker-service]
+        TG --> API --> PROC --> DATA
+    end
 
-<p align="center"><em>Table X: Main System Operation Description</em></p>
+    subgraph OBS[Agentic Monitoring Infrastructure]
+        OS[OpenSearch]
+        OSD[OpenSearch Dashboards]
+        QD[Qdrant]
+        MCP[MCP Server]
+        XMPP[Prosody / XMPP]
+        DASH[Operator Dashboard]
+        AD[OpenSearch Anomaly Detection]
+        OS --> OSD
+        OS --> AD
+        OS --> MCP
+        QD --> MCP
+        MCP --> DASH
+        XMPP --> DASH
+    end
 
-| Query                          | Description                                       |
-| ------------------------------ | ------------------------------------------------- |
-| `getGymCount()`                | Returns total people currently inside the gym     |
-| `getAreaStatus(areaId)`        | Returns area occupancy and capacity               |
-| `getMachineStatus(machineId)`  | Returns machine state (Free/Occupied/Maintenance) |
-| `getActiveSessions()`          | Returns active gym sessions                       |
-| `getMachineHistory(machineId)` | Returns machine usage history                     |
-| `getAttendanceReport(date)`    | Returns aggregated attendance statistics          |
+    MON -->|Telegraf metrics| OS
+    MON -->|Fluent Bit logs| OS
+    OLLAMA --> MCP
+```
 
-<p align="center"><em>Table X: Main System Queries Description</em></p>
+The infrastructure and the monitored workload are two different Docker Compose projects. They communicate through the external bridge network `agentic-monitoring-net`. The monitored application also owns a private network called `monitored-system-net` for internal service communication.
 
-## 3.2 Subdomains to Microservices
+## 2. Monitored system design
 
-> To correctly apply the Decomposition by Subdomain pattern suggested by Domain-Driven Design, each identified bounded context has been mapped to a dedicated microservice.
-> This choice guarantees clear separation of concerns, independent evolution, service autonomy, and database isolation.
-> Each microservice owns its domain model, enforces its invariants, and exposes its behavior through well-defined REST APIs or asynchronous events.
-> The mapping between subdomains and microservices is described below.
+The Notes Platform is intentionally small enough to control during experiments but distributed enough to create realistic failure propagation.
 
-## 3.2.1 Occupancy Tracking Service (Core)
+```mermaid
+flowchart LR
+    U[Synthetic User] --> TG[traffic-generator]
+    TG --> API[api-gateway]
+    API --> PROC[processing-service]
+    PROC --> DATA[data-service]
+    DATA --> DB[(SQLite)]
+    WORK[worker-service]:::independent
 
-This microservice implements the Core Domain of the SmartGym Monitor system.
-It is responsible for managing the lifecycle of gym sessions and maintaining the global consistency of gym occupancy.
+    classDef independent stroke-dasharray: 5 5;
+```
 
-| Responsibility           | Description                                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------- |
-| Gym Session Management   | Creates and terminates GymSession entities when members enter or exit the gym.     |
-| Global Gym Count         | Maintains the real-time number of people inside the gym.                           |
-| Invariant Enforcement    | Ensures that a badge cannot have more than one active GymSession at the same time. |
-| Domain Event Publication | Emits domain events such as GymSessionStarted and GymSessionEnded.                 |
+The main request chain is:
 
-## 3.2.2 Area Management Service (Supporting)
+```text
+traffic-generator -> api-gateway -> processing-service -> data-service
+```
 
-| Responsibility       | Description                                                              |
-| -------------------- | ------------------------------------------------------------------------ |
-| Area Configuration   | Defines and updates area metadata (name, capacity).                      |
-| Occupancy Tracking   | Maintains the current number of people inside each GymArea.              |
-| Capacity Enforcement | Guarantees that the constraint 0 ≤ currentCount ≤ capacity always holds. |
-| Event Handling       | Processes AreaEntered and AreaExited events.                             |
+`worker-service` is independent from the request path and provides a controlled background workload that can be used for memory experiments.
 
-## 3.2.3 Machine Management Service (Supporting)
+Every generated request includes an `X-Request-ID`. The identifier is propagated through the application services so that distributed log events can be correlated during diagnosis.
 
-| Responsibility              | Description                                                                        |
-| --------------------------- | ---------------------------------------------------------------------------------- |
-| Machine Configuration       | Manages machine metadata and association with areas.                               |
-| Machine Session Lifecycle   | Creates and closes MachineSession entities.                                        |
-| State Transition Validation | Ensures valid transitions between Free, Occupied, and Maintenance states.          |
-| Consistency Enforcement     | Guarantees that a machine cannot have more than one active session simultaneously. |
+## 3. Observability design
 
-## 3.2.4 Embedded Service (Supporting)
+Each monitored container runs Telegraf and Fluent Bit.
 
-| Responsibility             | Description                                                     |
-| -------------------------- | --------------------------------------------------------------- |
-| Device Integration         | Manages RFID readers, turnstiles, doors, and proximity sensors. |
-| Event Translation          | Converts hardware signals into structured backend events.       |
-| Asynchronous Communication | Publishes device events through an MQTT/Event Bus mechanism.    |
-| Device Monitoring          | Exposes device health and operational status for observability. |
+Telemetry is separated by service:
 
-## 3.2.5 Analytics Service (Generic)
+```text
+metrics-<service>-YYYY.MM.DD
+logs-<service>-YYYY.MM.DD
+```
 
-| Responsibility              | Description                                                  |
-| --------------------------- | ------------------------------------------------------------ |
-| Attendance Statistics       | Computes gym attendance trends and peak hours.               |
-| Machine Usage Analysis      | Calculates machine utilization rates and dwell time.         |
-| Historical Data Aggregation | Processes domain events to generate analytical reports.      |
-| Read Model Management       | Maintains optimized read models for dashboard visualization. |
+This design allows each anomaly detector to read one dedicated metric source and simplifies evidence retrieval by the MCP Server.
 
-## 3.2.6 Authentication Service (Generic)
+The current monitored signals include:
 
-| Responsibility            | Description                               |
-| ------------------------- | ----------------------------------------- |
-| Admin Authentication      | Validates administrator credentials.      |
-| Token Management          | Issues and validates JWT tokens.          |
-| Role-Based Access Control | Enforces authorization rules.             |
-| Service Authentication    | Secures service-to-service communication. |
+- Docker container CPU usage;
+- Docker container memory usage;
+- interface network counters;
+- ICMP RTT;
+- end-to-end network-service latency;
+- application logs;
+- system heartbeat logs.
 
-## 3.3 System Operation Identification
+## 4. Anomaly detection design
 
-> In this section we identify the main operations exposed by each microservice of the SmartGym Monitor system.
-> Operations are derived from the use cases and represent the core commands that drive the behavior of the distributed system.
+OpenSearch Anomaly Detection is used as the online anomaly detection component.
 
-| Micro-service                  | Operations                                                                                                   | Collaborators                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| **Occupancy Tracking Service** | startGymSession(), endGymSession(), getGymCount(), getActiveGymSessions()                                    | Embedded Service, Area Management Service, Authentication Service                             |
-| **Area Management Service**    | enterArea(), exitArea(), getAreaStatus(), updateAreaCapacity()                                               | Embedded Service, Occupancy Tracking Service, Authentication Service                          |
-| **Machine Management Service** | startMachineSession(), endMachineSession(), setMachineMaintenance(), getMachineStatus(), getMachineHistory() | Embedded Service, Area Management Service, Occupancy Tracking Service, Authentication Service |
-| **Embedded Service**           | publishBadgeScanned(), publishAreaAccess(), publishMachineUsage(), getDeviceStatus()                         | none (event producer)                                                                         |
-| **Analytics Service**          | generateAttendanceReport(), getAttendanceStats(), getMachineUtilization(), getPeakHours()                    | Occupancy Tracking Service, Area Management Service, Machine Management Service               |
-| **Authentication Service**     | login(), logout(), validateToken()                                                                           | none                                                                                          |
+A strict design rule is applied: **all detectors are SINGLE_ENTITY**.
 
-## 3.4 API Interface Definition and Identification
+The detector topology is:
 
-> In this section, the interfaces of the SmartGym Monitor system are described.
-> Since the system integrates embedded devices and backend microservices, two communication layers are defined:
-> Asynchronous communication (MQTT/Event Bus) between embedded devices and backend. Synchronous REST APIs between microservices and the API Gateway.
-> Each microservice exposes a set of REST endpoints that implement the identified system operations.
+```text
+CPU
+  5 detectors -> one per monitored service
 
-## 3.4.1 Embedded Service
+RAM
+  5 detectors -> one per monitored service
 
-The Embedded Service communicates with physical or simulated devices and publishes structured domain events to backend services.
+Network latency
+  traffic-generator  -> api-gateway
+  api-gateway        -> processing-service
+  processing-service -> data-service
+```
 
-| Endpoint                          | Type | Description                                                                          |
-| --------------------------------- | ---- | ------------------------------------------------------------------------------------ |
-| `/embedded-service/badge-scanned` | POST | Receives a badge scan event from an RFID reader and forwards it to backend services. |
-| `/embedded-service/area-access`   | POST | Receives an area access event (IN/OUT direction).                                    |
-| `/embedded-service/machine-usage` | POST | Receives proximity sensor events related to machine usage.                           |
-| `/embedded-service/device-status` | GET  | Returns operational status of all connected devices.                                 |
+This gives a total of 13 detectors.
 
-## 3.4.2 Occupancy Tracking Service
+Using separate detectors has two advantages for the thesis prototype:
 
-This service manages gym sessions and global occupancy consistency.
-| Endpoint | Type | Description |
-| ------------------------------------ | ---- | ------------------------------------------------------------- |
-| `/occupancy-service/start-session` | POST | Creates a new GymSession when a member enters the gym. |
-| `/occupancy-service/end-session` | POST | Terminates the active GymSession of a member. |
-| `/occupancy-service/count` | GET | Returns the total number of members currently inside the gym. |
-| `/occupancy-service/active-sessions` | GET | Returns all currently active gym sessions. |
+- the anomaly source is explicit;
+- each detector can be analysed independently during controlled experiments.
 
-## 3.4.3 Area Management Service
+## 5. Diagnostic tool layer
 
-This service manages area configuration and area-level occupancy.
+The MCP Server is the controlled interface between reasoning components and live system evidence.
 
-| Endpoint                        | Type | Description                                                |
-| ------------------------------- | ---- | ---------------------------------------------------------- |
-| `/area-service/enter`           | POST | Registers entry of a member into a specific area.          |
-| `/area-service/exit`            | POST | Registers exit of a member from a specific area.           |
-| `/area-service/{areaId}`        | GET  | Returns occupancy status and capacity of a specific area.  |
-| `/area-service/update-capacity` | POST | Updates the maximum capacity of an area (admin operation). |
+```mermaid
+flowchart LR
+    A[Agent / LLM] --> MCP[MCP Server]
+    MCP --> OS[OpenSearch]
+    MCP --> DK[Docker Engine]
+    MCP --> QD[Qdrant]
+    MCP --> OL[Ollama Embeddings]
+```
 
-## 3.4.4 Machine Management Service
+The MCP layer is deliberately safer than giving an LLM direct shell access. Tools expose predefined diagnostic operations and validate the monitored target before executing Docker inspection commands.
 
-This service handles machine lifecycle and machine sessions.
+Current tool categories are:
 
-| Endpoint                               | Type | Description                                                     |
-| -------------------------------------- | ---- | --------------------------------------------------------------- |
-| `/machine-service/start-session`       | POST | Starts a MachineSession and sets machine status to Occupied.    |
-| `/machine-service/end-session`         | POST | Ends the active MachineSession and sets machine status to Free. |
-| `/machine-service/set-maintenance`     | POST | Sets machine status to Maintenance (admin operation).           |
-| `/machine-service/{machineId}`         | GET  | Returns the current state of a machine.                         |
-| `/machine-service/history/{machineId}` | GET  | Returns historical usage sessions of a machine.                 |
+- OpenSearch metric retrieval;
+- OpenSearch log retrieval and search;
+- Docker process inspection;
+- Docker runtime statistics;
+- disk and inode inspection;
+- network connection inspection;
+- knowledge-base semantic search.
 
-## 3.4.5 Analytics Service
+The current implementation is read-only.
 
-The Analytics Service provides aggregated and historical data for administrative monitoring.
+## 6. Knowledge architecture
 
-| Endpoint                                 | Type | Description                                        |
-| ---------------------------------------- | ---- | -------------------------------------------------- |
-| `/analytics-service/attendance/{date}`   | GET  | Returns attendance statistics for a specific date. |
-| `/analytics-service/machine-utilization` | GET  | Returns aggregated machine usage statistics.       |
-| `/analytics-service/peak-hours`          | GET  | Returns peak attendance periods.                   |
-| `/analytics-service/reports`             | GET  | Retrieves generated analytical reports.            |
+The Qdrant knowledge base contains stable technical documentation about the monitored system.
 
-## 3.4.6 Authentication Service
+Documents are organised by shared architecture, services, operational domains, and diagnostic patterns. Metadata is designed to support role-aware retrieval using fields such as:
 
-The Authentication Service manages identity verification and token-based security.
+- `roles`;
+- `domains`;
+- `services`;
+- `incident_types`;
+- `document_type`;
+- `version`.
 
-| Endpoint                 | Type | Description                                               |
-| ------------------------ | ---- | --------------------------------------------------------- |
-| `/auth-service/login`    | POST | Authenticates an administrator and generates a JWT token. |
-| `/auth-service/logout`   | POST | Invalidates the active token.                             |
-| `/auth-service/validate` | GET  | Validates a token for service-to-service communication.   |
+The five target roles can therefore retrieve different evidence for the same incident without creating separate knowledge silos.
+
+For example, a Network Engineer investigating `api-gateway` should prioritise topology, RTT, network-service latency, and socket information, while a Software Developer should prioritise API behaviour, validation, error propagation, and service-level code symptoms.
+
+## 7. Target hybrid agent architecture
+
+The final reasoning layer is designed as a hybrid **BDI + ReAct** architecture.
+
+BDI is used to model the agent deliberative state:
+
+- **Beliefs:** current facts and evidence about the incident;
+- **Desires:** diagnostic goals and desired investigation outcomes;
+- **Intentions:** the currently selected course of investigation.
+
+ReAct is used for operational execution:
+
+```mermaid
+flowchart LR
+    R1[Reason] --> A1[Act / Tool Call]
+    A1 --> O1[Observe Result]
+    O1 --> R2[Reason Again]
+    R2 -->|more evidence needed| A1
+    R2 -->|sufficient evidence| D[Diagnosis]
+```
+
+The important design principle is that BDI and ReAct have different responsibilities. BDI represents what the agent currently believes, wants, and commits to doing. ReAct executes the selected intention through real tool calls and updates the beliefs with observations.
+
+## 8. Virtual technical team
+
+The operator-facing team uses real professional roles:
+
+```mermaid
+flowchart TB
+    TL[Technical Lead]
+    SE[System Engineer]
+    NE[Network Engineer]
+    AE[Application Engineer]
+    SD[Software Developer]
+
+    TL <--> SE
+    TL <--> NE
+    TL <--> AE
+    TL <--> SD
+    SE <--> NE
+    AE <--> SD
+```
+
+The graph is not a fixed execution pipeline. The Technical Lead should dynamically involve the specialists required by the current anomaly. Specialists may also exchange evidence when an incident crosses technical domains.
+
+The intended responsibility split is:
+
+- Technical Lead: triage, coordination, hypothesis comparison, critical review;
+- System Engineer: Linux, containers, CPU, memory, disk, processes, runtime state;
+- Network Engineer: connectivity, latency, paths, sockets, service-to-service network evidence;
+- Application Engineer: service health, dependencies, application logs, request flow;
+- Software Developer: expected software behaviour, API semantics, error handling, code-level symptoms.
+
+## 9. Operator dashboard design
+
+The Flask dashboard is intentionally outside the autonomous control loop. It observes and presents incident state rather than controlling the internal reasoning of the agents.
+
+It persists:
+
+```text
+agentic-incidents-YYYY.MM
+agentic-agent-events-YYYY.MM
+```
+
+The dashboard shows concise operational rationale and observable actions. It does not store or display private model chain-of-thought.
+
+## 10. Human-in-the-loop boundary
+
+The final decision boundary is designed as:
+
+```text
+anomaly
+  -> autonomous investigation
+  -> evidence collection
+  -> diagnosis
+  -> remediation recommendation
+  -> human operator decision
+```
+
+This keeps the system agentic at the investigation level while preserving operator control over potentially disruptive remediation actions.
