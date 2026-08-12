@@ -1,0 +1,29 @@
+version: 1
+runtime:
+  expected_agent_count: 5
+
+agents:
+  - role: technical_lead
+    display_name: Technical Lead Agent
+    jid_localpart: technical-lead
+    password_env: XMPP_TECHNICAL_LEAD_PASSWORD
+
+  - role: system_engineer
+    display_name: System Engineer Agent
+    jid_localpart: system-engineer
+    password_env: XMPP_SYSTEM_ENGINEER_PASSWORD
+
+  - role: network_engineer
+    display_name: Network Engineer Agent
+    jid_localpart: network-engineer
+    password_env: XMPP_NETWORK_ENGINEER_PASSWORD
+
+  - role: application_engineer
+    display_name: Application Engineer Agent
+    jid_localpart: application-engineer
+    password_env: XMPP_APPLICATION_ENGINEER_PASSWORD
+
+  - role: software_developer
+    display_name: Software Developer Agent
+    jid_localpart: software-developer
+    password_env: XMPP_SOFTWARE_DEVELOPER_PASSWORD
