@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.traffic-generator
-version: 1
+version: 2
 domain: monitored_system
 document_type: service-reference
 roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
@@ -16,17 +16,17 @@ source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/src
 
 `traffic-generator` represents a continuous external user workload for the Notes Platform. It sends real HTTP requests to `api-gateway` and records the result of each synthetic user action.
 
-It is not part of the business logic of the Notes application. Its main operational value during diagnosis is that it provides an upstream view of user-visible success, failure and latency.
+It does not implement Notes business logic. It provides an upstream observation point for request status and end-to-end user-visible latency.
 
 ## Runtime configuration
 
-The service runs in application mode and targets:
+The service targets:
 
 ```text
 http://api-gateway:5000
 ```
 
-Requests normally use a timeout of 5 seconds. The interval between actions is normally between 2 and 5 seconds.
+The default request timeout is 5 seconds. The interval between actions is normally between 2 and 5 seconds.
 
 ## User-like actions
 
@@ -38,17 +38,15 @@ The generator performs a weighted mix of operations:
 - update an existing note;
 - delete a note.
 
-The workload keeps an in-memory set of observed note identifiers. Missing or stale note identifiers can produce normal 404 handling and should not automatically be treated as infrastructure failure.
+It keeps an in-memory set of observed note identifiers. A note that no longer exists can produce HTTP 404 during normal workload execution.
 
 ## Request correlation
 
-Every generated action creates an `X-Request-ID`. The same identifier is sent to `api-gateway` and can be propagated through the application chain.
-
-This makes the traffic generator a useful starting point for reconstructing one affected request across multiple services.
+Every generated action creates an `X-Request-ID`. The identifier is sent to `api-gateway` and can be propagated through the application chain.
 
 ## Application logs
 
-Successful and failed actions are recorded using:
+Successful and failed actions use:
 
 ```text
 synthetic_user_action_completed
@@ -69,29 +67,24 @@ A 5xx response is recorded as a failed synthetic user action. A request exceptio
 
 ## Network observations
 
-The configured network target is `api-gateway`.
+The configured network target is `api-gateway`:
 
 ```text
-ICMP target:        api-gateway
-TCP/HTTP target:    api-gateway:5000
-probe path:         /notes/new
+ICMP target:     api-gateway
+TCP/HTTP target: api-gateway:5000
+probe path:      /notes/new
 ```
 
-The corresponding critical detector is:
+The corresponding OpenSearch detector is:
 
 ```text
 NETLAT-traffic-generator-api-gateway
 ```
 
-The detector is SINGLE_ENTITY and must only be interpreted for the `traffic-generator -> api-gateway` link.
+It is SINGLE_ENTITY and represents only the `traffic-generator -> api-gateway` source/link.
 
-## Diagnostic interpretation
+## Interpretation boundaries
 
-A traffic-generator failure is often an upstream symptom rather than the root cause. When actions fail or become slow, useful follow-up questions are:
+A request result observed by traffic-generator describes the outcome visible at the client side. It does not identify which component in the downstream chain caused that result.
 
-- Is `api-gateway` reachable?
-- Is the `traffic-generator -> api-gateway` network probe abnormal?
-- Does `api-gateway` return a downstream 5xx error?
-- Can the same `request_id` be followed into processing-service and data-service?
-
-If traffic-generator latency rises while all downstream service and network evidence remains normal, then the generator itself or its runtime becomes more relevant. Otherwise, prefer the first downstream component whose live evidence explains the symptom.
+`latency_ms` includes the complete request path seen by the generator. It is therefore different from the latency of an individual internal service call.
