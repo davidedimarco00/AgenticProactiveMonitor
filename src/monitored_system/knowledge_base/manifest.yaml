@@ -1,4 +1,4 @@
-version: 3
+version: 4
 domain: monitored_system
 system: notes-platform
 branch: feature/monitored_system
@@ -13,7 +13,7 @@ roles:
 
 role_profiles:
   technical_lead:
-    preferred_domains: [architecture, observability, diagnostics, dependencies]
+    preferred_domains: [architecture, observability, dependencies, impact, diagnostics]
   system_engineer:
     preferred_domains: [infrastructure, runtime, containers, cpu, memory, disk, processes]
   network_engineer:
@@ -45,36 +45,67 @@ documents:
   - path: shared/system_architecture.md
     roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: architecture
+
+  - path: shared/dependency_and_impact_model.md
+    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+    document_type: architecture
+
   - path: shared/observability_model.md
     roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: observability
-  - path: services/service_reference.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
-    document_type: service-reference
+
   - path: domains/infrastructure_runtime.md
     roles: [system_engineer, technical_lead]
     document_type: domain-reference
+
   - path: domains/network_connectivity.md
     roles: [network_engineer, technical_lead, application_engineer]
     document_type: domain-reference
+
   - path: domains/application_operations.md
     roles: [application_engineer, technical_lead, software_developer]
     document_type: domain-reference
+
   - path: domains/software_behavior.md
     roles: [software_developer, application_engineer]
     document_type: domain-reference
+
+  - path: services/traffic_generator.md
+    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+    document_type: service-reference
+
+  - path: services/api_gateway.md
+    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+    document_type: service-reference
+
+  - path: services/processing_service.md
+    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+    document_type: service-reference
+
+  - path: services/data_service.md
+    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
+    document_type: service-reference
+
+  - path: services/worker_service.md
+    roles: [technical_lead, system_engineer, network_engineer, application_engineer]
+    document_type: service-reference
+
   - path: diagnostics/cpu_saturation_processing_service.md
     roles: [system_engineer, application_engineer, software_developer, technical_lead]
     document_type: diagnostic-guide
+
   - path: diagnostics/memory_pressure_worker_service.md
     roles: [system_engineer, technical_lead]
     document_type: diagnostic-guide
+
   - path: diagnostics/network_degradation_api_gateway_processing_service.md
     roles: [network_engineer, application_engineer, technical_lead]
     document_type: diagnostic-guide
+
   - path: diagnostics/application_latency_processing_service.md
     roles: [application_engineer, software_developer, system_engineer, technical_lead]
     document_type: diagnostic-guide
+
   - path: diagnostics/data_service_unavailability.md
     roles: [application_engineer, software_developer, network_engineer, system_engineer, technical_lead]
     document_type: diagnostic-guide
