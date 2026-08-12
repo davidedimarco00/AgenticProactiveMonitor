@@ -1,4 +1,4 @@
-version: 4
+version: 5
 domain: monitored_system
 system: notes-platform
 branch: feature/monitored_system
@@ -13,7 +13,7 @@ roles:
 
 role_profiles:
   technical_lead:
-    preferred_domains: [architecture, observability, dependencies, impact, diagnostics]
+    preferred_domains: [architecture, observability, dependencies, impact]
   system_engineer:
     preferred_domains: [infrastructure, runtime, containers, cpu, memory, disk, processes]
   network_engineer:
@@ -33,13 +33,15 @@ services:
 excluded_sources:
   - src/monitored_system/infrastructure/tests/**
   - src/monitored_system/infrastructure/scenarios/**
+  - src/monitored_system/knowledge_base/diagnostics/**
   - src/agentic_system/**
 
 exclusion_reason: >
-  Test-suite files, controlled fault-injection ground truth and agent-runtime
-  implementation details must not be embedded in the monitored-system knowledge
-  base because they can leak evaluation answers or implementation policy into
-  diagnosis.
+  Test-suite files, controlled fault-injection ground truth, pre-written
+  diagnostic guides and agent-runtime implementation details must not be
+  embedded in the monitored-system knowledge base. The RAG corpus describes
+  the system and technical semantics; the agents must produce diagnoses from
+  live observations.
 
 documents:
   - path: shared/system_architecture.md
@@ -89,23 +91,3 @@ documents:
   - path: services/worker_service.md
     roles: [technical_lead, system_engineer, network_engineer, application_engineer]
     document_type: service-reference
-
-  - path: diagnostics/cpu_saturation_processing_service.md
-    roles: [system_engineer, application_engineer, software_developer, technical_lead]
-    document_type: diagnostic-guide
-
-  - path: diagnostics/memory_pressure_worker_service.md
-    roles: [system_engineer, technical_lead]
-    document_type: diagnostic-guide
-
-  - path: diagnostics/network_degradation_api_gateway_processing_service.md
-    roles: [network_engineer, application_engineer, technical_lead]
-    document_type: diagnostic-guide
-
-  - path: diagnostics/application_latency_processing_service.md
-    roles: [application_engineer, software_developer, system_engineer, technical_lead]
-    document_type: diagnostic-guide
-
-  - path: diagnostics/data_service_unavailability.md
-    roles: [application_engineer, software_developer, network_engineer, system_engineer, technical_lead]
-    document_type: diagnostic-guide
