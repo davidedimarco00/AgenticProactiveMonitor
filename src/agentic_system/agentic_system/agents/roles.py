@@ -17,6 +17,7 @@ from .base import BaseRoleAgent
 
 
 LOGGER = logging.getLogger("agentic_system.agents.roles")
+HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
 
 
 class TechnicalLeadAgent(BaseRoleAgent):
@@ -46,12 +47,19 @@ class TechnicalLeadAgent(BaseRoleAgent):
                 envelope.correlation_id,
             )
 
-    def __init__(self, jid: str, password: str, display_name: str) -> None:
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        display_name: str,
+        health_port: int,
+    ) -> None:
         super().__init__(
             jid,
             password,
             role="technical_lead",
             display_name=display_name,
+            health_port=health_port,
         )
         self._pending_acknowledgements: dict[
             str, asyncio.Future[AgentMessage]
@@ -93,8 +101,14 @@ class TechnicalLeadAgent(BaseRoleAgent):
         return request, acknowledgement
 
 
-class SystemEngineerAgent(BaseRoleAgent):
-    class RequestBehaviour(CyclicBehaviour):
+class _AcknowledgingSpecialistAgent(BaseRoleAgent):
+    """Common health-probe transport behaviour for specialist SPADE agents.
+
+    This is deliberately limited to the runtime connectivity probe. Future BDI or
+    diagnostic REQUEST messages will use their own message types and behaviours.
+    """
+
+    class HealthProbeRequestBehaviour(CyclicBehaviour):
         async def run(self) -> None:
             message = await self.receive(timeout=1)
             if message is None:
@@ -103,7 +117,11 @@ class SystemEngineerAgent(BaseRoleAgent):
             try:
                 request = parse_spade_message(message)
             except (ValueError, TypeError) as exc:
-                LOGGER.warning("System Engineer received invalid REQUEST message: %s", exc)
+                LOGGER.warning(
+                    "%s received invalid health REQUEST: %s",
+                    self.agent.display_name,
+                    exc,
+                )
                 return
 
             self.agent.mark_message_received()
@@ -117,6 +135,7 @@ class SystemEngineerAgent(BaseRoleAgent):
                 payload={
                     "accepted_by": self.agent.role,
                     "request_type": request.type,
+                    "health": True,
                 },
             )
             await self.agent.send_agent_message(
@@ -125,18 +144,27 @@ class SystemEngineerAgent(BaseRoleAgent):
             )
 
             LOGGER.info(
-                "System Engineer acknowledged REQUEST/%s from %s correlation_id=%s",
-                request.type,
+                "%s acknowledged health REQUEST from %s correlation_id=%s",
+                self.agent.display_name,
                 request.sender,
                 request.correlation_id,
             )
 
-    def __init__(self, jid: str, password: str, display_name: str) -> None:
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        display_name: str,
+        health_port: int,
+        *,
+        role: str,
+    ) -> None:
         super().__init__(
             jid,
             password,
-            role="system_engineer",
+            role=role,
             display_name=display_name,
+            health_port=health_port,
         )
         self.last_received_request: AgentMessage | None = None
 
@@ -145,34 +173,73 @@ class SystemEngineerAgent(BaseRoleAgent):
         template = Template()
         template.set_metadata("protocol", AGENTIC_PROTOCOL)
         template.set_metadata("performative", Performative.REQUEST.value)
-        self.add_behaviour(self.RequestBehaviour(), template)
+        template.set_metadata("message_type", HEALTH_PROBE_MESSAGE_TYPE)
+        self.add_behaviour(self.HealthProbeRequestBehaviour(), template)
 
 
-class NetworkEngineerAgent(BaseRoleAgent):
-    def __init__(self, jid: str, password: str, display_name: str) -> None:
+class SystemEngineerAgent(_AcknowledgingSpecialistAgent):
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        display_name: str,
+        health_port: int,
+    ) -> None:
         super().__init__(
             jid,
             password,
+            display_name,
+            health_port,
+            role="system_engineer",
+        )
+
+
+class NetworkEngineerAgent(_AcknowledgingSpecialistAgent):
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        display_name: str,
+        health_port: int,
+    ) -> None:
+        super().__init__(
+            jid,
+            password,
+            display_name,
+            health_port,
             role="network_engineer",
-            display_name=display_name,
         )
 
 
-class ApplicationEngineerAgent(BaseRoleAgent):
-    def __init__(self, jid: str, password: str, display_name: str) -> None:
+class ApplicationEngineerAgent(_AcknowledgingSpecialistAgent):
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        display_name: str,
+        health_port: int,
+    ) -> None:
         super().__init__(
             jid,
             password,
+            display_name,
+            health_port,
             role="application_engineer",
-            display_name=display_name,
         )
 
 
-class SoftwareDeveloperAgent(BaseRoleAgent):
-    def __init__(self, jid: str, password: str, display_name: str) -> None:
+class SoftwareDeveloperAgent(_AcknowledgingSpecialistAgent):
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        display_name: str,
+        health_port: int,
+    ) -> None:
         super().__init__(
             jid,
             password,
+            display_name,
+            health_port,
             role="software_developer",
-            display_name=display_name,
         )
