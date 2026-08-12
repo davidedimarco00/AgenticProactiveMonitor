@@ -92,7 +92,7 @@ Assert-True ($sharedSearch.result.points.Count -gt 0) "Shared collection search 
 $sharedPayload = $sharedSearch.result.points[0].payload
 Assert-True ($sharedPayload.collection -eq "monitored-system") "Shared result came from the wrong collection."
 Assert-True ($sharedPayload.managed_by -eq "manifest-ingest") "Shared result was not produced by manifest ingestion."
-Assert-True (-not $sharedPayload.PSObject.Properties.Name.Contains("incident_types")) "incident_types must not be persisted as a Qdrant diagnosis label."
+Assert-True (-not ($sharedPayload.PSObject.Properties.Name -contains "incident_types")) "incident_types must not be persisted as a Qdrant diagnosis label."
 
 Write-Host "[4/5] Testing System Engineer Linux retrieval..."
 $linuxSearch = Search-Collection `
@@ -104,7 +104,7 @@ $linuxPayload = $linuxSearch.result.points[0].payload
 Assert-True ($linuxPayload.collection -eq "kb-system-engineer-linux") "Linux result came from the wrong collection."
 Assert-True ($linuxPayload.roles -contains "system_engineer") "Linux result is missing system_engineer role metadata."
 Assert-True ($linuxPayload.managed_by -eq "manifest-ingest") "Linux result was not produced by manifest ingestion."
-Assert-True (-not $linuxPayload.PSObject.Properties.Name.Contains("incident_types")) "Linux payload must not contain diagnosis labels."
+Assert-True (-not ($linuxPayload.PSObject.Properties.Name -contains "incident_types")) "Linux payload must not contain diagnosis labels."
 
 Write-Host "[5/5] Checking empty specialist scaffolds..."
 foreach ($collection in @(
