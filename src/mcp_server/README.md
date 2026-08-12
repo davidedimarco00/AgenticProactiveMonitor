@@ -7,20 +7,19 @@ Its purpose is to expose controlled diagnostic tools that can be invoked by SPAD
 ## Architecture
 
 ```text
-Diagnostic Agent / LLM
+Specialist Agent / LLM
         |
         v
      MCP Server
         |
-   +----+---------+
-   |              |
-OpenSearch      Docker
-   |              |
-Metrics/Logs   Live Service State
-   |
-   +------------ Qdrant / Ollama
-                  |
-             Knowledge Base
+   +----+---------+------------------+
+   |              |                  |
+OpenSearch      Docker            Qdrant
+   |              |                  |
+Metrics/Logs   Live State     Knowledge Collections
+                                      |
+                                   Ollama
+                                  Embeddings
 ```
 
 The MCP server belongs to the **agentic infrastructure**. The containers inspected through Docker belong to the separate **monitored-system** Compose project.
@@ -48,7 +47,32 @@ http://127.0.0.1:8000/mcp
 
 ### Knowledge Base / RAG
 
-- `search_knowledge()` embeds a query using Ollama and retrieves relevant chunks from the Qdrant knowledge base.
+`search_knowledge(query, limit=5, role=None, scope="auto")` embeds the query using Ollama and retrieves relevant chunks from Qdrant.
+
+Knowledge is separated into:
+
+```text
+monitored-system
+    shared documentation of the concrete monitored Notes Platform
+
+kb-system-engineer-linux
+kb-network-engineer
+kb-application-engineer
+kb-software-developer
+kb-technical-lead
+    professional/domain collections associated with specialist roles
+```
+
+The supported scopes are:
+
+- `auto`: shared collection only when no role is supplied; shared + role collection when a role is supplied;
+- `shared`: `monitored-system` only;
+- `role`: only the professional collection for the supplied role;
+- `both`: shared + professional collection.
+
+`limit` is applied per searched collection. Results are returned grouped by collection and as a score-sorted merged list. This prevents higher-scoring shared chunks from hiding all role-specific context.
+
+The knowledge tool is read-only. Retrieved documents provide technical context; live OpenSearch, Docker and other runtime observations remain the evidence used by the agents to formulate a diagnosis.
 
 ## Allowed Monitored Targets
 
@@ -66,12 +90,17 @@ The MCP server does not expose a generic shell. Diagnostic commands are fixed in
 
 ## Docker Integration
 
-The MCP container accesses the agentic infrastructure through internal service names:
+The MCP container accesses infrastructure services through Docker networking:
 
 ```text
 OpenSearch -> http://opensearch:9200
 Qdrant    -> http://qdrant:6333
-Ollama    -> http://ollama:11434
+```
+
+Ollama runs natively on the Windows host and is reached from Docker through the configured `OLLAMA_URL`, normally:
+
+```text
+http://host.docker.internal:11434
 ```
 
 Docker live diagnostics use:
