@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.domain.infrastructure-runtime
-version: 1
+version: 2
 domain: monitored_system
 document_type: domain-reference
 roles: [system_engineer, technical_lead]
@@ -16,69 +16,73 @@ source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/inf
 
 Every monitored component runs in its own Docker container. The five monitored entities are:
 
-- `traffic-generator`
-- `api-gateway`
-- `processing-service`
-- `data-service`
-- `worker-service`
+- `traffic-generator`;
+- `api-gateway`;
+- `processing-service`;
+- `data-service`;
+- `worker-service`.
 
-Each container exports telemetry through Telegraf and Fluent Bit. Container state and container-specific resource metrics are therefore important when distinguishing a local service problem from a wider host or observability problem.
+Each container runs its application or workload together with Telegraf and Fluent Bit through the monitored-system entrypoint.
 
-## Resource evidence
+## Container resource telemetry
 
-For CPU investigations, use:
+For CPU:
 
 ```text
 measurement: docker_container_cpu
 field:       docker_container_cpu.usage_percent
 ```
 
-For memory investigations, use:
+For memory:
 
 ```text
 measurement: docker_container_mem
 field:       docker_container_mem.usage_percent
 ```
 
-These metrics represent the monitored container and are preferred over host-style system CPU or memory metrics when the question concerns one specific service.
+These fields are scoped to the monitored container selected by the Telegraf Docker input.
 
-Supporting runtime measurements include:
+Host-style `system` CPU and memory measurements are also collected, but they represent a different scope from the per-container Docker measurements.
 
-- `disk` and `diskio` for filesystem and I/O context;
-- `processes` for process-state context;
-- `system` and `kernel` for general runtime information;
-- `swap` for memory-pressure context;
+## Additional runtime measurements
+
+Available supporting measurements include:
+
+- `disk` for filesystem capacity and usage;
+- `diskio` for storage I/O counters;
+- `processes` for process-state counts;
+- `system` for operating-system runtime information;
+- `kernel` for kernel-level counters;
+- `swap` for swap usage;
 - `net` for interface counters.
 
-## Service state and missing telemetry
+These measurements describe different aspects of the runtime and should not be treated as interchangeable signals.
 
-A service that is stopped or unable to run may stop producing fresh metrics, application logs and heartbeat records. Missing telemetry can therefore support an availability hypothesis, but it is not sufficient proof by itself because an observability-path failure can produce a similar symptom.
+## Process and service state
 
-When telemetry disappears, runtime service state should be checked independently when possible.
+The monitored-system entrypoint starts Telegraf, Fluent Bit and, for application-mode containers, the application process. If one of these supervised processes exits unexpectedly, the entrypoint exits and Docker restart policy can restart the container.
 
-## Local versus propagated symptoms
+`worker-service` uses the synthetic workload path instead of a real Notes application process.
 
-Resource anomalies should initially be interpreted for the service that owns the metric. A CPU or memory anomaly in one container does not automatically prove that another service is unhealthy.
+## System heartbeat
 
-Broader impact should be supported by independent evidence such as:
+Each container writes system heartbeat records to `/var/log/machine/system.log`. The heartbeat contains fields such as:
 
-- increased request latency in dependent services;
-- 5xx responses;
-- downstream connection failures;
-- simultaneous anomalies in other containers;
-- loss of service availability.
+- `uptime_seconds`;
+- `load_average`;
+- `host`;
+- `machine_role`.
 
-## worker-service boundary
+A new heartbeat means the entrypoint loop produced a record at that time. It does not represent a complete health check of all application dependencies.
 
-`worker-service` is independent from the Notes HTTP request path. Resource pressure on this container is normally a local infrastructure/runtime concern unless live evidence demonstrates wider shared-resource impact.
+## Missing telemetry
 
-## Diagnostic principles
+Metrics, logs and heartbeats reach OpenSearch through collectors running inside the monitored container. Missing recent data can therefore have more than one technical explanation, including loss of the producing process, container interruption or an observability-path problem.
 
-When investigating infrastructure or runtime problems:
+Static knowledge cannot determine which explanation is present in a live incident.
 
-- use container-specific metrics for container-specific conclusions;
-- compare the incident period with the recent baseline;
-- verify whether the service remained running;
-- separate missing telemetry from confirmed service failure;
-- correlate resource changes with application symptoms before claiming user impact;
-- avoid assigning downstream application errors to infrastructure without supporting runtime evidence.
+## Container boundaries
+
+A CPU or memory value for one container belongs to that container. The Notes application request chain and the independent worker-service are separate architectural relationships.
+
+Cross-service effects are runtime observations, not static consequences of every local resource change.
