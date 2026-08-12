@@ -187,18 +187,43 @@ services:
       - monitoring-net
     restart: unless-stopped
 
+  xmpp-bootstrap:
+    image: prosodyim/prosody:${PROSODY_VERSION:-13.0}
+    container_name: agentic-xmpp-bootstrap
+    user: "0:0"
+    environment:
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
+      XMPP_TECHNICAL_LEAD_PASSWORD: ${XMPP_TECHNICAL_LEAD_PASSWORD:-change-this-local-password}
+      XMPP_SYSTEM_ENGINEER_PASSWORD: ${XMPP_SYSTEM_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_NETWORK_ENGINEER_PASSWORD: ${XMPP_NETWORK_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_APPLICATION_ENGINEER_PASSWORD: ${XMPP_APPLICATION_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_SOFTWARE_DEVELOPER_PASSWORD: ${XMPP_SOFTWARE_DEVELOPER_PASSWORD:-change-this-local-password}
+    volumes:
+      - ./xmpp/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - ./xmpp/bootstrap.sh:/bootstrap.sh:ro
+      - xmpp-data:/var/lib/prosody
+      - xmpp-certs:/etc/prosody/certs
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    networks:
+      - monitoring-net
+    restart: "no"
+
   xmpp:
     image: prosodyim/prosody:${PROSODY_VERSION:-13.0}
     container_name: agentic-xmpp
     hostname: xmpp
     environment:
       XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
-      XMPP_ALLOW_REGISTRATION: ${XMPP_ALLOW_REGISTRATION:-true}
+      XMPP_ALLOW_REGISTRATION: ${XMPP_ALLOW_REGISTRATION:-false}
     ports:
       - "127.0.0.1:${XMPP_CLIENT_PORT:-5222}:5222"
     volumes:
       - ./xmpp/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
       - xmpp-data:/var/lib/prosody
+      - xmpp-certs:/etc/prosody/certs:ro
+    depends_on:
+      xmpp-bootstrap:
+        condition: service_completed_successfully
     networks:
       monitoring-net:
         aliases:
@@ -257,7 +282,7 @@ services:
       XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
       XMPP_HOST: xmpp
       XMPP_PORT: 5222
-      XMPP_AUTO_REGISTER: ${XMPP_AUTO_REGISTER:-true}
+      XMPP_AUTO_REGISTER: ${XMPP_AUTO_REGISTER:-false}
       XMPP_TECHNICAL_LEAD_PASSWORD: ${XMPP_TECHNICAL_LEAD_PASSWORD:-change-this-local-password}
       XMPP_SYSTEM_ENGINEER_PASSWORD: ${XMPP_SYSTEM_ENGINEER_PASSWORD:-change-this-local-password}
       XMPP_NETWORK_ENGINEER_PASSWORD: ${XMPP_NETWORK_ENGINEER_PASSWORD:-change-this-local-password}
@@ -377,3 +402,4 @@ volumes:
   qdrant-data:
   open-webui-data:
   xmpp-data:
+  xmpp-certs:
