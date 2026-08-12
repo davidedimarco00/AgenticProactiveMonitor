@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from spade.agent import Agent
-from spade.behaviour import CyclicBehaviour
+from spade.behaviour import CyclicBehaviour, OneShotBehaviour
 
 from ..communication import AgentMessage, Performative, build_spade_message
 
@@ -29,6 +29,40 @@ class BaseRoleAgent(Agent):
         async def run(self) -> None:
             self.agent.last_heartbeat_at = _utc_now()
             await asyncio.sleep(5)
+
+    class SendMessageBehaviour(OneShotBehaviour):
+        """Send one semantic AgentMessage through SPADE's Behaviour API.
+
+        SPADE exposes message sending on Behaviour.send(), not directly on Agent.
+        Keeping transport inside a real behaviour preserves the agent/behaviour
+        execution model while still exposing a convenient agent-level helper to
+        higher architectural layers.
+        """
+
+        def __init__(
+            self,
+            envelope: AgentMessage,
+            performative: Performative,
+        ) -> None:
+            super().__init__()
+            self.envelope = envelope
+            self.performative = performative
+
+        async def run(self) -> None:
+            message = build_spade_message(
+                self.envelope,
+                performative=self.performative,
+            )
+            await self.send(message)
+            self.agent.mark_message_sent()
+            LOGGER.info(
+                "%s sent %s/%s to %s correlation_id=%s",
+                self.agent.display_name,
+                self.performative.value,
+                self.envelope.type,
+                self.envelope.receiver,
+                self.envelope.correlation_id,
+            )
 
     def __init__(
         self,
@@ -64,19 +98,25 @@ class BaseRoleAgent(Agent):
         envelope: AgentMessage,
         *,
         performative: Performative,
+        timeout: float = 5.0,
     ) -> None:
-        message = build_spade_message(envelope, performative=performative)
-        await self.send(message)
+        """Send a semantic message using a one-shot SPADE behaviour.
+
+        Higher layers can request a send from the agent object, but the actual XMPP
+        send is always executed by a SPADE Behaviour, as required by SPADE's API.
+        """
+
+        behaviour = self.SendMessageBehaviour(envelope, performative)
+        self.add_behaviour(behaviour)
+        await behaviour.join(timeout=timeout)
+
+        exit_code = behaviour.exit_code
+        if isinstance(exit_code, BaseException):
+            raise exit_code
+
+    def mark_message_sent(self) -> None:
         self.messages_sent += 1
         self.last_message_at = _utc_now()
-        LOGGER.info(
-            "%s sent %s/%s to %s correlation_id=%s",
-            self.display_name,
-            performative.value,
-            envelope.type,
-            envelope.receiver,
-            envelope.correlation_id,
-        )
 
     def mark_message_received(self) -> None:
         self.messages_received += 1
