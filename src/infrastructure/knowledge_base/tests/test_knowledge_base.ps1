@@ -56,65 +56,32 @@ function Search-Collection {
         -Body $queryBody
 }
 
-Write-Host "[1/5] Checking Qdrant collections..."
-$requiredCollections = @(
-    "monitored-system",
-    "kb-system-engineer-linux",
-    "kb-network-engineer",
-    "kb-application-engineer",
-    "kb-software-developer",
-    "kb-technical-lead"
-)
-
+Write-Host "[1/4] Checking Qdrant collection..."
 $collectionResponse = Invoke-RestMethod -Method Get -Uri "$QdrantUrl/collections"
 $existingCollections = @($collectionResponse.result.collections | ForEach-Object { $_.name })
+Assert-True ($existingCollections -contains "monitored-system") "Missing Qdrant collection: monitored-system"
 
-foreach ($collection in $requiredCollections) {
-    Assert-True ($existingCollections -contains $collection) "Missing Qdrant collection: $collection"
-}
-
-Write-Host "[2/5] Checking ingested collection counts..."
+Write-Host "[2/4] Checking ingested collection count..."
 $monitoredInfo = Get-CollectionInfo "monitored-system"
-$linuxInfo = Get-CollectionInfo "kb-system-engineer-linux"
-
 Assert-True ($monitoredInfo.points_count -gt 0) "monitored-system must contain ingested chunks."
-Assert-True ($linuxInfo.points_count -gt 0) "kb-system-engineer-linux must contain ingested chunks."
-
 Write-Host "monitored-system points: $($monitoredInfo.points_count)"
-Write-Host "kb-system-engineer-linux points: $($linuxInfo.points_count)"
 
-Write-Host "[3/5] Testing monitored-system semantic retrieval..."
-$sharedSearch = Search-Collection `
+Write-Host "[3/4] Testing monitored-system semantic retrieval..."
+$search = Search-Collection `
     -Collection "monitored-system" `
     -Query "processing-service dependency on data-service and request flow"
 
-Assert-True ($sharedSearch.result.points.Count -gt 0) "Shared collection search returned no results."
-$sharedPayload = $sharedSearch.result.points[0].payload
-Assert-True ($sharedPayload.collection -eq "monitored-system") "Shared result came from the wrong collection."
-Assert-True ($sharedPayload.managed_by -eq "manifest-ingest") "Shared result was not produced by manifest ingestion."
-Assert-True (-not ($sharedPayload.PSObject.Properties.Name -contains "incident_types")) "incident_types must not be persisted as a Qdrant diagnosis label."
+Assert-True ($search.result.points.Count -gt 0) "monitored-system search returned no results."
+$payload = $search.result.points[0].payload
+Assert-True ($payload.collection -eq "monitored-system") "Result came from the wrong collection."
+Assert-True ($payload.managed_by -eq "manifest-ingest") "Result was not produced by manifest ingestion."
+Assert-True (-not ($payload.PSObject.Properties.Name -contains "roles")) "roles must not be persisted as a routing label."
+Assert-True (-not ($payload.PSObject.Properties.Name -contains "incident_types")) "incident_types must not be persisted as a diagnosis label."
 
-Write-Host "[4/5] Testing System Engineer Linux retrieval..."
-$linuxSearch = Search-Collection `
-    -Collection "kb-system-engineer-linux" `
-    -Query "Linux CPU load process accounting procfs cgroup memory"
-
-Assert-True ($linuxSearch.result.points.Count -gt 0) "Linux role collection search returned no results."
-$linuxPayload = $linuxSearch.result.points[0].payload
-Assert-True ($linuxPayload.collection -eq "kb-system-engineer-linux") "Linux result came from the wrong collection."
-Assert-True ($linuxPayload.roles -contains "system_engineer") "Linux result is missing system_engineer role metadata."
-Assert-True ($linuxPayload.managed_by -eq "manifest-ingest") "Linux result was not produced by manifest ingestion."
-Assert-True (-not ($linuxPayload.PSObject.Properties.Name -contains "incident_types")) "Linux payload must not contain diagnosis labels."
-
-Write-Host "[5/5] Checking empty specialist scaffolds..."
-foreach ($collection in @(
-    "kb-network-engineer",
-    "kb-application-engineer",
-    "kb-software-developer",
-    "kb-technical-lead"
-)) {
-    $info = Get-CollectionInfo $collection
-    Write-Host "$collection points: $($info.points_count)"
-}
+Write-Host "[4/4] Checking service-specific metadata..."
+$serviceResults = @($search.result.points | Where-Object {
+    $_.payload.services -contains "processing-service"
+})
+Assert-True ($serviceResults.Count -gt 0) "Expected at least one processing-service-related result."
 
 Write-Host "Knowledge-base smoke test PASSED." -ForegroundColor Green
