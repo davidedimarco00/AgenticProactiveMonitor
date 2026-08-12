@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.data-service
-version: 1
+version: 2
 domain: monitored_system
 document_type: service-reference
 roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
@@ -40,7 +40,7 @@ The `notes` table contains:
 
 `GET /health` opens the database and executes a simple `SELECT 1` query.
 
-A successful health response therefore confirms that the service can access SQLite at that moment. If SQLite raises an error, the endpoint returns HTTP 503 with a database-unavailable condition.
+A successful response means that the data-service process handled the health request and SQLite was accessible for that check. If SQLite raises an error, the endpoint returns HTTP 503 with a database-unavailable condition.
 
 ## Request correlation
 
@@ -56,24 +56,19 @@ Normal persistence activity includes:
 - `note_updated`;
 - `note_deleted`.
 
-`note_not_found` is a warning for a requested note that does not exist. It corresponds to a normal HTTP 404 condition and is not, by itself, evidence that data-service is unavailable.
+`note_not_found` is emitted when a requested note does not exist and corresponds to an HTTP 404 condition.
 
 `service_started` and `service_stopped` provide lifecycle context.
 
-## Upstream impact
+## Dependency relationship
 
-`processing-service` depends directly on data-service. If data-service is unavailable or cannot be reached, processing-service can emit `data_service_unavailable` and return HTTP 503. This can then propagate to api-gateway and traffic-generator.
+`processing-service` depends directly on data-service. If the call from processing-service cannot obtain a valid downstream response, processing-service can return an error to its own caller. That result can then be observed further upstream at api-gateway and traffic-generator.
 
-The dependency chain is:
+The application dependency direction is:
 
 ```text
-data-service problem
-    -> processing-service failure
-    -> api-gateway failure
-    -> synthetic user failure
+api-gateway -> processing-service -> data-service
 ```
-
-Upstream visibility does not change the downstream origin of the problem.
 
 ## Network context
 
@@ -89,17 +84,17 @@ The corresponding detector is:
 NETLAT-processing-service-data-service
 ```
 
-It is SINGLE_ENTITY and represents only the source/link above.
+It is SINGLE_ENTITY and represents only that configured source/link.
 
-A failed application call to data-service can be caused by the destination service, its SQLite dependency or the network path. These possibilities should be separated using probe results, service telemetry, health evidence and application logs.
+A failed application request to data-service and a failed network probe are different observations. The former is produced by application communication; the latter is produced by the configured Telegraf probe.
 
-## Diagnostic interpretation
+## Resource telemetry
 
-Evidence for a data-service or persistence problem becomes stronger when:
+Container CPU and memory are available through:
 
-- fresh data-service activity disappears or health fails;
-- processing-service reports `data_service_unavailable`;
-- the network path is normal but database-related health or application behaviour is abnormal;
-- correlated upstream 503 responses appear after the downstream failure.
+```text
+docker_container_cpu.usage_percent
+docker_container_mem.usage_percent
+```
 
-Evidence for a network problem becomes stronger when source-side network probes to data-service are abnormal while the destination remains otherwise healthy.
+These fields describe the data-service container. SQLite availability is separately exposed by the `/health` database check and application behaviour.
