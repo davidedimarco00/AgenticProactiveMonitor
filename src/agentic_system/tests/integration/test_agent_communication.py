@@ -7,12 +7,11 @@ import pytest
 
 @pytest.mark.integration
 def test_technical_lead_and_system_engineer_exchange_real_xmpp_messages(
-    backend_health: dict[str, Any],
+    backend_communication_health: dict[str, Any],
 ) -> None:
     """TEST E: validate the real TL -> System Engineer -> TL XMPP round trip."""
 
-    probe = backend_health.get("communication_probe")
-    assert isinstance(probe, dict)
+    probe = backend_communication_health["communication_probe"]
 
     assert probe["status"] == "passed"
     assert probe["protocol"] == "agentic-proactive-monitor/v1"
@@ -31,11 +30,11 @@ def test_technical_lead_and_system_engineer_exchange_real_xmpp_messages(
 
 @pytest.mark.integration
 def test_request_and_acknowledgement_keep_the_same_correlation_id(
-    backend_health: dict[str, Any],
+    backend_communication_health: dict[str, Any],
 ) -> None:
     """The response must be traceable to exactly the request that caused it."""
 
-    probe = backend_health["communication_probe"]
+    probe = backend_communication_health["communication_probe"]
     request_correlation_id = probe["request_correlation_id"]
     response_correlation_id = probe["response_correlation_id"]
 
@@ -46,11 +45,14 @@ def test_request_and_acknowledgement_keep_the_same_correlation_id(
 
 @pytest.mark.integration
 def test_runtime_observes_bidirectional_message_activity(
-    backend_health: dict[str, Any],
+    backend_communication_health: dict[str, Any],
 ) -> None:
     """Both agents must report transport activity produced by the real XMPP round trip."""
 
-    agents = {agent["role"]: agent for agent in backend_health["agents"]}
+    agents = {
+        agent["role"]: agent
+        for agent in backend_communication_health["agents"]
+    }
     technical_lead = agents["technical_lead"]
     system_engineer = agents["system_engineer"]
 
