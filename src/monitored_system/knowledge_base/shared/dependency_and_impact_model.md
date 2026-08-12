@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.shared.dependency-impact
-version: 1
+version: 2
 domain: monitored_system
 document_type: architecture
 roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
@@ -25,8 +25,6 @@ traffic-generator
 
 `worker-service` is independent from this path.
 
-Dependency direction matters during diagnosis. A downstream failure can generate visible symptoms in several upstream components even when those upstream processes are themselves healthy.
-
 ## Direct dependencies
 
 ```text
@@ -39,34 +37,30 @@ worker-service     is independent from the Notes request chain
 
 The SQLite database used by data-service is an internal persistence dependency of data-service.
 
-## Propagation model
+## Error propagation implemented by the application
 
-A failure can propagate upstream as follows:
+A downstream error can become visible at multiple upstream components because each service returns a result to its caller.
+
+For example, when a request to data-service cannot be completed, processing-service can return an error to api-gateway, and api-gateway can return an error to the synthetic client.
+
+This application behaviour produces the following possible propagation direction:
 
 ```text
-data-service unavailable
-    -> processing-service cannot complete persistence request
-    -> api-gateway receives downstream failure
-    -> traffic-generator observes failed user action
+data-service-side result
+        -> processing-service response
+        -> api-gateway response
+        -> traffic-generator observation
 ```
 
-This means that the component with the most visible error is not necessarily the component where the failure started.
+The presence of an upstream error therefore identifies where an error was observed, not necessarily where it originated.
 
-A useful diagnostic rule is to look for the earliest abnormal evidence that can explain the later symptoms.
+## Local resource scope
 
-## Local resource problems
+CPU and memory measurements are collected per monitored container. A resource value for one service belongs to that service's container scope.
 
-CPU or memory anomalies are initially local observations. A resource anomaly on one container should not be treated as proof of cross-service impact.
+The architecture does not define a direct dependency between worker-service and the Notes request chain. Any simultaneous behaviour between worker-service and Notes services must therefore be established from runtime evidence rather than from a static application dependency.
 
-A local resource problem becomes relevant to the full request path when additional evidence shows consequences such as:
-
-- increased request latency;
-- failed requests;
-- downstream timeouts;
-- service unavailability;
-- correlated abnormalities in dependent services.
-
-## Network-link problems
+## Network-link scope
 
 The three critical request-path links are:
 
@@ -76,51 +70,32 @@ api-gateway        -> processing-service
 processing-service -> data-service
 ```
 
-A link problem should be associated with its source and target. The corresponding NETLAT detector is SINGLE_ENTITY and represents only that configured source/link.
+Each NETLAT detector is SINGLE_ENTITY and represents only its configured source/link.
 
-Network degradation can produce application latency upstream, but application latency alone is not proof of a network problem. Raw ICMP RTT and `network_service_latency.response_time` provide independent link-oriented evidence.
+A network observation on one link does not automatically describe either of the other links.
 
-## Application-processing problems
+## Availability, reachability and application behaviour
 
-A service can remain reachable while processing requests slowly or incorrectly. In that case:
+These are separate properties:
 
-- network probes can remain normal;
-- the process can remain running;
-- application latency or error logs can become abnormal.
+- a container can be running while its application returns an error;
+- a service can be reachable at the network layer while an application request fails;
+- a service process can be running while a downstream dependency is unavailable;
+- telemetry can be missing because the service stopped or because the observability path failed.
 
-This is why runtime availability, network reachability and correct application behaviour must be treated as separate dimensions.
-
-## Missing telemetry
-
-Missing metrics or logs can support an availability hypothesis, but they can also result from an observability-path problem.
-
-Therefore:
-
-```text
-missing telemetry != confirmed service failure
-```
-
-When possible, combine missing telemetry with independent runtime state, health, network or upstream/downstream evidence.
+The architecture does not collapse these properties into one health state.
 
 ## Request-level correlation
 
-`X-Request-ID` is propagated along the application path. For one affected operation, the same `request_id` can connect:
+`X-Request-ID` is propagated along the application path. For one operation, the same `request_id` can connect:
 
 - the traffic-generator action;
 - api-gateway request and downstream timing;
 - processing-service downstream timing;
 - data-service persistence activity.
 
-This is stronger than correlating unrelated log messages only by approximate timestamp.
+Timestamps provide temporal ordering, while `request_id` provides request-level identity.
 
-## Cross-domain diagnosis principles
+## Static model boundary
 
-When multiple explanations are possible:
-
-- distinguish local evidence from propagated impact;
-- follow the actual dependency direction;
-- separate resource, network, application and persistence signals;
-- prefer evidence that directly observes the suspected component or link;
-- use upstream symptoms to measure impact, not automatically to identify origin;
-- keep `worker-service` separate from the Notes request path unless live evidence demonstrates shared impact;
-- treat retrieved knowledge as a model of expected relationships, while current telemetry remains the source of truth for the incident.
+This document describes dependency direction and possible propagation paths implemented by the system. It does not state which component is faulty during a live incident. Causal conclusions must be produced from runtime observations by the agents.
