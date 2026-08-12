@@ -7,20 +7,19 @@ Its purpose is to expose controlled diagnostic tools that can be invoked by SPAD
 ## Architecture
 
 ```text
-Diagnostic Agent / LLM
+Specialist Agent / LLM
         |
         v
      MCP Server
         |
-   +----+---------+
-   |              |
-OpenSearch      Docker
-   |              |
-Metrics/Logs   Live Service State
-   |
-   +------------ Qdrant / Ollama
-                  |
-             Knowledge Base
+   +----+---------+------------------+
+   |              |                  |
+OpenSearch      Docker            Qdrant
+   |              |                  |
+Metrics/Logs   Live State      monitored-system
+                                      |
+                                   Ollama
+                                  Embeddings
 ```
 
 The MCP server belongs to the **agentic infrastructure**. The containers inspected through Docker belong to the separate **monitored-system** Compose project.
@@ -48,7 +47,17 @@ http://127.0.0.1:8000/mcp
 
 ### Knowledge Base / RAG
 
-- `search_knowledge()` embeds a query using Ollama and retrieves relevant chunks from the Qdrant knowledge base.
+`search_knowledge(query, limit=5)` embeds the query using Ollama and retrieves relevant chunks from the single shared Qdrant collection:
+
+```text
+monitored-system
+```
+
+This collection contains documentation specific to the concrete monitored Notes Platform: architecture, services, dependencies, telemetry semantics and implemented application behaviour.
+
+There are no role-specific knowledge collections. General Linux, networking, application and software knowledge is expected to come from the LLM's pretrained knowledge. Agent specialisation is implemented through role, responsibilities, reasoning and available tools rather than separate RAG corpora.
+
+The knowledge tool is read-only. Retrieved documents provide system-specific context; live OpenSearch, Docker and other runtime observations remain the evidence used by the agents to formulate a diagnosis.
 
 ## Allowed Monitored Targets
 
@@ -66,12 +75,17 @@ The MCP server does not expose a generic shell. Diagnostic commands are fixed in
 
 ## Docker Integration
 
-The MCP container accesses the agentic infrastructure through internal service names:
+The MCP container accesses infrastructure services through Docker networking:
 
 ```text
 OpenSearch -> http://opensearch:9200
 Qdrant    -> http://qdrant:6333
-Ollama    -> http://ollama:11434
+```
+
+Ollama runs natively on the Windows host and is reached from Docker through the configured `OLLAMA_URL`, normally:
+
+```text
+http://host.docker.internal:11434
 ```
 
 Docker live diagnostics use:

@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.domain.software-behavior
-version: 1
+version: 2
 domain: monitored_system
 document_type: domain-reference
 roles: [software_developer, application_engineer]
@@ -20,7 +20,7 @@ source_files:
 
 ## API contract
 
-The Notes Platform exposes create, read, update, delete and list operations through the request chain:
+The Notes Platform exposes create, read, update, delete and list operations through:
 
 ```text
 api-gateway -> processing-service -> data-service
@@ -30,7 +30,7 @@ api-gateway -> processing-service -> data-service
 
 ## Input validation
 
-The application requires non-empty note titles and content.
+The web layer requires non-empty title and content values for note create/update operations.
 
 At the processing layer, note payloads are validated with these limits:
 
@@ -39,17 +39,17 @@ title:   1 to 120 characters
 content: 1 to 10000 characters
 ```
 
-Validation failures should be distinguished from infrastructure, network or downstream availability problems.
+Validation errors are part of the application contract and are different from network transport failures or service unavailability.
 
 ## Request identifiers
 
 The services accept an `X-Request-ID` header and propagate it downstream. If the identifier is absent, a new one is generated.
 
-This means that application errors and timing information for one operation can be correlated across the service chain using the same request identifier.
+The request identifier provides a common key for application events produced by different services while handling the same operation.
 
 ## api-gateway error handling
 
-When `api-gateway` cannot contact `processing-service`, it records:
+When the HTTP client cannot obtain a normal response from `processing-service`, api-gateway records:
 
 ```text
 event_type = notes_service_unavailable
@@ -57,15 +57,13 @@ event_type = notes_service_unavailable
 
 and returns HTTP 503 for the affected web request.
 
-When the downstream service responds, `api-gateway` records `downstream_request_completed` with the downstream status code and latency. A downstream 404 is propagated as a 404, while other error responses are propagated with their HTTP status.
-
-Therefore, a 503 at the gateway is not sufficient evidence of a gateway software defect.
+When the downstream service responds, api-gateway records `downstream_request_completed` with the downstream status code and latency. A downstream 404 is propagated as 404, while other error responses are propagated according to the application code.
 
 ## processing-service error handling
 
-`processing-service` forwards requests to `data-service`.
+`processing-service` forwards persistence requests to `data-service`.
 
-When the network/client request to `data-service` fails, it records:
+When the client call to `data-service` raises a request error, processing-service records:
 
 ```text
 event_type = data_service_unavailable
@@ -73,7 +71,7 @@ event_type = data_service_unavailable
 
 and returns HTTP 503.
 
-When `data-service` responds with an HTTP error, processing-service propagates the downstream status and available error detail. Successful note operations produce service-specific events such as `note_created`, `note_updated`, `note_deleted` and `notes_listed`.
+When `data-service` responds with an HTTP error, processing-service propagates the downstream status and available error detail. Successful note operations produce service events such as `note_created`, `note_updated`, `note_deleted` and `notes_listed`.
 
 ## data-service persistence behaviour
 
@@ -85,32 +83,32 @@ When `data-service` responds with an HTTP error, processing-service propagates t
 
 The `notes` table contains:
 
-- `id`
-- `title`
-- `content`
-- `created_at`
-- `updated_at`
+- `id`;
+- `title`;
+- `content`;
+- `created_at`;
+- `updated_at`.
 
-The `/health` endpoint performs a simple database query. If SQLite cannot be accessed, health returns HTTP 503 with a database-unavailable error.
+The `/health` endpoint opens SQLite and executes `SELECT 1`. If SQLite raises an error, health returns HTTP 503 with a database-unavailable condition.
 
-A missing note returns HTTP 404. This normal application condition should not be confused with service unavailability.
+A missing note returns HTTP 404. This response is a defined application condition and is not equivalent to service unavailability.
 
-## Status interpretation
+## HTTP status semantics in this application
 
-Useful distinctions include:
+Relevant status codes include:
 
-- `400`: invalid web form or request input can be an application/client problem rather than infrastructure failure;
+- `400`: invalid web form or request input at the gateway layer;
 - `404`: requested note does not exist;
-- `503`: a required downstream service or database may be unavailable;
-- `5xx` with correlated downstream errors: investigate dependency failure before assuming a local software bug.
+- `503`: a required downstream operation or database access could not be completed in the implemented error path.
 
-## Code-level diagnostic principles
+The same status code can be observed by more than one service because statuses may be propagated upstream.
 
-When software behaviour is suspected:
+## Log semantics and software scope
 
-- correlate stack/error information with `request_id` and service name;
-- distinguish expected validation and 404 responses from unexpected failures;
-- inspect whether the error was generated locally or propagated from a dependency;
-- compare application logs with network and runtime evidence before attributing a symptom to code;
-- use repeated service-specific errors or invalid behaviour relative to the API contract as stronger evidence of a software defect;
-- do not treat an error message emitted by an upstream service as proof that the upstream software caused the incident.
+An application log event records what the emitting service observed or did. For example, `data_service_unavailable` states that processing-service could not complete its client request to data-service; the event itself does not distinguish network failure, destination process state or another lower-level cause.
+
+Likewise, an upstream 5xx response can contain a downstream result. Service name, `request_id`, `downstream`, timestamps and status fields preserve the context needed for the agent to reason about that behaviour.
+
+## Software knowledge boundary
+
+This document describes the software contract and implemented error-handling paths. It does not define which runtime symptom pattern constitutes a software bug or any other incident diagnosis.

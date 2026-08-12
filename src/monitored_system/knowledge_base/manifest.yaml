@@ -1,30 +1,10 @@
-version: 3
+version: 7
+collection: monitored-system
 domain: monitored_system
 system: notes-platform
 branch: feature/monitored_system
-purpose: diagnostic-rag
-
-roles:
-  - technical_lead
-  - system_engineer
-  - network_engineer
-  - application_engineer
-  - software_developer
-
-role_profiles:
-  technical_lead:
-    preferred_domains: [architecture, observability, diagnostics, dependencies]
-  system_engineer:
-    preferred_domains:
-      [infrastructure, runtime, containers, cpu, memory, disk, processes]
-  network_engineer:
-    preferred_domains: [network, connectivity, latency, probes, ports]
-  application_engineer:
-    preferred_domains:
-      [application, services, dependencies, health, logs, latency]
-  software_developer:
-    preferred_domains:
-      [software, api, validation, error-handling, persistence, application-logs]
+purpose: system-specific-context-rag
+access: shared
 
 services:
   - traffic-generator
@@ -36,88 +16,56 @@ services:
 excluded_sources:
   - src/monitored_system/infrastructure/tests/**
   - src/monitored_system/infrastructure/scenarios/**
+  - src/monitored_system/knowledge_base/diagnostics/**
   - src/agentic_system/**
 
 exclusion_reason: >
-  Test-suite files, controlled fault-injection ground truth and agent-runtime
-  implementation details must not be embedded in the monitored-system knowledge
-  base because they can leak evaluation answers or implementation policy into
-  diagnosis.
+  Test-suite files, controlled fault-injection ground truth, pre-written
+  diagnostic guides and agent-runtime implementation details must not be
+  embedded in the monitored-system collection. This collection describes the
+  concrete system and the semantics of its observable data. General technical
+  knowledge comes from the LLM and the agents must produce diagnoses from live
+  observations.
 
 documents:
   - path: shared/system_architecture.md
-    roles:
-      [
-        technical_lead,
-        system_engineer,
-        network_engineer,
-        application_engineer,
-        software_developer,
-      ]
     document_type: architecture
+
+  - path: shared/dependency_and_impact_model.md
+    document_type: architecture
+
   - path: shared/observability_model.md
-    roles:
-      [
-        technical_lead,
-        system_engineer,
-        network_engineer,
-        application_engineer,
-        software_developer,
-      ]
     document_type: observability
-  - path: services/service_reference.md
-    roles:
-      [
-        technical_lead,
-        system_engineer,
-        network_engineer,
-        application_engineer,
-        software_developer,
-      ]
-    document_type: service-reference
+
   - path: domains/infrastructure_runtime.md
-    roles: [system_engineer, technical_lead]
-    document_type: domain-reference
+    document_type: system-reference
+
   - path: domains/network_connectivity.md
-    roles: [network_engineer, technical_lead, application_engineer]
-    document_type: domain-reference
+    document_type: system-reference
+
   - path: domains/application_operations.md
-    roles: [application_engineer, technical_lead, software_developer]
-    document_type: domain-reference
+    document_type: system-reference
+
   - path: domains/software_behavior.md
-    roles: [software_developer, application_engineer]
-    document_type: domain-reference
-  - path: diagnostics/cpu_saturation_processing_service.md
-    roles:
-      [
-        system_engineer,
-        application_engineer,
-        software_developer,
-        technical_lead,
-      ]
-    document_type: diagnostic-guide
-  - path: diagnostics/memory_pressure_worker_service.md
-    roles: [system_engineer, technical_lead]
-    document_type: diagnostic-guide
-  - path: diagnostics/network_degradation_api_gateway_processing_service.md
-    roles: [network_engineer, application_engineer, technical_lead]
-    document_type: diagnostic-guide
-  - path: diagnostics/application_latency_processing_service.md
-    roles:
-      [
-        application_engineer,
-        software_developer,
-        system_engineer,
-        technical_lead,
-      ]
-    document_type: diagnostic-guide
-  - path: diagnostics/data_service_unavailability.md
-    roles:
-      [
-        application_engineer,
-        software_developer,
-        network_engineer,
-        system_engineer,
-        technical_lead,
-      ]
-    document_type: diagnostic-guide
+    document_type: system-reference
+
+  - path: services/traffic_generator.md
+    document_type: service-reference
+
+  - path: services/api_gateway.md
+    document_type: service-reference
+
+  - path: services/processing_service.md
+    document_type: service-reference
+
+  - path: services/data_service.md
+    document_type: service-reference
+
+  - path: services/worker_service.md
+    document_type: service-reference
+
+retrieval_policy:
+  shared_by_all_agents: true
+  role_specific_routing: false
+  diagnosis_labels: forbidden
+  live_evidence_is_source_of_truth: true

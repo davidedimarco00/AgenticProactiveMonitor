@@ -88,7 +88,7 @@ services:
     container_name: agentic-qdrant-init
     environment:
       QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+      QDRANT_COLLECTIONS: ${QDRANT_COLLECTIONS:-monitored-system}
       QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
       QDRANT_DISTANCE: ${QDRANT_DISTANCE:-Cosine}
       QDRANT_WAIT_SECONDS: ${QDRANT_WAIT_SECONDS:-120}
@@ -102,13 +102,39 @@ services:
       - monitoring-net
     restart: "no"
 
+  knowledge-base-ingest:
+    build:
+      context: ./knowledge_base/ingest
+    container_name: agentic-knowledge-base-ingest
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
+      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
+      KNOWLEDGE_COLLECTIONS_CONFIG: /config/collections.yaml
+      KNOWLEDGE_REPO_ROOT: /repo
+      KNOWLEDGE_BASE_CHUNK_SIZE_WORDS: ${KNOWLEDGE_BASE_CHUNK_SIZE_WORDS:-220}
+      KNOWLEDGE_BASE_CHUNK_OVERLAP_WORDS: ${KNOWLEDGE_BASE_CHUNK_OVERLAP_WORDS:-40}
+      KNOWLEDGE_INGEST_EMBED_BATCH_SIZE: ${KNOWLEDGE_INGEST_EMBED_BATCH_SIZE:-16}
+      KNOWLEDGE_INGEST_UPSERT_BATCH_SIZE: ${KNOWLEDGE_INGEST_UPSERT_BATCH_SIZE:-64}
+      KNOWLEDGE_INGEST_WAIT_SECONDS: ${KNOWLEDGE_INGEST_WAIT_SECONDS:-120}
+    volumes:
+      - ./knowledge_base/collections.yaml:/config/collections.yaml:ro
+      - ../monitored_system/knowledge_base:/repo/src/monitored_system/knowledge_base:ro
+    depends_on:
+      qdrant-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring-net
+    restart: "no"
+
   knowledge-base-web:
     build:
       context: ./knowledge_base/web
     container_name: agentic-knowledge-base-web
     environment:
       QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+      QDRANT_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
       MAX_UPLOAD_MB: ${KNOWLEDGE_BASE_MAX_UPLOAD_MB:-25}
@@ -119,7 +145,7 @@ services:
     ports:
       - "127.0.0.1:${KNOWLEDGE_BASE_UI_PORT:-5000}:5000"
     depends_on:
-      qdrant-init:
+      knowledge-base-ingest:
         condition: service_completed_successfully
     networks:
       - monitoring-net
@@ -178,7 +204,11 @@ services:
         aliases:
           - ${XMPP_DOMAIN:-xmpp}
     healthcheck:
-      test: ["CMD-SHELL", "prosodyctl shell server uptime >/dev/null 2>&1 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "prosodyctl shell server uptime >/dev/null 2>&1 || exit 1",
+        ]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -196,7 +226,8 @@ services:
       MCP_PATH: /mcp
       OPENSEARCH_URL: http://opensearch:9200
       QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+      QDRANT_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
+      QDRANT_MONITORED_SYSTEM_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
     ports:
@@ -204,8 +235,8 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
-      qdrant:
-        condition: service_started
+      knowledge-base-ingest:
+        condition: service_completed_successfully
     networks:
       - monitoring-net
     volumes:

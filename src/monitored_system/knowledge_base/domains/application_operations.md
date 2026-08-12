@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.domain.application-operations
-version: 1
+version: 2
 domain: monitored_system
 document_type: domain-reference
 roles: [application_engineer, technical_lead, software_developer]
@@ -32,77 +32,71 @@ traffic-generator -> api-gateway -> processing-service -> data-service
 
 Requests use `X-Request-ID`. The identifier is propagated through the service chain and is emitted in application logs when available.
 
-When an incident affects one user operation, `request_id` should be used to reconstruct the same request across services before comparing unrelated log entries.
+For one operation, the same `request_id` can appear in multiple services and provides a stronger identity relation than timestamp proximity alone.
 
-## api-gateway operational behaviour
+## api-gateway behaviour
 
-`api-gateway` forwards Notes operations to `processing-service`. Important operational events are:
+Important events are:
 
 - `http_request_completed`: final web request status and total request latency;
 - `downstream_request_completed`: status and latency of the call to `processing-service`;
-- `notes_service_unavailable`: the gateway could not contact `processing-service`;
-- `request_failed`: a web request failed because a downstream service was unavailable.
+- `notes_service_unavailable`: the request to `processing-service` failed before a normal response was obtained;
+- `request_failed`: a web request completed with HTTP 503 because a required downstream operation was unavailable.
 
-A gateway HTTP 503 can therefore be a propagated downstream symptom.
+The gateway `/health` route calls `processing-service /health`, so its result includes downstream application state.
 
-## processing-service operational behaviour
+## processing-service behaviour
 
 `processing-service` validates Notes payloads and forwards persistence operations to `data-service`.
 
 Important events include:
 
 - `downstream_request_completed`: status and latency of the call to `data-service`;
-- `data_service_unavailable`: the service could not contact `data-service`;
-- note-operation events such as `notes_listed`, `note_created`, `note_updated` and `note_deleted`.
+- `data_service_unavailable`: the call to `data-service` failed before a normal response was obtained;
+- `notes_listed`, `note_created`, `note_updated` and `note_deleted`: successful application operations.
 
-A processing-service error must be interpreted together with downstream evidence. An error emitted here does not automatically mean that processing-service is the root cause.
+## data-service behaviour
 
-## data-service operational behaviour
+`data-service` provides persistence through SQLite and exposes health and CRUD endpoints.
 
-`data-service` provides persistence through SQLite and exposes health plus CRUD endpoints.
+Important events include:
 
-Useful events include:
+- `notes_listed`;
+- `note_read`;
+- `note_created`;
+- `note_updated`;
+- `note_deleted`;
+- `note_not_found`;
+- `service_started`;
+- `service_stopped`.
 
-- `notes_listed`
-- `note_read`
-- `note_created`
-- `note_updated`
-- `note_deleted`
-- `note_not_found`
-- `service_started`
-- `service_stopped`
+The `/health` endpoint opens SQLite and performs a simple query.
 
-The `/health` endpoint also checks that the SQLite database can be opened and queried.
+## Application timing
 
-## Latency interpretation
+Several `latency_ms` values exist at different layers:
 
-User-visible latency can accumulate across the request chain. To locate the likely source:
+- traffic-generator latency covers the user-visible HTTP action;
+- api-gateway request latency covers the gateway's full handling of the web request;
+- api-gateway downstream latency covers its call to processing-service;
+- processing-service downstream latency covers its call to data-service.
 
-- compare traffic-generator action latency with api-gateway request latency;
-- compare api-gateway downstream latency with processing-service downstream latency;
-- compare application timing with network-service probe timing;
-- inspect downstream status codes and service-specific errors;
-- order evidence by timestamp and `request_id`.
+These values are nested observations of different operations and are not interchangeable.
 
-High upstream latency is an impact signal, not sufficient evidence of an upstream root cause.
+## Error propagation
 
-## Availability interpretation
+An error response can move upstream through the dependency chain because callers return results from downstream services.
 
-When one downstream component becomes unavailable, upstream services can remain running and still emit errors. A useful distinction is:
+For example, a failed call from processing-service to data-service can result in an error returned to api-gateway, which can then be visible to traffic-generator.
 
-```text
-service process available != complete request path healthy
-```
+This describes implemented application propagation. It does not identify the root cause of a particular live error.
 
-For example, api-gateway can be alive while returning 503 because processing-service or a deeper dependency cannot complete the request.
+## Health and availability semantics
 
-## Diagnostic principles
+A running process, a successful network connection, a successful local request and a healthy complete request path are different conditions.
 
-When investigating application operations:
+A service may remain running while returning an error because one of its dependencies cannot complete the requested operation.
 
-- follow the real dependency direction;
-- correlate the same request across services;
-- separate local application errors from propagated downstream failures;
-- compare application latency with network evidence;
-- use health endpoints and fresh telemetry as supporting evidence;
-- prefer the first component whose evidence explains the failure rather than the component with the most visible upstream error.
+## Application knowledge boundary
+
+This document defines service behaviour, event semantics, request correlation and timing scope. The agents must use live logs, metrics and tool observations to decide which explanation fits an active incident.
