@@ -71,9 +71,14 @@ Each port provides:
 - `GET /health` for deterministic integration checks;
 - `WS /ws/health` for the dashboard real-time presence indicator.
 
-The runtime also performs a repeated XMPP REQUEST/AGREE health probe between the Technical Lead and every specialist. Therefore `communication_ok=true` means that a real inter-agent XMPP round trip has recently succeeded, not only that TCP port 5222 is reachable.
+The runtime also performs a repeated XMPP REQUEST/AGREE health probe between the Technical Lead and every specialist. Therefore `communication_ok=true` means that the specific agent has recently participated in real XMPP traffic, not only that TCP port 5222 is reachable.
 
-The tests verify that all five health endpoints are distinct, report the expected SPADE/XMPP identity, expose `ONLINE` when communication is verified, and stream the same state through WebSocket.
+Complete team reachability is intentionally represented separately by the global backend health fields:
+
+- `team_communication_ok`;
+- `unreachable_specialists`.
+
+This separation prevents one failed specialist from incorrectly changing the Technical Lead's own presence indicator.
 
 ### Opt-in single-agent XMPP fault test
 
@@ -85,8 +90,9 @@ The test deliberately targets only `network-engineer@xmpp` and verifies that:
 - disabling the Prosody account and closing only its c2s session makes its WebSocket report `OFFLINE`;
 - `spade_alive` remains true while `xmpp_connected` becomes false, proving that process liveness and XMPP connectivity are different states;
 - the other specialist agents remain ONLINE;
-- the Technical Lead becomes DEGRADED because one specialist no longer answers the periodic REQUEST/AGREE probe;
-- cleanup always re-enables the account, restarts the backend and verifies that the agent returns ONLINE.
+- the Technical Lead remains ONLINE because its own XMPP session is healthy and it still exchanges messages with the other specialists;
+- the global backend reports `team_communication_ok=false` and lists `network_engineer` in `unreachable_specialists`;
+- cleanup always re-enables the account, restarts the backend and verifies full recovery.
 
 Run it explicitly from `src\agentic_system`:
 
@@ -107,6 +113,12 @@ Inspect its health endpoint:
 
 ```powershell
 curl.exe http://127.0.0.1:8103/health
+```
+
+Inspect team reachability:
+
+```powershell
+curl.exe http://127.0.0.1:8081/health
 ```
 
 Restore the environment:
