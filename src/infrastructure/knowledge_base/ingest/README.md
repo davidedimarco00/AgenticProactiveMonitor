@@ -93,10 +93,16 @@ Inspect ingestion output:
 docker compose logs knowledge-base-ingest
 ```
 
-Then run the end-to-end Qdrant/Ollama smoke test:
+Run the end-to-end Qdrant/Ollama smoke test:
 
 ```powershell
 .\knowledge_base\tests\test_knowledge_base.ps1
+```
+
+Finally, test the same embedding and Qdrant retrieval path used by the MCP knowledge tool:
+
+```powershell
+docker compose exec -e RUN_KB_INTEGRATION=1 mcp-server python -m unittest tests.test_qdrant_role_retrieval_integration -v
 ```
 
 At the current stage, `monitored-system` and `kb-system-engineer-linux` must contain vectors. The Network Engineer, Application Engineer, Software Developer and Technical Lead collections exist but can remain empty until their professional knowledge bases are populated.
