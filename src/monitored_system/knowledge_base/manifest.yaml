@@ -1,17 +1,10 @@
-version: 6
+version: 7
 collection: monitored-system
 domain: monitored_system
 system: notes-platform
 branch: feature/monitored_system
-purpose: shared-system-context-rag
+purpose: system-specific-context-rag
 access: shared
-
-allowed_roles:
-  - technical_lead
-  - system_engineer
-  - network_engineer
-  - application_engineer
-  - software_developer
 
 services:
   - traffic-generator
@@ -30,60 +23,49 @@ exclusion_reason: >
   Test-suite files, controlled fault-injection ground truth, pre-written
   diagnostic guides and agent-runtime implementation details must not be
   embedded in the monitored-system collection. This collection describes the
-  concrete system and the semantics of its observable data. The agents must
-  produce diagnoses from live observations.
+  concrete system and the semantics of its observable data. General technical
+  knowledge comes from the LLM and the agents must produce diagnoses from live
+  observations.
 
 documents:
   - path: shared/system_architecture.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: architecture
 
   - path: shared/dependency_and_impact_model.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: architecture
 
   - path: shared/observability_model.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: observability
 
   - path: domains/infrastructure_runtime.md
-    roles: [system_engineer, technical_lead]
-    document_type: domain-reference
+    document_type: system-reference
 
   - path: domains/network_connectivity.md
-    roles: [network_engineer, technical_lead, application_engineer]
-    document_type: domain-reference
+    document_type: system-reference
 
   - path: domains/application_operations.md
-    roles: [application_engineer, technical_lead, software_developer]
-    document_type: domain-reference
+    document_type: system-reference
 
   - path: domains/software_behavior.md
-    roles: [software_developer, application_engineer]
-    document_type: domain-reference
+    document_type: system-reference
 
   - path: services/traffic_generator.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: service-reference
 
   - path: services/api_gateway.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: service-reference
 
   - path: services/processing_service.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: service-reference
 
   - path: services/data_service.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer, software_developer]
     document_type: service-reference
 
   - path: services/worker_service.md
-    roles: [technical_lead, system_engineer, network_engineer, application_engineer]
     document_type: service-reference
 
 retrieval_policy:
   shared_by_all_agents: true
-  role_metadata_is_relevance_hint: true
+  role_specific_routing: false
   diagnosis_labels: forbidden
   live_evidence_is_source_of_truth: true
