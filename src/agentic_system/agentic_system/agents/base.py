@@ -79,13 +79,26 @@ class BaseRoleAgent(Agent):
         self.messages_sent = 0
         self.messages_received = 0
         self.last_message_at: str | None = None
+        self.xmpp_connected = False
         self.communication_ok = False
+        self.last_xmpp_connected_at: str | None = None
+        self.last_xmpp_disconnected_at: str | None = None
         self.last_communication_at: str | None = None
 
     async def setup(self) -> None:
         self.lifecycle_state = "running"
         self.started_at = _utc_now()
         self.last_heartbeat_at = self.started_at
+
+        # setup() is invoked by SPADE only after the initial XMPP connection and
+        # authentication succeed. From this point on we also observe Slixmpp's
+        # connection events so a later server-side c2s disconnect is visible in
+        # the per-agent health endpoint instead of being confused with is_alive().
+        self._mark_xmpp_connected()
+        if self.client is not None:
+            self.client.add_event_handler("session_start", self._on_xmpp_session_start)
+            self.client.add_event_handler("disconnected", self._on_xmpp_disconnected)
+
         self.add_behaviour(self.LifecycleBehaviour())
 
         self.web.add_get("/health", self._health_controller, template=None)
@@ -103,6 +116,20 @@ class BaseRoleAgent(Agent):
             self.jid,
             self.health_port,
         )
+
+    def _on_xmpp_session_start(self, _event: Any) -> None:
+        self._mark_xmpp_connected()
+        LOGGER.info("%s XMPP session connected", self.display_name)
+
+    def _on_xmpp_disconnected(self, _event: Any) -> None:
+        self.xmpp_connected = False
+        self.communication_ok = False
+        self.last_xmpp_disconnected_at = _utc_now()
+        LOGGER.warning("%s XMPP session disconnected", self.display_name)
+
+    def _mark_xmpp_connected(self) -> None:
+        self.xmpp_connected = True
+        self.last_xmpp_connected_at = _utc_now()
 
     async def _health_controller(self, _request: Any) -> dict[str, Any]:
         return self.health_snapshot()
@@ -150,8 +177,9 @@ class BaseRoleAgent(Agent):
         self.mark_communication_ok()
 
     def mark_communication_ok(self) -> None:
-        self.communication_ok = True
-        self.last_communication_at = _utc_now()
+        if self.xmpp_connected:
+            self.communication_ok = True
+            self.last_communication_at = _utc_now()
 
     def mark_communication_failed(self) -> None:
         self.communication_ok = False
@@ -161,11 +189,12 @@ class BaseRoleAgent(Agent):
 
     def mark_stopped(self) -> None:
         self.lifecycle_state = "stopped"
+        self.xmpp_connected = False
         self.communication_ok = False
 
     def health_snapshot(self) -> dict[str, Any]:
         spade_alive = self.is_alive()
-        if not spade_alive:
+        if not spade_alive or not self.xmpp_connected:
             status = "OFFLINE"
         elif self.communication_ok:
             status = "ONLINE"
@@ -179,11 +208,13 @@ class BaseRoleAgent(Agent):
             "jid": str(self.jid),
             "status": status,
             "spade_alive": spade_alive,
-            "xmpp_connected": spade_alive,
+            "xmpp_connected": self.xmpp_connected,
             "communication_ok": self.communication_ok,
             "health_port": self.health_port,
             "started_at": self.started_at,
             "last_heartbeat_at": self.last_heartbeat_at,
+            "last_xmpp_connected_at": self.last_xmpp_connected_at,
+            "last_xmpp_disconnected_at": self.last_xmpp_disconnected_at,
             "last_communication_at": self.last_communication_at,
             "messages_sent": self.messages_sent,
             "messages_received": self.messages_received,
@@ -202,7 +233,10 @@ class BaseRoleAgent(Agent):
             "messages_sent": self.messages_sent,
             "messages_received": self.messages_received,
             "last_message_at": self.last_message_at,
+            "xmpp_connected": self.xmpp_connected,
             "communication_ok": self.communication_ok,
+            "last_xmpp_connected_at": self.last_xmpp_connected_at,
+            "last_xmpp_disconnected_at": self.last_xmpp_disconnected_at,
             "last_communication_at": self.last_communication_at,
             "health_port": self.health_port,
         }
