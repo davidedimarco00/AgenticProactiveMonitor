@@ -1,19 +1,24 @@
 ---
-# https://vitepress.dev/reference/default-theme-home-page
 layout: home
 
 hero:
-  name: "SmartGym-Monitor"
-  text: "A tool for monitoring gym."
-  tagline: SPE Project
+  name: "Agentic Proactive Monitor"
+  text: "Hybrid Multi-Agent Monitoring System"
+  tagline: "Proactive anomaly detection and explainable diagnosis with autonomous agents, local LLMs, and retrieval-augmented knowledge."
   actions:
     - theme: brand
-      text: Report
-      link: report/Introduction
+      text: Documentation
+      link: /report/Introduction
     - theme: alt
-      text: Docs
-      link: https://piertv21.github.io/ # TO DO
+      text: Design
+      link: /report/Design
     - theme: alt
-      text: Coverage
-      link: https://piertv21.github.io/ # TO DO
+      text: GitHub Repository
+      link: https://github.com/davidedimarco00/AgenticProactiveMonitor
 ---
+
+## Project overview
+
+Agentic Proactive Monitor is a hybrid monitoring platform that combines telemetry collection, anomaly detection, multi-agent coordination, local language models, and retrieval-augmented generation to support proactive and explainable diagnosis of monitored systems.
+
+The documentation published here is generated from the `docs/` directory of the repository and is automatically deployed through GitHub Actions.
