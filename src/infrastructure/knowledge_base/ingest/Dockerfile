@@ -9,6 +9,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ingest.py .
+COPY model.py .
+COPY clients.py .
 COPY tests ./tests
 
 CMD ["python", "ingest.py"]
