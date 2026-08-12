@@ -122,6 +122,7 @@ async def _run_backend() -> None:
             phase="agents-running",
             agents_running=runtime.running_count,
             agents=runtime.snapshot(),
+            communication_probe=runtime.communication_probe,
         )
         LOGGER.info("Agentic backend is ready with five active SPADE agents")
 
@@ -129,6 +130,7 @@ async def _run_backend() -> None:
             _set_health(
                 agents_running=runtime.running_count,
                 agents=runtime.snapshot(),
+                communication_probe=runtime.communication_probe,
             )
             await asyncio.sleep(1)
     finally:
