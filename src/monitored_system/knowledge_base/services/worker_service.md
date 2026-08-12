@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.worker-service
-version: 1
+version: 2
 domain: monitored_system
 document_type: service-reference
 roles: [technical_lead, system_engineer, network_engineer, application_engineer]
@@ -15,8 +15,6 @@ source_files: [src/monitored_system/docker-compose.yml, src/monitored_system/inf
 ## Purpose
 
 `worker-service` is an independent background workload. It does not participate in the Notes HTTP request path and does not provide the CRUD API used by `api-gateway`, `processing-service` or `data-service`.
-
-Its main diagnostic boundary is therefore local: a resource anomaly on worker-service must not automatically be interpreted as a Notes request-path failure.
 
 ## Runtime model
 
@@ -46,7 +44,7 @@ Synthetic events can include event types such as:
 - `configuration_loaded`;
 - `user_session_updated`.
 
-These events model a background application workload. Their messages are synthetic context and should not be interpreted as evidence about the real Notes request chain.
+These events model a background application workload. They are not events from the Notes CRUD request chain.
 
 ## System heartbeat
 
@@ -57,27 +55,31 @@ The service writes a heartbeat to `/var/log/machine/system.log`. Useful fields i
 - `host`;
 - `machine_role`.
 
-Fresh heartbeat data supports the conclusion that the monitored container is still producing runtime telemetry, but heartbeat presence alone does not prove that every internal process is healthy.
+A heartbeat means that the entrypoint loop produced a new runtime record at that time. It does not report the health of every process or dependency.
 
-## Resource evidence
+## Resource telemetry
 
-Container CPU and memory should be interpreted using:
+Container CPU and memory are available through:
 
 ```text
 docker_container_cpu.usage_percent
 docker_container_mem.usage_percent
 ```
 
-A sustained memory increase is relevant to memory-pressure hypotheses. A short peak should be distinguished from persistent retained usage by comparing multiple observations over time.
+These values describe the worker-service container. Multiple observations over time are required to distinguish a transient value from a sustained trend.
 
 ## Network context
 
-worker-service also collects diagnostic network probes towards `api-gateway`, but this link is not part of the Notes business request chain and is not one of the three critical NETLAT detector links.
+worker-service also collects network probes towards `api-gateway`:
 
-A probe problem observed here should therefore be treated as supporting network evidence, not as direct proof of user-facing application impact.
+```text
+ICMP target:     api-gateway
+TCP/HTTP target: api-gateway:5000
+probe path:      /notes/new
+```
 
-## Diagnostic interpretation
+This probe exists as telemetry from worker-service, but the link is not part of the Notes business request path and is not one of the three critical NETLAT detector links.
 
-A worker-service incident should normally stay scoped to worker-service unless independent live evidence shows shared-host or cross-service impact.
+## System boundary
 
-Evidence of broader impact could include simultaneous resource degradation in other services, user-facing failures in the Notes path or shared runtime symptoms. Without such evidence, keep the diagnosis local and avoid inferring causal impact on api-gateway, processing-service or data-service.
+Because worker-service is outside the Notes request chain, its telemetry describes an independent monitored component. Any relationship between worker-service observations and user-facing Notes behaviour must come from live evidence rather than from a static dependency in the application architecture.
