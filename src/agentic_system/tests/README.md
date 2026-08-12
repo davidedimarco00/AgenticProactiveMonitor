@@ -23,11 +23,39 @@ The suite verifies that:
 
 Because an agent enters the `running` state only from its SPADE `setup()` method after successful XMPP startup, these tests validate the real SPADE/Prosody boundary rather than only checking static configuration.
 
+### TEST E - Inter-agent XMPP communication
+
+Implemented in `integration/test_agent_communication.py`.
+
+On backend startup, the runtime performs a real transport readiness round trip:
+
+```text
+Technical Lead Agent
+        |
+        | REQUEST / runtime_connectivity_probe
+        v
+System Engineer Agent
+        |
+        | AGREE / request_acknowledged
+        v
+Technical Lead Agent
+```
+
+The test verifies that:
+
+- the request is sent by `technical-lead@xmpp` to `system-engineer@xmpp`;
+- the request uses the Agentic System semantic XMPP protocol;
+- the System Engineer receives the real SPADE message and sends an acknowledgement;
+- the acknowledgement returns to the Technical Lead;
+- REQUEST and AGREE use the same `correlation_id`;
+- both agents report bidirectional message activity.
+
+This is intentionally a communication-layer test only. The System Engineer acknowledges the request but does not yet perform BDI deliberation, ReAct reasoning, MCP calls or diagnosis.
+
 ## Planned incremental coverage
 
 The suite will grow together with the backend:
 
-- TEST E - inter-agent XMPP communication and message correlation;
 - TEST F - independent BDI state for all five agents;
 - TEST G - ReAct loop and autonomous action/tool selection;
 - MCP tool execution and observation feedback;
@@ -69,7 +97,8 @@ tests/
 ├── README.md
 └── integration/
     ├── conftest.py
-    └── test_runtime.py
+    ├── test_runtime.py
+    └── test_agent_communication.py
 ```
 
 Future integration tests should remain grouped by architectural concern instead of creating one large end-to-end test file.
