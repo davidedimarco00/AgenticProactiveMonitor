@@ -14,6 +14,7 @@ from websockets.sync.client import connect
 
 PROSODY_CONTAINER = os.getenv("AGENTIC_XMPP_CONTAINER", "agentic-xmpp")
 BACKEND_CONTAINER = os.getenv("AGENTIC_BACKEND_CONTAINER", "agentic-system-backend")
+BACKEND_HEALTH_PORT = 8081
 TARGET_ROLE = "network_engineer"
 TARGET_JID = "network-engineer@xmpp"
 TARGET_PORT = 8103
@@ -29,7 +30,7 @@ def _get_health(port: int) -> dict[str, object]:
         payload = json.loads(response.read().decode("utf-8"))
 
     if not isinstance(payload, dict):
-        raise AssertionError(f"Expected JSON object from agent health port {port}")
+        raise AssertionError(f"Expected JSON object from health port {port}")
     return payload
 
 
@@ -102,13 +103,12 @@ def _restart_backend_for_cleanup() -> None:
 
 @pytest.mark.fault
 def test_single_agent_xmpp_disconnect_is_detected_in_real_time_and_isolated() -> None:
-    """Break one real XMPP session and verify per-agent failure observability.
+    """Break one XMPP session and verify isolated per-agent failure detection.
 
-    This opt-in fault test intentionally changes Prosody runtime state. It
-    disables only the Network Engineer account, closes its current c2s session
-    and verifies that the same agent's WebSocket reports OFFLINE while the other
-    specialist agents remain ONLINE. The Technical Lead becomes DEGRADED because
-    its periodic team communication probe can no longer reach one specialist.
+    The Network Engineer is disabled and its current Prosody c2s session is
+    closed. Its WebSocket must report OFFLINE, while every unaffected agent,
+    including the Technical Lead, keeps its own ONLINE presence. Complete team
+    reachability is asserted separately through the backend-wide health state.
 
     Cleanup is deterministic: the account is re-enabled and the backend is
     restarted after the assertions. Automatic XMPP reconnection is deliberately
@@ -120,6 +120,10 @@ def test_single_agent_xmpp_disconnect_is_detected_in_real_time_and_isolated() ->
     assert initial["status"] == "ONLINE"
     assert initial["xmpp_connected"] is True
     assert initial["communication_ok"] is True
+
+    initial_team = _get_health(BACKEND_HEALTH_PORT)
+    assert initial_team["team_communication_ok"] is True
+    assert initial_team["unreachable_specialists"] == []
 
     try:
         with connect(
@@ -162,20 +166,34 @@ def test_single_agent_xmpp_disconnect_is_detected_in_real_time_and_isolated() ->
                 assert healthy["xmpp_connected"] is True
                 assert healthy["communication_ok"] is True
 
-            # The Technical Lead remains connected to XMPP but correctly reports
-            # degraded team communication because one specialist is unreachable.
-            degraded_lead = _wait_for_health(
+            # The Technical Lead's own XMPP session is healthy and it can still
+            # communicate with the other specialists, so its presence stays ONLINE.
+            healthy_lead = _wait_for_health(
                 TECHNICAL_LEAD_PORT,
-                lambda item: item.get("status") == "DEGRADED",
-                timeout=12,
+                lambda item: item.get("status") == "ONLINE",
+                timeout=8,
             )
-            assert degraded_lead["xmpp_connected"] is True
-            assert degraded_lead["communication_ok"] is False
+            assert healthy_lead["xmpp_connected"] is True
+            assert healthy_lead["communication_ok"] is True
+
+            # Team reachability is a different concern: the runtime must report
+            # that one specialist is currently unreachable.
+            degraded_team = _wait_for_health(
+                BACKEND_HEALTH_PORT,
+                lambda item: (
+                    item.get("team_communication_ok") is False
+                    and TARGET_ROLE in item.get("unreachable_specialists", [])
+                ),
+                timeout=15,
+            )
+            assert degraded_team["team_communication_ok"] is False
+            assert TARGET_ROLE in degraded_team["unreachable_specialists"]
 
     finally:
         # Never leave the local thesis environment with a disabled agent account.
         _prosody_shell("user", "enable", TARGET_JID)
         _restart_backend_for_cleanup()
+
         restored = _wait_for_health(
             TARGET_PORT,
             lambda item: item.get("status") == "ONLINE",
@@ -183,3 +201,10 @@ def test_single_agent_xmpp_disconnect_is_detected_in_real_time_and_isolated() ->
         )
         assert restored["xmpp_connected"] is True
         assert restored["communication_ok"] is True
+
+        restored_team = _wait_for_health(
+            BACKEND_HEALTH_PORT,
+            lambda item: item.get("team_communication_ok") is True,
+            timeout=35,
+        )
+        assert restored_team["unreachable_specialists"] == []
