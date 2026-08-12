@@ -243,6 +243,53 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
+  agentic-backend:
+    build:
+      context: ../agentic_system
+      dockerfile: Dockerfile
+    container_name: agentic-system-backend
+    environment:
+      AGENT_CONFIG_PATH: /app/config/agents.yaml
+      AGENT_HEALTH_HOST: 0.0.0.0
+      AGENT_HEALTH_PORT: 8081
+      AGENT_LLM_CONTEXT: ${AGENT_LLM_CONTEXT:-8192}
+      AGENT_MAX_LLM_CONCURRENCY: ${AGENT_MAX_LLM_CONCURRENCY:-2}
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
+      XMPP_HOST: xmpp
+      XMPP_PORT: 5222
+      XMPP_AUTO_REGISTER: ${XMPP_AUTO_REGISTER:-true}
+      XMPP_TECHNICAL_LEAD_PASSWORD: ${XMPP_TECHNICAL_LEAD_PASSWORD:-change-this-local-password}
+      XMPP_SYSTEM_ENGINEER_PASSWORD: ${XMPP_SYSTEM_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_NETWORK_ENGINEER_PASSWORD: ${XMPP_NETWORK_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_APPLICATION_ENGINEER_PASSWORD: ${XMPP_APPLICATION_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_SOFTWARE_DEVELOPER_PASSWORD: ${XMPP_SOFTWARE_DEVELOPER_PASSWORD:-change-this-local-password}
+      MCP_URL: http://mcp-server:8000/mcp
+      OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
+      OLLAMA_REASONING_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e2b}
+      OLLAMA_TOOL_MODEL: ${OLLAMA_TOOL_MODEL:-qwen3.5:4b}
+      OLLAMA_FALLBACK_TOOL_MODEL: ${OLLAMA_FALLBACK_TOOL_MODEL:-qwen2.5:latest}
+    ports:
+      - "127.0.0.1:${AGENTIC_BACKEND_HEALTH_PORT:-8081}:8081"
+    depends_on:
+      xmpp:
+        condition: service_healthy
+      mcp-server:
+        condition: service_started
+    networks:
+      - monitoring-net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:8081/health'', timeout=5)" || exit 1',
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 15s
+    restart: unless-stopped
+
   agentic-system-dashboard:
     build:
       context: ../agentic_dashboard
