@@ -1,89 +1,23 @@
-version: 1
+version: 2
 embedding_model: ibm/granite-embedding:30m
 vector_size: 384
 distance: Cosine
 
 collections:
   monitored-system:
-    kind: shared-system-knowledge
+    kind: system-specific-knowledge
     access: shared
     source_path: src/monitored_system/knowledge_base
-    allowed_roles:
-      - technical_lead
-      - system_engineer
-      - network_engineer
-      - application_engineer
-      - software_developer
     purpose: >
       Stable documentation of the monitored Notes Platform: architecture,
       services, dependencies, telemetry semantics and implemented behaviour.
-      It must not contain scenario ground truth or ready-made diagnoses.
-
-  kb-system-engineer-linux:
-    kind: professional-domain-knowledge
-    access: role-primary
-    owner_role: system_engineer
-    source_path: src/knowledge_bases/system_engineer/linux
-    purpose: >
-      General Linux system knowledge for runtime inspection: processes,
-      procfs, CPU, load, memory, filesystems, storage, sockets, cgroups and
-      read-only diagnostic commands. It describes operating-system semantics
-      and command output, not incident answers.
-
-  kb-network-engineer:
-    kind: professional-domain-knowledge
-    access: role-primary
-    owner_role: network_engineer
-    source_path: src/knowledge_bases/network_engineer
-    purpose: >
-      General network engineering knowledge used to understand connectivity,
-      TCP/IP, routing, ICMP, ports, latency, packet loss and network telemetry.
-
-  kb-application-engineer:
-    kind: professional-domain-knowledge
-    access: role-primary
-    owner_role: application_engineer
-    source_path: src/knowledge_bases/application_engineer
-    purpose: >
-      General application-operations knowledge about service health,
-      dependencies, HTTP behaviour, logs, request timing and observability.
-
-  kb-software-developer:
-    kind: professional-domain-knowledge
-    access: role-primary
-    owner_role: software_developer
-    source_path: src/knowledge_bases/software_developer
-    purpose: >
-      General software knowledge about APIs, validation, exception handling,
-      persistence and application-level behaviour relevant to the monitored
-      technology stack.
-
-  kb-technical-lead:
-    kind: professional-domain-knowledge
-    access: role-primary
-    owner_role: technical_lead
-    source_path: src/knowledge_bases/technical_lead
-    purpose: >
-      Cross-domain architecture and technical coordination knowledge. The
-      Technical Lead may also request specialist knowledge through the other
-      agents when deeper domain expertise is required.
-
-retrieval_policy:
-  technical_lead:
-    always_available: [monitored-system, kb-technical-lead]
-    specialist_access: via-agent-collaboration
-  system_engineer:
-    always_available: [monitored-system, kb-system-engineer-linux]
-  network_engineer:
-    always_available: [monitored-system, kb-network-engineer]
-  application_engineer:
-    always_available: [monitored-system, kb-application-engineer]
-  software_developer:
-    always_available: [monitored-system, kb-software-developer]
+      This is external knowledge that the LLM cannot infer reliably from its
+      general pretrained knowledge. It must not contain scenario ground truth,
+      pre-written diagnoses or agent-specific professional manuals.
 
 principles:
   - live telemetry and tool observations are the source of truth for incidents
+  - the LLM provides general technical knowledge such as Linux, networking and software concepts
+  - Qdrant provides external knowledge specific to the monitored system
   - retrieved documents provide context and technical semantics, not diagnosis labels
-  - monitored-system knowledge is shared by every specialist
-  - professional knowledge is primarily retrieved by the corresponding role
-  - cross-role expertise should normally be obtained through agent collaboration
+  - all specialist agents may retrieve from monitored-system
