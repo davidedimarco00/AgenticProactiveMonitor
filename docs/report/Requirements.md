@@ -109,7 +109,7 @@ This section lists all system requirements, divided into functional and non-func
 In this section is shown the use case diagram of the system from the point of
 view of the two main actors: Administrator and Gym Member.
 
-![UseCaseDiagram](../public/resources/use_case_diagram.png)
+_Use case diagram currently unavailable in this repository._
 
 In the following tables the description of each use case related to Administrator and Gym Member.
 
@@ -243,7 +243,7 @@ The administrator can then view User Gym Sessions and User Machine Sessions in a
 
 > Each bounded context defines its own **model, terminology, and invariants**, reducing coupling and enabling independent evolution of system components.
 
-![BC_SmartGymMonitor](../public/resources/BC_SmartGymMonitor.png)
+_Bounded context diagram currently unavailable in this repository._
 
 The SmartGym Monitor system is structured into **Core**, **Supporting**, and **Generic** bounded contexts as described below.
 
