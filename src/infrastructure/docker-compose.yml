@@ -88,7 +88,7 @@ services:
     container_name: agentic-qdrant-init
     environment:
       QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTIONS: ${QDRANT_COLLECTIONS:-monitored-system,kb-system-engineer-linux,kb-network-engineer,kb-application-engineer,kb-software-developer,kb-technical-lead}
+      QDRANT_COLLECTIONS: ${QDRANT_COLLECTIONS:-monitored-system}
       QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
       QDRANT_DISTANCE: ${QDRANT_DISTANCE:-Cosine}
       QDRANT_WAIT_SECONDS: ${QDRANT_WAIT_SECONDS:-120}
@@ -121,7 +121,6 @@ services:
     volumes:
       - ./knowledge_base/collections.yaml:/config/collections.yaml:ro
       - ../monitored_system/knowledge_base:/repo/src/monitored_system/knowledge_base:ro
-      - ../knowledge_bases:/repo/src/knowledge_bases:ro
     depends_on:
       qdrant-init:
         condition: service_completed_successfully
@@ -225,11 +224,6 @@ services:
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
       QDRANT_MONITORED_SYSTEM_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
-      QDRANT_SYSTEM_ENGINEER_COLLECTION: ${QDRANT_SYSTEM_ENGINEER_COLLECTION:-kb-system-engineer-linux}
-      QDRANT_NETWORK_ENGINEER_COLLECTION: ${QDRANT_NETWORK_ENGINEER_COLLECTION:-kb-network-engineer}
-      QDRANT_APPLICATION_ENGINEER_COLLECTION: ${QDRANT_APPLICATION_ENGINEER_COLLECTION:-kb-application-engineer}
-      QDRANT_SOFTWARE_DEVELOPER_COLLECTION: ${QDRANT_SOFTWARE_DEVELOPER_COLLECTION:-kb-software-developer}
-      QDRANT_TECHNICAL_LEAD_COLLECTION: ${QDRANT_TECHNICAL_LEAD_COLLECTION:-kb-technical-lead}
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
     ports:
