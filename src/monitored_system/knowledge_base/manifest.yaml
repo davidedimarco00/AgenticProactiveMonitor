@@ -1,27 +1,17 @@
-version: 5
+version: 6
+collection: monitored-system
 domain: monitored_system
 system: notes-platform
 branch: feature/monitored_system
-purpose: diagnostic-rag
+purpose: shared-system-context-rag
+access: shared
 
-roles:
+allowed_roles:
   - technical_lead
   - system_engineer
   - network_engineer
   - application_engineer
   - software_developer
-
-role_profiles:
-  technical_lead:
-    preferred_domains: [architecture, observability, dependencies, impact]
-  system_engineer:
-    preferred_domains: [infrastructure, runtime, containers, cpu, memory, disk, processes]
-  network_engineer:
-    preferred_domains: [network, connectivity, latency, probes, ports]
-  application_engineer:
-    preferred_domains: [application, services, dependencies, health, logs, latency]
-  software_developer:
-    preferred_domains: [software, api, validation, error-handling, persistence, application-logs]
 
 services:
   - traffic-generator
@@ -39,9 +29,9 @@ excluded_sources:
 exclusion_reason: >
   Test-suite files, controlled fault-injection ground truth, pre-written
   diagnostic guides and agent-runtime implementation details must not be
-  embedded in the monitored-system knowledge base. The RAG corpus describes
-  the system and technical semantics; the agents must produce diagnoses from
-  live observations.
+  embedded in the monitored-system collection. This collection describes the
+  concrete system and the semantics of its observable data. The agents must
+  produce diagnoses from live observations.
 
 documents:
   - path: shared/system_architecture.md
@@ -91,3 +81,9 @@ documents:
   - path: services/worker_service.md
     roles: [technical_lead, system_engineer, network_engineer, application_engineer]
     document_type: service-reference
+
+retrieval_policy:
+  shared_by_all_agents: true
+  role_metadata_is_relevance_hint: true
+  diagnosis_labels: forbidden
+  live_evidence_is_source_of_truth: true
