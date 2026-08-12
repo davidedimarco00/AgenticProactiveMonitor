@@ -1,6 +1,11 @@
-
 -- Prosody configuration for the isolated thesis Docker network.
--- SPADE agents use JIDs such as coordinator@xmpp and can register automatically.
+-- SPADE agents use JIDs such as technical-lead@xmpp and can register automatically.
+--
+-- IMPORTANT:
+-- This Prosody instance is reachable only inside the local Docker thesis network.
+-- TLS is intentionally disabled for client-to-server traffic in this lab setup so
+-- SPADE/Slixmpp does not have to trust a self-signed certificate for the synthetic
+-- Docker-only domain "xmpp". Do not reuse this policy on an exposed XMPP server.
 
 local xmpp_domain = Lua.os.getenv("XMPP_DOMAIN") or "xmpp"
 
@@ -30,22 +35,23 @@ data_path = "/var/lib/prosody"
 -- =====================================================================
 
 authentication = "internal_hashed"
-
 storage = "internal"
 
 
 -- =====================================================================
 -- CLIENT-TO-SERVER CONNECTIONS
 -- =====================================================================
-certificates = "/etc/prosody/certs"
+
 c2s_ports = { 5222 }
 
--- This is an isolated thesis Docker network.
--- Encryption is disabled to simplify SPADE/XMPP testing.
+-- Local Docker thesis lab only.
+-- No STARTTLS is advertised because mod_tls is not enabled below.
 c2s_require_encryption = false
--- Thesis lab only: allow SPADE authentication without TLS
-allow_unencrypted_plain_auth = false
 
+-- SPADE authenticates with SASL PLAIN. Since this isolated instance has TLS
+-- intentionally disabled, Prosody must explicitly allow that mechanism on the
+-- unencrypted Docker bridge connection.
+allow_unencrypted_plain_auth = true
 
 
 -- =====================================================================
@@ -65,7 +71,6 @@ modules_disabled = {
 modules_enabled = {
   "roster";
   "saslauth";
-  "tls";
   "disco";
   "private";
   "blocklist";
@@ -110,14 +115,5 @@ log = {
 -- =====================================================================
 -- VIRTUAL HOST
 -- =====================================================================
-
--- Default:
---   XMPP_DOMAIN=xmpp
---
--- Example SPADE JIDs:
---   sender@xmpp
---   receiver@xmpp
---   coordinator@xmpp
---   diagnosis@xmpp
 
 VirtualHost(xmpp_domain)
