@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Knowledge Base Manager</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+  </head>
+  <body>
+    <main class="container">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Agentic Proactive Monitor</p>
+          <h1>Knowledge Base Manager</h1>
+          <p class="subtitle">
+            Upload troubleshooting documents, generate embeddings with Ollama
+            and store the chunks in Qdrant.
+          </p>
+        </div>
+        <div class="status-card">
+          <span>Collection</span>
+          <strong>{{ collection }}</strong>
+          <span>Embedding model</span>
+          <strong>{{ embedding_model }}</strong>
+        </div>
+      </header>
+
+      {% with messages = get_flashed_messages(with_categories=true) %} {% if
+      messages %}
+      <section class="messages">
+        {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </section>
+      {% endif %} {% endwith %} {% if qdrant_error %}
+      <div class="message error">
+        Qdrant connection error: {{ qdrant_error }}
+      </div>
+      {% endif %}
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Upload document</h2>
+            <p>
+              Supported formats: {{ supported_extensions | join(', ') | upper
+              }}. Maximum size: {{ max_upload_mb }} MB.
+            </p>
+          </div>
+        </div>
+
+        <form
+          action="{{ url_for('upload_document') }}"
+          method="post"
+          enctype="multipart/form-data"
+          class="upload-form"
+        >
+          <label class="file-picker" for="file">
+            <span>Select a PDF, DOCX, TXT or Markdown document</span>
+            <input
+              id="file"
+              name="file"
+              type="file"
+              accept=".pdf,.docx,.txt,.md"
+              required
+            />
+          </label>
+          <button type="submit" class="primary-button">Upload to Qdrant</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Documents</h2>
+            <p>{{ documents | length }} document(s) currently indexed.</p>
+          </div>
+        </div>
+
+        {% if documents %}
+        <div class="document-list">
+          {% for document in documents %}
+          <article class="document-row">
+            <div class="document-main">
+              <strong>{{ document.filename }}</strong>
+              <span
+                >{{ document.file_type | upper }} · {{ document.chunks }}
+                chunks</span
+              >
+              <small>{{ document.uploaded_at }}</small>
+            </div>
+            <form
+              action="{{ url_for('delete_document', document_id=document.document_id) }}"
+              method="post"
+            >
+              <button type="submit" class="danger-button">Delete</button>
+            </form>
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="empty-state">No documents have been uploaded yet.</p>
+        {% endif %}
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Test retrieval</h2>
+            <p>Run a semantic query against the Qdrant knowledge base.</p>
+          </div>
+        </div>
+
+        <form
+          action="{{ url_for('search') }}"
+          method="post"
+          class="search-form"
+        >
+          <input
+            name="query"
+            type="text"
+            value="{{ search_query }}"
+            placeholder="Example: container keeps restarting"
+            required
+          />
+          <button type="submit" class="primary-button">Search</button>
+        </form>
+
+        {% if results %}
+        <div class="results">
+          {% for result in results %}
+          <article class="result-card">
+            <div class="result-meta">
+              <strong>{{ result.payload.filename }}</strong>
+              <span>score {{ '%.4f' | format(result.score) }}</span>
+              <span
+                >chunk {{ result.payload.chunk_index + 1 }}/{{
+                result.payload.total_chunks }}</span
+              >
+            </div>
+            <p>{{ result.payload.text }}</p>
+          </article>
+          {% endfor %}
+        </div>
+        {% elif search_query %}
+        <p class="empty-state">No matching chunks were returned.</p>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

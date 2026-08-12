@@ -1,0 +1,24 @@
+name: high-latency
+target: processing-service
+type: performance
+root_cause: controlled processing delay injected before downstream calls
+
+description: >
+  Adds a deterministic delay to Notes Service requests while the service
+  remains available. The delay is configured at runtime and can be removed
+  without rebuilding or restarting the container.
+
+default_delay_ms: 2000
+
+expected_symptoms:
+  - api-gateway request latency increases
+  - processing-service emits fault_delay_applied WARN events
+  - traffic-generator observes slower user actions
+  - requests may become HTTP 503 if the configured delay exceeds upstream timeouts
+
+current_detection_scope: >
+  No dedicated anomaly detector is defined for latency in the current metric-only
+  detector set. Logs and request timing are retained as diagnostic evidence for
+  later agent reasoning and future detector extensions.
+
+recovery: remove the runtime fault-control file using stop.ps1

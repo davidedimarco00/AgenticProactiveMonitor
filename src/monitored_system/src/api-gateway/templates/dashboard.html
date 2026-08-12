@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Notes Platform{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Personal workspace</p>
+        <h1>Your notes, in one place.</h1>
+        <p class="hero-copy">Capture ideas, keep useful information and return to previous notes whenever you need them.</p>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value">{{ notes|length }}</span>
+        <span class="stat-label">Saved notes</span>
+    </div>
+</section>
+
+<section class="section-heading">
+    <div>
+        <p class="eyebrow">Library</p>
+        <h2>Recent notes</h2>
+    </div>
+    <a class="button button-secondary" href="{{ url_for('create_note') }}">Create note</a>
+</section>
+
+{% if notes %}
+<div class="notes-grid">
+    {% for note in notes %}
+    <article class="note-card">
+        <div class="note-card-top">
+            <span class="note-id">#{{ note.id }}</span>
+            <span class="note-date">{{ note.updated_at[:10] }}</span>
+        </div>
+        <h3>{{ note.title }}</h3>
+        <p>{{ note.content[:180] }}{% if note.content|length > 180 %}…{% endif %}</p>
+        <div class="note-card-footer">
+            <span>Updated {{ note.updated_at.replace('T', ' ')[:16] }}</span>
+            <a href="{{ url_for('note_detail', note_id=note.id) }}">Open →</a>
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-icon">✎</div>
+    <h3>No notes yet</h3>
+    <p>Create your first note and it will appear here.</p>
+    <a class="button button-primary" href="{{ url_for('create_note') }}">Create first note</a>
+</div>
+{% endif %}
+{% endblock %}

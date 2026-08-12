@@ -1,0 +1,25 @@
+coordinator: {jid: coordinator@xmpp, password: coordinator}
+evidence: {jid: evidence@xmpp, password: evidence}
+reasoning: {jid: reasoning@xmpp, password: reasoning}
+critic: {jid: critic@xmpp, password: critic}
+remediation: {jid: remediation@xmpp, password: remediation}
+
+opensearch:
+  base_url: http://opensearch:9200
+  username: null
+  password: null
+  verify_ssl: false
+
+ollama:
+  base_url: http://ollama:11434
+  model: llama3.2:3b
+  temperature: 0.1
+  timeout_seconds: 120
+  keep_alive: 5m
+  max_retries: 1
+  check_model_on_start: true
+
+topology_file: src/agentic_system/config/topology.yaml
+sync_detectors_on_start: false
+detector_metrics: [usage_active, used_percent]
+open_demo_incident: true
