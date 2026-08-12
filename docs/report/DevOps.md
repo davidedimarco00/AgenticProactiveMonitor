@@ -1,168 +1,220 @@
-# 3. DevOps and Development Process
+# DevOps
 
-This section describes the DevOps practices, workflows, and automation strategies adopted during the development of the SmartGym Monitor system.
+The project uses lightweight DevOps practices to keep the thesis prototype reproducible and easy to validate. The current workflow focuses on containerised execution, controlled configuration, repeatable experiments, pull-request validation, automatic releases, and automatic documentation deployment.
 
-## 3.1 Version Control Strategy
+## 1. Container strategy
 
-The project follows a **Git Flow** branching model to ensure a structured and controlled development process.
+The project uses two independent Docker Compose projects.
 
-The main branches are:
+### Agentic infrastructure
 
-- `main`: contains only stable and production-ready code.
-- `develop`: integration branch where completed features are merged before release.
-- `feature/<feature-name>`: used for the development of individual features.
-
-Each new functionality is developed in a dedicated `feature` branch created from `develop`.
-
-Each `feature` branch is in turn broken down into sub-branches `feature/<feature-name>-<sub-name>` that make up the feature in its entirety.
-
-Once completed, the feature is merged back into `develop` through a Pull Request.
-
-The `main` branch only receives code that has been validated and is ready for release.
-
-This approach ensures:
-
-- Isolation of new features
-- Controlled integration
-- Clear separation between stable and in-progress code
-
-## 3.2 Branch Protection Rules
-
-To preserve repository integrity and prevent accidental changes to production code, strict protection rules are applied to the `main` branch,
-using GitHub rulesets.
-
-The following restrictions are enforced:
-
-- Direct pushes to `main` are prohibited.
-- Code cannot be added or deleted directly on `main`.
-- Every Pull Request targeting `main` requires at least one review before merging.
-- All required CI checks must pass before merge approval (e.g., commit message validation).
-
-This guarantees that production code is always reviewed, tested, and validated.
-
-## 3.3 Conventional Commits and Branch Naming
-
-The project adopts the **Conventional Commits specification** to standardize commit messages and improve traceability.
-More info on Conventional Commits can be found [here](https://www.conventionalcommits.org/en/v1.0.0/).
-
-Commit messages follow a structured format:
-
+```text
+agentic-proactive-monitor-infrastructure
 ```
-<type>[optional scope]: <description>
 
-[optional body]
+This project contains the monitoring and support services, including OpenSearch, OpenSearch Dashboards, Qdrant, Open WebUI, Prosody/XMPP, MCP Server, the knowledge-base web interface, bootstrap services, and the operator dashboard.
 
-[optional footer(s)]
+### Monitored workload
+
+```text
+monitored-system
 ```
+
+This project contains only the application under observation:
+
+- `traffic-generator`;
+- `api-gateway`;
+- `processing-service`;
+- `data-service`;
+- `worker-service`.
+
+The two projects are connected only through the shared observability network:
+
+```text
+agentic-monitoring-net
+```
+
+The monitored services also use their own private application network.
+
+## 2. Native Ollama deployment
+
+Ollama is intentionally not part of Docker Compose. It runs directly on Windows so local language models can use the NVIDIA GPU independently from the Docker Desktop backend.
+
+The infrastructure reaches Ollama through:
+
+```text
+http://host.docker.internal:11434
+```
+
+This separation also allows the monitored network-latency scenario to use the Docker Linux environment required by `tc/netem` without coupling GPU inference to that runtime.
+
+## 3. Configuration management
+
+Runtime values are kept in environment variables and `.env.example` files.
+
+The repository should contain safe defaults and examples only. Real secrets, tokens, and local credentials must not be committed.
+
+Typical local preparation from PowerShell is:
+
+```powershell
+cd .\src\infrastructure
+Copy-Item .env.example .env
+```
+
+The same principle is used for the standalone monitored system.
+
+## 4. Startup order
+
+The expected local startup sequence is:
+
+1. start native Ollama on Windows;
+2. start the agentic infrastructure;
+3. start the monitored Notes Platform;
+4. verify telemetry and detector bootstrap.
+
+From PowerShell:
+
+```powershell
+cd .\src\infrastructure
+docker compose up -d --build
+
+cd ..\monitored_system
+docker compose up -d --build
+```
+
+The infrastructure is started first because it creates the shared observability network used by the monitored system.
+
+## 5. Health checks and bootstrap services
+
+Long-running infrastructure containers use Docker health checks where useful.
+
+One-shot bootstrap services prepare:
+
+- OpenSearch index templates;
+- Qdrant collection configuration;
+- OpenSearch Dashboards data views;
+- OpenSearch Anomaly Detection detectors.
+
+This avoids requiring the developer to manually recreate the monitoring environment after a clean deployment.
+
+## 6. Reproducible fault experiments
+
+Controlled failure scenarios are stored with the monitored workload rather than inside the agentic infrastructure.
+
+Scenario control is implemented with PowerShell scripts so experiments can be repeated from the Windows development environment.
+
+A common reset command is:
+
+```powershell
+.\infrastructure\scenarios\reset-to-base.ps1
+```
+
+Detector experiments include an explicit recovery window because OpenSearch Anomaly Detection uses an adaptive model. Repeating a synthetic fault immediately after recovery is not considered equivalent to testing a static threshold.
+
+## 7. Automated monitored-system tests
+
+The monitored-system test runner is implemented in PowerShell.
 
 Examples:
 
-- `feat(auth): add login endpoint`
-- `fix(api): resolve session validation bug`
-- `docs(readme): update setup instructions`
-
-Branch naming also follows a consistent convention, the **Conventional Branch specification**.
-More info on Conventional Branch Naming can be found [here](https://conventional-branch.github.io/).
-
-Branch names are structured as follows:
-
-```
-<type>/<description>
+```powershell
+.\infrastructure\tests\run-tests.ps1 -Test preflight
+.\infrastructure\tests\run-tests.ps1 -Test cpu-spike
+.\infrastructure\tests\run-tests.ps1 -Test memory-leak
+.\infrastructure\tests\run-tests.ps1 -Test network-latency
+.\infrastructure\tests\run-tests.ps1 -Test all
 ```
 
-Examples:
+The test suite validates both infrastructure conditions and experimental behaviour. It also checks that all OpenSearch detectors are `SINGLE_ENTITY`.
 
-- `feature/<feature-name>`
-- `fix/<bug-name>`
-- `feature/docs`
+Generated experimental outputs are kept outside version control so the repository contains source and test definitions rather than local experiment results.
 
-### Automated Enforcement
+## 8. Git workflow
 
-To enforce these conventions:
+Development is organised through feature branches and pull requests.
 
-- **Husky** is used to configure Git hooks locally.
-  - A _commit-msg_ hook validates commit messages before they are accepted.
-  - A _pre-commit_ hook formats code to ensure code style consistency.
-- A **GitHub Action** runs on each Pull Request to verify that all commits comply with the Conventional Commit standard.
+Relevant development branches have been used to isolate work on:
 
-This prevents inconsistent commit history and improves maintainability.
+- infrastructure cleanup;
+- monitored system;
+- MCP Server;
+- operator dashboard;
+- agentic backend;
+- documentation and release automation.
 
-## 3.4 Continuous Integration (CI)
+Pull requests provide a clear integration point before changes reach `main`.
 
-A Continuous Integration pipeline is configured using GitHub Actions.
+## 9. Conventional Commits validation
 
-The CI workflow is triggered on:
+Pull requests targeting `main` run the `Validate Commits` GitHub Actions workflow.
 
-- Pull Requests
-- Pushes to `develop` and `main`
+The workflow installs the Node.js project dependencies and executes Commitlint against all commits introduced by the pull request.
 
-The pipeline includes:
+The project therefore uses Conventional Commit-style messages such as:
 
-- Automated testing
-- Validation of commit conventions
-- Build verification
+```text
+feat: add diagnostic tool
+fix: correct detector configuration
+docs: update architecture documentation
+```
 
-This ensures that:
+## 10. Automatic releases
 
-- The project always builds successfully
-- Tests are executed automatically
-- Errors are detected early in the development lifecycle
+Every push to `main` triggers the `Release` workflow.
 
-## 3.5 Continuous Deployment (CD)
+The current release strategy is intentionally simple for the thesis repository:
 
-The project includes automated deployment workflows.
+- if no release tag exists, the workflow uses the version stored in `package.json`;
+- otherwise, it increments the patch component of the latest `vMAJOR.MINOR.PATCH` tag;
+- GitHub creates and publishes the release;
+- release notes are generated automatically.
 
-### Documentation Deployment
+Example sequence:
 
-The system documentation is built using **VitePress**.
+```text
+v1.0.0
+v1.0.1
+v1.0.2
+...
+```
 
-A dedicated GitHub Action:
+The workflow uses the GitHub-provided token and requires repository `contents: write` permission.
 
-- Builds the documentation site
-- Automatically deploys it (e.g., via GitHub Pages)
+## 11. Documentation deployment
 
-This ensures that the documentation is always aligned with the latest version of the project.
+The documentation site is built with VitePress.
 
-### Automated Releases
+Changes under `docs/**` on `main` trigger the GitHub Pages workflow:
 
-When code is merged into `main`, a release workflow is triggered.
+```text
+checkout
+  -> setup Node.js 24
+  -> install docs dependencies
+  -> build VitePress
+  -> upload Pages artifact
+  -> deploy GitHub Pages
+```
 
-- TO DO: describe the release process, e.g., using semantic versioning, generating release notes, etc.
+The VitePress build output is:
 
-## 3.6 Automated Testing
+```text
+docs/.vitepress/dist
+```
 
-Automated tests are integrated into the CI pipeline.
+The project site is configured for the repository base path:
 
-This prevents regressions and increases confidence in code quality.
+```text
+/AgenticProactiveMonitor/
+```
 
-Testing automation guarantees:
+## 12. Current CI/CD scope
 
-- Early bug detection
-- Stable integration into `develop`
-- High reliability of releases to `main`
+The current GitHub automation focuses on repository quality and publishing. Full integration tests of the Docker-based monitoring environment are not yet executed by hosted GitHub Actions because the thesis experiments depend on a local Docker Desktop environment and, for some scenarios, specific network and GPU behaviour.
 
-## 3.7 Dependency Management with Renovate
+For this reason, the current approach is:
 
-The repository integrates **Renovate Bot** to automate dependency updates.
+- GitHub Actions for commit validation, releases, and documentation publishing;
+- local PowerShell tests for monitored-system and anomaly-detection experiments;
+- pytest for the MCP Server tool layer.
 
-Renovate:
-
-- Monitors project dependencies
-- Automatically creates Pull Requests when updates are available
-- Ensures dependencies remain up to date
-
-Each update is reviewed and validated through the CI pipeline before being merged.
-
-## 3.8 DevOps Benefits
-
-The adopted DevOps strategy provides:
-
-- Structured collaboration
-- High code quality
-- Automated validation
-- Safe and controlled releases
-- Continuous documentation updates
-- Automated dependency management
-
-Overall, the combination of Git Flow, CI/CD automation, commit standardization, and dependency monitoring significantly increases
-the robustness and maintainability of the SmartGym Monitor system.
+This separation keeps automated repository checks fast while preserving realistic experimental validation on the target development environment.
