@@ -43,10 +43,10 @@ class ManifestModelTests(unittest.TestCase):
             ["one two three four", "four five six seven", "seven eight"],
         )
 
-    def test_metadata_forces_collection_and_drops_incident_types(self):
+    def test_metadata_forces_collection_and_drops_routing_labels(self):
         metadata = build_document_metadata(
             collection="monitored-system",
-            manifest={"version": 6},
+            manifest={"version": 7},
             document_entry={"document_type": "service-reference"},
             front_matter={
                 "kb_id": "monitored.service.demo",
@@ -59,6 +59,7 @@ class ManifestModelTests(unittest.TestCase):
 
         self.assertEqual(metadata["collection"], "monitored-system")
         self.assertEqual(metadata["kb_id"], "monitored.service.demo")
+        self.assertNotIn("roles", metadata)
         self.assertNotIn("incident_types", metadata)
         self.assertEqual(metadata["document_type"], "service-reference")
 
