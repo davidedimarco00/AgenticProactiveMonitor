@@ -1,9 +1,17 @@
 (() => {
   const clock = document.getElementById("live-clock");
   let selectedAgentProfile = null;
+  let shuttingDown = false;
+  const agentHealthSockets = new Map();
+  const agentHealthReconnectTimers = new Map();
 
   const ROLE_DIRECTORY = {
     "coordinator@xmpp": {
+      name: "Technical Lead",
+      jid: "technical-lead@xmpp",
+      role: "Incident triage, coordination and critical review",
+    },
+    "technical-lead@xmpp": {
       name: "Technical Lead",
       jid: "technical-lead@xmpp",
       role: "Incident triage, coordination and critical review",
@@ -13,7 +21,17 @@
       jid: "system-engineer@xmpp",
       role: "Linux, containers, host resources and runtime diagnostics",
     },
+    "system-engineer@xmpp": {
+      name: "System Engineer",
+      jid: "system-engineer@xmpp",
+      role: "Linux, containers, host resources and runtime diagnostics",
+    },
     "critic@xmpp": {
+      name: "Network Engineer",
+      jid: "network-engineer@xmpp",
+      role: "Connectivity, latency, network paths and traffic analysis",
+    },
+    "network-engineer@xmpp": {
       name: "Network Engineer",
       jid: "network-engineer@xmpp",
       role: "Connectivity, latency, network paths and traffic analysis",
@@ -23,7 +41,17 @@
       jid: "application-engineer@xmpp",
       role: "Service health, application logs and dependency diagnosis",
     },
+    "application-engineer@xmpp": {
+      name: "Application Engineer",
+      jid: "application-engineer@xmpp",
+      role: "Service health, application logs and dependency diagnosis",
+    },
     "remediation@xmpp": {
+      name: "Software Developer",
+      jid: "software-developer@xmpp",
+      role: "Code behaviour, defects and application-level corrective guidance",
+    },
+    "software-developer@xmpp": {
       name: "Software Developer",
       jid: "software-developer@xmpp",
       role: "Code behaviour, defects and application-level corrective guidance",
@@ -147,7 +175,7 @@
         }
       });
     } catch (_) {
-      // Keep the server-rendered state if the lightweight refresh fails.
+      // Keep the server-rendered activity state if the lightweight refresh fails.
     }
   };
 
@@ -172,6 +200,95 @@
     } catch (_) {
       // Keep the server-rendered state if the live check fails.
     }
+  };
+
+  const setAgentPresence = (node, status, payload = null) => {
+    if (!node) return;
+
+    const normalized = ["ONLINE", "DEGRADED", "OFFLINE"].includes(status)
+      ? status
+      : "UNKNOWN";
+
+    node.dataset.agentPresence = normalized;
+    node.classList.toggle("presence-online", normalized === "ONLINE");
+    node.classList.toggle("presence-degraded", normalized === "DEGRADED");
+    node.classList.toggle("presence-offline", normalized === "OFFLINE");
+    node.classList.toggle("presence-unknown", normalized === "UNKNOWN");
+
+    const dot = node.querySelector(".agent-presence-dot");
+    if (!dot) return;
+
+    if (payload) {
+      const xmpp = payload.xmpp_connected ? "XMPP connected" : "XMPP disconnected";
+      const communication = payload.communication_ok
+        ? "communication verified"
+        : "communication not verified";
+      dot.title = `Agent health: ${normalized} · ${xmpp} · ${communication}`;
+    } else {
+      dot.title = `Agent health: ${normalized.toLowerCase()}`;
+    }
+  };
+
+  const scheduleAgentHealthReconnect = (node) => {
+    if (shuttingDown || !node) return;
+    const key = node.dataset.agentDisplayJid || node.dataset.agentHealthPort;
+    if (!key || agentHealthReconnectTimers.has(key)) return;
+
+    const timer = window.setTimeout(() => {
+      agentHealthReconnectTimers.delete(key);
+      connectAgentHealth(node);
+    }, 2000);
+    agentHealthReconnectTimers.set(key, timer);
+  };
+
+  const connectAgentHealth = (node) => {
+    if (!node || shuttingDown) return;
+
+    const port = Number(node.dataset.agentHealthPort || 0);
+    if (!Number.isInteger(port) || port <= 0) {
+      setAgentPresence(node, "OFFLINE");
+      return;
+    }
+
+    const key = node.dataset.agentDisplayJid || String(port);
+    const existing = agentHealthSockets.get(key);
+    if (existing && existing.readyState <= WebSocket.OPEN) return;
+
+    setAgentPresence(node, "UNKNOWN");
+    const host = window.location.hostname || "127.0.0.1";
+    const socket = new WebSocket(`ws://${host}:${port}/ws/health`);
+    agentHealthSockets.set(key, socket);
+
+    socket.addEventListener("open", () => {
+      setAgentPresence(node, "DEGRADED");
+    });
+
+    socket.addEventListener("message", (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        setAgentPresence(node, payload.status, payload);
+      } catch (_) {
+        setAgentPresence(node, "DEGRADED");
+      }
+    });
+
+    socket.addEventListener("error", () => {
+      setAgentPresence(node, "OFFLINE");
+    });
+
+    socket.addEventListener("close", () => {
+      if (agentHealthSockets.get(key) === socket) {
+        agentHealthSockets.delete(key);
+      }
+      setAgentPresence(node, "OFFLINE");
+      scheduleAgentHealthReconnect(node);
+    });
+  };
+
+  const bindAgentHealthStreams = () => {
+    document
+      .querySelectorAll(".agent-node[data-agent-health-port]")
+      .forEach((node) => connectAgentHealth(node));
   };
 
   const modal = document.getElementById("agent-observability-modal");
@@ -317,10 +434,19 @@
     });
   };
 
+  window.addEventListener("beforeunload", () => {
+    shuttingDown = true;
+    agentHealthReconnectTimers.forEach((timer) => window.clearTimeout(timer));
+    agentHealthReconnectTimers.clear();
+    agentHealthSockets.forEach((socket) => socket.close());
+    agentHealthSockets.clear();
+  });
+
   updateClock();
   bindRows();
   bindIncidentSearch();
   bindAgentObservability();
+  bindAgentHealthStreams();
   refreshTeamActivity();
   refreshSystemHealth();
 
