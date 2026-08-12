@@ -132,6 +132,18 @@ class AgentRuntime:
         technical_lead: TechnicalLeadAgent,
         specialist: BaseRoleAgent,
     ) -> bool:
+        # Slixmpp can still have already-queued stanzas around a c2s disconnect.
+        # A role whose session_end/disconnected event has fired is therefore
+        # unreachable by definition even if a late acknowledgement is observed.
+        # Do not start a fresh transport probe until the XMPP session is connected.
+        if not specialist.xmpp_connected:
+            specialist.mark_communication_failed()
+            LOGGER.warning(
+                "Health probe skipped for %s because its XMPP session is disconnected",
+                specialist.role,
+            )
+            return False
+
         try:
             request, acknowledgement = await technical_lead.request_specialist(
                 receiver=str(specialist.jid),
@@ -157,6 +169,12 @@ class AgentRuntime:
                 )
                 return False
 
+            # The session may have dropped while this REQUEST/AGREE exchange was in
+            # flight. Connectivity remains the authoritative transport prerequisite.
+            if not specialist.xmpp_connected:
+                specialist.mark_communication_failed()
+                return False
+
             specialist.mark_communication_ok()
             return True
         except asyncio.CancelledError:
@@ -167,31 +185,22 @@ class AgentRuntime:
             return False
 
     async def _run_health_probe_cycle(self, *, strict: bool) -> None:
-        """Probe specialist reachability without conflating it with TL health.
-
-        Per-agent ``communication_ok`` answers whether that specific SPADE/XMPP
-        endpoint is alive and has recently exchanged traffic. Team reachability is
-        tracked separately so a single failed specialist does not incorrectly turn
-        the Technical Lead's own presence indicator yellow/red.
-        """
-
         technical_lead = self._technical_lead()
         failures: list[str] = []
-        successes = 0
 
         for specialist in self._specialists():
-            if await self._probe_specialist(technical_lead, specialist):
-                successes += 1
-            else:
+            if not await self._probe_specialist(technical_lead, specialist):
                 failures.append(specialist.role)
 
         self.unreachable_specialists = failures
         self.team_communication_ok = not failures
 
-        # The Technical Lead's own health is independent from complete team
-        # reachability. If it can still exchange XMPP traffic with at least one peer,
-        # its own presence remains healthy. Team degradation is exposed separately.
-        if successes > 0:
+        # Per-agent presence and team reachability are deliberately separate.
+        # A healthy Technical Lead stays ONLINE if one specialist is unavailable.
+        # Its own communication_ok reflects its own XMPP session/transport activity,
+        # while team_communication_ok reports whether the full specialist set is
+        # reachable.
+        if technical_lead.xmpp_connected:
             technical_lead.mark_communication_ok()
         else:
             technical_lead.mark_communication_failed()
