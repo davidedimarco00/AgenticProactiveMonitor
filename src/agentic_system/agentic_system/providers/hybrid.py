@@ -61,8 +61,6 @@ class HybridLLMProvider(BaseLLMProvider):
         self.reasoning_provider = reasoning_provider
         self.tool_provider = tool_provider
         self.embedding_provider = embedding_provider
-
-        # Keep the standard SPADE-LLM/health contract while exposing each role.
         self.model = reasoning_provider.model
         self.reasoning_model = reasoning_provider.model
         self.tool_model = tool_provider.model
@@ -71,15 +69,13 @@ class HybridLLMProvider(BaseLLMProvider):
 
     @classmethod
     def from_runtime(cls, config: Any) -> "HybridLLMProvider":
-        """Create the three Ollama providers from the backend runtime config."""
-
         return cls(
             reasoning_provider=LLMProvider(
                 model=f"ollama/{config.reasoning_model}",
                 base_url=config.ollama_url,
             ),
             tool_provider=LLMProvider(
-                model=f"ollama/{config.tool_model}",
+                model=f"ollama_chat/{config.tool_model}",
                 base_url=config.ollama_url,
             ),
             embedding_provider=LLMProvider(
@@ -95,16 +91,6 @@ class HybridLLMProvider(BaseLLMProvider):
         conversation_id: Optional[str] = None,
         output_schema: Optional[Any] = None,
     ) -> dict[str, Any]:
-        """Route reasoning to Gemma and tool selection to Qwen.
-
-        SPADE-LLM calls this method repeatedly during its native tool loop. When
-        tools are available we first obtain a reasoning draft without exposing
-        tools to the reasoning model. Qwen then receives the same conversation,
-        the draft and the official SPADE-LLM tool specifications. If Qwen asks
-        for a tool, the call is returned untouched to SPADE-LLM for execution.
-        If no tool is required, Gemma's response becomes the final answer.
-        """
-
         if not tools:
             return await self.reasoning_provider.get_llm_response(
                 context,
@@ -147,7 +133,7 @@ class HybridLLMProvider(BaseLLMProvider):
             context.get_tracing_metadata(conversation_id),
         )
         tool_response = await self.tool_provider.get_llm_response(
-            selector_context,  # type: ignore[arg-type]
+            selector_context,
             tools=tools,
             conversation_id=conversation_id,
             output_schema=None,
@@ -161,14 +147,8 @@ class HybridLLMProvider(BaseLLMProvider):
                 len(tool_calls),
                 self.reasoning_model,
             )
-            return {
-                "text": None,
-                "tool_calls": tool_calls,
-                "structured": None,
-            }
+            return {"text": None, "tool_calls": tool_calls, "structured": None}
 
-        # If SPADE-LLM requested structured output together with tools and Qwen
-        # decides no tool is needed, let Gemma generate the structured result.
         if output_schema is not None:
             return await self.reasoning_provider.get_llm_response(
                 context,
@@ -185,6 +165,4 @@ class HybridLLMProvider(BaseLLMProvider):
         return reasoning_response
 
     async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        """Delegate SPADE-LLM embedding requests to the Granite provider."""
-
         return await self.embedding_provider.get_embeddings(texts)
