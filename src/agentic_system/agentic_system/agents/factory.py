@@ -4,6 +4,7 @@ from spade_llm.mcp import StreamableHttpServerConfig
 from spade_llm.providers import LLMProvider
 
 from ..config import RuntimeConfig
+from ..providers import HybridLLMProvider
 from .base import BaseAgent
 from .roles import (
     ApplicationEngineerAgent,
