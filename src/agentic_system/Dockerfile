@@ -9,6 +9,7 @@ WORKDIR /app
 COPY pyproject.toml ./pyproject.toml
 COPY agentic_system ./agentic_system
 RUN pip install --no-cache-dir .
+RUN python -c "from mcp.client.streamable_http import streamablehttp_client; assert callable(streamablehttp_client)"
 
 RUN useradd --create-home --uid 10001 agentic
 
