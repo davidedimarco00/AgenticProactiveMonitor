@@ -30,20 +30,19 @@ class _PromptContextView:
 
 
 class OllamaToolCallingProvider(BaseLLMProvider):
-    """Qwen tool provider using Ollama's OpenAI-compatible chat endpoint.
+    """Qwen tool selector backed by Ollama's native ``/api/chat`` endpoint.
 
-    SPADE-LLM remains responsible for MCP discovery, tool execution, context,
-    memory and the tool loop. This provider only converts Qwen's native tool
-    response into the provider contract expected by SPADE-LLM.
+    Only model I/O is implemented here. SPADE-LLM still owns MCP discovery,
+    the tool registry, tool execution, context, memory and the iterative tool loop.
     """
 
     def __init__(self, *, model: str, base_url: str, timeout: float = 120.0) -> None:
         super().__init__()
         self.ollama_model = model
-        self.model = f"ollama_chat/{model}"
+        self.model = f"ollama_native/{model}"
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.endpoint = f"{self.base_url}/v1/chat/completions"
+        self.endpoint = f"{self.base_url}/api/chat"
 
     async def _post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -69,25 +68,22 @@ class OllamaToolCallingProvider(BaseLLMProvider):
             "model": self.ollama_model,
             "messages": context.get_prompt(conversation_id),
             "stream": False,
+            "think": False,
+            "options": {"temperature": 0},
         }
         if tools:
             payload["tools"] = [tool.to_openai_tool() for tool in tools]
-            payload["tool_choice"] = "auto"
 
         data = await self._post_chat(payload)
-        try:
-            message = data["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("Unexpected Ollama chat response shape") from exc
-
+        message = data.get("message")
         if not isinstance(message, dict):
-            raise RuntimeError("Unexpected Ollama assistant message shape")
+            raise RuntimeError("Unexpected Ollama /api/chat response shape")
 
-        parsed_calls: list[dict[str, Any]] = []
         raw_calls = message.get("tool_calls") or []
         if not isinstance(raw_calls, list):
             raise RuntimeError("Ollama tool_calls field is not a list")
 
+        parsed_calls: list[dict[str, Any]] = []
         for raw_call in raw_calls:
             if not isinstance(raw_call, dict):
                 raise RuntimeError("Ollama returned an invalid tool call")
@@ -127,6 +123,13 @@ class OllamaToolCallingProvider(BaseLLMProvider):
         if not isinstance(content, str):
             content = str(content)
 
+        if tools and not parsed_calls:
+            LOGGER.info(
+                "Tool model %s returned no native tool call; content=%r",
+                self.model,
+                content[:300],
+            )
+
         return {
             "text": None if parsed_calls else content,
             "tool_calls": parsed_calls,
@@ -142,8 +145,9 @@ class HybridLLMProvider(BaseLLMProvider):
         "by the framework. Based on the conversation and the reasoning draft, "
         "decide whether external evidence or an action is required. If a tool is "
         "needed, select the most appropriate tool and provide valid arguments. "
-        "If no tool is needed, return no tool call. Do not replace the reasoning "
-        "model's final answer with your own prose."
+        "When the request explicitly requires a live check, you must call a suitable "
+        "tool instead of answering from memory. If no tool is needed, return no tool "
+        "call. Do not replace the reasoning model's final answer with your own prose."
     )
 
     def __init__(
@@ -218,8 +222,8 @@ class HybridLLMProvider(BaseLLMProvider):
             {
                 "role": "user",
                 "content": (
-                    "Decide now whether a tool call is required. Use the supplied "
-                    "tool specifications for any call; otherwise return no tool call."
+                    "Choose the next action now. If external evidence is required, "
+                    "return a native tool call using one of the supplied tools."
                 ),
             }
         )
