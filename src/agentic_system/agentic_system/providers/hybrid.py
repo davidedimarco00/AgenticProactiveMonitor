@@ -44,6 +44,21 @@ class OllamaToolCallingProvider(BaseLLMProvider):
         self.timeout = timeout
         self.endpoint = f"{self.base_url}/api/chat"
 
+    @staticmethod
+    def _format_tool(tool: LLMTool) -> dict[str, Any]:
+        """Convert a SPADE-LLM tool to Ollama's native function-tool schema."""
+        if any(character.isspace() for character in tool.name):
+            raise ValueError(f"Ollama tool name contains whitespace: {tool.name!r}")
+
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            },
+        }
+
     async def _post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(self.endpoint, json=payload)
@@ -72,7 +87,7 @@ class OllamaToolCallingProvider(BaseLLMProvider):
             "options": {"temperature": 0},
         }
         if tools:
-            payload["tools"] = [tool.to_openai_tool() for tool in tools]
+            payload["tools"] = [self._format_tool(tool) for tool in tools]
 
         data = await self._post_chat(payload)
         message = data.get("message")
@@ -124,7 +139,7 @@ class OllamaToolCallingProvider(BaseLLMProvider):
             content = str(content)
 
         if tools and not parsed_calls:
-            LOGGER.info(
+            LOGGER.warning(
                 "Tool model %s returned no native tool call; content=%r",
                 self.model,
                 content[:300],
