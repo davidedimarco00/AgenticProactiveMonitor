@@ -40,7 +40,7 @@ class OllamaToolCallingProvider(BaseLLMProvider):
     def __init__(self, *, model: str, base_url: str, timeout: float = 120.0) -> None:
         super().__init__()
         self.ollama_model = model
-        self.model = f"ollama/{model}"
+        self.model = f"ollama_chat/{model}"
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.endpoint = f"{self.base_url}/v1/chat/completions"
