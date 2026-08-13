@@ -69,6 +69,25 @@ class HybridLLMProvider(BaseLLMProvider):
         self.embedding_model = embedding_provider.model
         self.base_url = reasoning_provider.base_url
 
+    @classmethod
+    def from_runtime(cls, config: Any) -> "HybridLLMProvider":
+        """Create the three Ollama providers from the backend runtime config."""
+
+        return cls(
+            reasoning_provider=LLMProvider(
+                model=f"ollama/{config.reasoning_model}",
+                base_url=config.ollama_url,
+            ),
+            tool_provider=LLMProvider(
+                model=f"ollama/{config.tool_model}",
+                base_url=config.ollama_url,
+            ),
+            embedding_provider=LLMProvider(
+                model=f"ollama/{config.embedding_model}",
+                base_url=config.ollama_url,
+            ),
+        )
+
     async def get_llm_response(
         self,
         context: ContextManager,
