@@ -56,8 +56,14 @@ def test_each_spade_llm_agent_exposes_its_own_health_port(
         assert payload["interaction_memory_enabled"] is True
         assert payload["mcp_server_count"] == 1
         assert payload["mcp_tool_count"] > 0
-        assert "remember_interaction_info" in payload["tool_names"]
-        assert "ping" in payload["tool_names"]
+
+        tool_names = payload["tool_names"]
+        assert isinstance(tool_names, list)
+        assert len(tool_names) == len(set(tool_names))
+        assert "remember_interaction_info" in tool_names
+        assert any(str(name).endswith("_ping") for name in tool_names)
+        assert payload["mcp_tool_count"] == len(tool_names) - 1
+
         assert payload["last_heartbeat_at"]
         assert payload["last_communication_at"]
 
@@ -84,6 +90,11 @@ def test_global_backend_snapshot_reports_real_agent_communication_health(
         assert agent["communication_ok"] is True
         assert agent["health_port"] == port
         assert agent["last_communication_at"]
+
+        tool_names = agent["tool_names"]
+        assert isinstance(tool_names, list)
+        assert len(tool_names) == len(set(tool_names))
+        assert agent["mcp_tool_count"] == len(tool_names) - 1
 
     assert backend_health["team_communication_ok"] is True
     assert backend_health["unreachable_specialists"] == []
