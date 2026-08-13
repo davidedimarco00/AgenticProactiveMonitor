@@ -58,7 +58,9 @@ def _log_runtime(config: RuntimeConfig) -> None:
     LOGGER.info("XMPP endpoint: %s:%d", config.xmpp_host, config.xmpp_port)
     LOGGER.info("MCP endpoint: %s", config.mcp_url)
     LOGGER.info("Ollama endpoint: %s", config.ollama_url)
-    LOGGER.info("SPADE-LLM reasoning provider: ollama/%s", config.reasoning_model)
+    LOGGER.info("Reasoning model: ollama/%s", config.reasoning_model)
+    LOGGER.info("Tool-calling model: ollama/%s", config.tool_model)
+    LOGGER.info("Embedding model: ollama/%s", config.embedding_model)
     LOGGER.info("SPADE-LLM interaction memory: %s", config.spade_llm_memory_path)
 
 
@@ -110,6 +112,9 @@ async def _run_backend() -> None:
         xmpp_domain=config.xmpp_domain,
         mcp_url=config.mcp_url,
         provider_model=f"ollama/{config.reasoning_model}",
+        reasoning_model=f"ollama/{config.reasoning_model}",
+        tool_model=f"ollama/{config.tool_model}",
+        embedding_model=f"ollama/{config.embedding_model}",
         interaction_memory_enabled=True,
         team_communication_ok=False,
         unreachable_specialists=[],
