@@ -84,6 +84,15 @@ class BaseAgent(LLMAgent):
             interaction_memory=(True, interaction_memory_path),
             verify_security=False,
         )
+
+        # SPADE-LLM 0.3.0 gives LLMAgent and LLMBehaviour the same mutable
+        # tools list when at least one tool already exists (interaction memory
+        # adds remember_interaction_info). During MCP discovery, add_tool()
+        # appends once through LLMAgent and once through LLMBehaviour, which
+        # duplicates every MCP tool. Keep the official registration flow, but
+        # give the behaviour its own list so each registry receives one copy.
+        self.llm_behaviour.tools = list(self.tools)
+
         self.role = role
         self.display_name = display_name
         self.health_port = health_port
