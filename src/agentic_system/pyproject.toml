@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-proactive-monitor-agentic-system"
+version = "0.1.0"
+description = "SPADE-LLM multi-agent backend for Agentic Proactive Monitor"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "spade-llm==0.3.0",
+    "spade==4.1.4",
+    "PyYAML>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0,<9.0",
+    "pytest-bdd>=8.0,<9.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentic_system*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: tests requiring the running Dockerized agentic stack",
+    "e2e: Gherkin acceptance tests against the running Dockerized agentic stack",
+]
