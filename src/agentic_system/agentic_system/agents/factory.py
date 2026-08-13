@@ -27,10 +27,11 @@ ROLE_CONSTRUCTORS: dict[str, type[BaseAgent]] = {
 def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
     """Build the five project agents on top of SPADE-LLM official primitives."""
 
-    provider = LLMProvider(
+    reasoning_provider = LLMProvider(
         model=f"ollama/{config.reasoning_model}",
         base_url=config.ollama_url,
     )
+    provider = reasoning_provider
     mcp_server = StreamableHttpServerConfig(
         name="AgenticProactiveMonitor MCP",
         url=config.mcp_url,
