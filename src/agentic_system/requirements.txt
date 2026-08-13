@@ -1,3 +1,0 @@
-spade_llm==0.3.0
-spade==4.1.4
-PyYAML>=6.0,<7.0
