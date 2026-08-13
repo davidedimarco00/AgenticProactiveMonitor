@@ -6,12 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml ./pyproject.toml
+COPY agentic_system ./agentic_system
+RUN pip install --no-cache-dir .
 
 RUN useradd --create-home --uid 10001 agentic
 
-COPY --chown=agentic:agentic agentic_system ./agentic_system
 COPY --chown=agentic:agentic config ./config
 
 EXPOSE 8081 8101 8102 8103 8104 8105
