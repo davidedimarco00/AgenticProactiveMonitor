@@ -22,13 +22,15 @@ ROLE_CONSTRUCTORS: dict[str, type[BaseAgent]] = {
     "software_developer": SoftwareDeveloperAgent,
 }
 
+MCP_SERVER_NAME = "apm_mcp"
+
 
 def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
     """Build the five project agents on top of SPADE-LLM official primitives."""
 
     provider = HybridLLMProvider.from_runtime(config)
     mcp_server = StreamableHttpServerConfig(
-        name="AgenticProactiveMonitor MCP",
+        name=MCP_SERVER_NAME,
         url=config.mcp_url,
         cache_tools=True,
     )
