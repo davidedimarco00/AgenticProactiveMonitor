@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
+import uuid
 from typing import Any, Optional
 
+import httpx
 from spade_llm.context import ContextManager
 from spade_llm.providers import LLMProvider
 from spade_llm.providers.base_provider import BaseLLMProvider
@@ -13,12 +16,7 @@ LOGGER = logging.getLogger("agentic_system.providers")
 
 
 class _PromptContextView:
-    """Read-only prompt view used for the tool-selection model.
-
-    SPADE-LLM providers only need get_prompt() and get_tracing_metadata() for
-    completion requests. Keeping this view separate avoids mutating the real
-    conversation context with internal routing instructions.
-    """
+    """Read-only prompt view used for the tool-selection model."""
 
     def __init__(self, prompt: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
         self._prompt = prompt
@@ -31,15 +29,113 @@ class _PromptContextView:
         return dict(self._metadata)
 
 
-class HybridLLMProvider(BaseLLMProvider):
-    """SPADE-LLM provider that assigns one Ollama model to each AI role.
+class OllamaToolCallingProvider(BaseLLMProvider):
+    """Qwen tool provider using Ollama's OpenAI-compatible chat endpoint.
 
-    - reasoning_provider: produces the reasoning/diagnostic response (Gemma)
-    - tool_provider: decides tool/function calls from the SPADE-LLM tool list (Qwen)
-    - embedding_provider: generates embeddings when SPADE-LLM requests them (Granite)
-
-    Tool discovery, execution, context, memory and MCP remain owned by SPADE-LLM.
+    SPADE-LLM remains responsible for MCP discovery, tool execution, context,
+    memory and the tool loop. This provider only converts Qwen's native tool
+    response into the provider contract expected by SPADE-LLM.
     """
+
+    def __init__(self, *, model: str, base_url: str, timeout: float = 120.0) -> None:
+        super().__init__()
+        self.ollama_model = model
+        self.model = f"ollama/{model}"
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.endpoint = f"{self.base_url}/v1/chat/completions"
+
+    async def _post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(self.endpoint, json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        if not isinstance(data, dict):
+            raise RuntimeError("Ollama tool-calling response is not a JSON object")
+        return data
+
+    async def get_llm_response(
+        self,
+        context: ContextManager,
+        tools: Optional[list[LLMTool]] = None,
+        conversation_id: Optional[str] = None,
+        output_schema: Optional[Any] = None,
+    ) -> dict[str, Any]:
+        if output_schema is not None:
+            raise ValueError("OllamaToolCallingProvider does not produce structured output")
+
+        payload: dict[str, Any] = {
+            "model": self.ollama_model,
+            "messages": context.get_prompt(conversation_id),
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = [tool.to_openai_tool() for tool in tools]
+            payload["tool_choice"] = "auto"
+
+        data = await self._post_chat(payload)
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("Unexpected Ollama chat response shape") from exc
+
+        if not isinstance(message, dict):
+            raise RuntimeError("Unexpected Ollama assistant message shape")
+
+        parsed_calls: list[dict[str, Any]] = []
+        raw_calls = message.get("tool_calls") or []
+        if not isinstance(raw_calls, list):
+            raise RuntimeError("Ollama tool_calls field is not a list")
+
+        for raw_call in raw_calls:
+            if not isinstance(raw_call, dict):
+                raise RuntimeError("Ollama returned an invalid tool call")
+
+            function = raw_call.get("function") or {}
+            if not isinstance(function, dict):
+                raise RuntimeError("Ollama returned an invalid tool function")
+
+            name = str(function.get("name") or "").strip()
+            if not name:
+                raise RuntimeError("Ollama returned a tool call without a function name")
+
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                if arguments.strip():
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError(
+                            f"Ollama returned invalid JSON arguments for tool {name}"
+                        ) from exc
+                else:
+                    arguments = {}
+
+            if not isinstance(arguments, dict):
+                raise RuntimeError(f"Ollama returned non-object arguments for tool {name}")
+
+            parsed_calls.append(
+                {
+                    "id": str(raw_call.get("id") or f"call_{uuid.uuid4().hex[:12]}"),
+                    "name": name,
+                    "arguments": arguments,
+                }
+            )
+
+        content = message.get("content") or ""
+        if not isinstance(content, str):
+            content = str(content)
+
+        return {
+            "text": None if parsed_calls else content,
+            "tool_calls": parsed_calls,
+            "structured": None,
+        }
+
+
+class HybridLLMProvider(BaseLLMProvider):
+    """Assign Gemma to reasoning, Qwen to tools and Granite to embeddings."""
 
     TOOL_SELECTOR_SYSTEM_PROMPT = (
         "You are the tool-calling model of an agent. Use only the tools supplied "
@@ -53,8 +149,8 @@ class HybridLLMProvider(BaseLLMProvider):
     def __init__(
         self,
         *,
-        reasoning_provider: LLMProvider,
-        tool_provider: LLMProvider,
+        reasoning_provider: BaseLLMProvider,
+        tool_provider: BaseLLMProvider,
         embedding_provider: LLMProvider,
     ) -> None:
         super().__init__()
@@ -74,8 +170,8 @@ class HybridLLMProvider(BaseLLMProvider):
                 model=f"ollama/{config.reasoning_model}",
                 base_url=config.ollama_url,
             ),
-            tool_provider=LLMProvider(
-                model=f"ollama_chat/{config.tool_model}",
+            tool_provider=OllamaToolCallingProvider(
+                model=config.tool_model,
                 base_url=config.ollama_url,
             ),
             embedding_provider=LLMProvider(
