@@ -24,7 +24,7 @@ async def _exercise_live_model_routing() -> None:
     provider = HybridLLMProvider.from_runtime(config)
 
     mcp_server = StreamableHttpServerConfig(
-        name="apm",
+        name="AgenticProactiveMonitor MCP",
         url=os.getenv("LIVE_MCP_URL", "http://127.0.0.1:8000/mcp"),
         cache_tools=True,
     )
