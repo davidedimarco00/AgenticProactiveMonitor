@@ -6,8 +6,10 @@ import logging
 from typing import Any
 
 from aiohttp import web as aioweb
-from spade.agent import Agent
 from spade.behaviour import CyclicBehaviour, OneShotBehaviour
+from spade_llm import LLMAgent
+from spade_llm.mcp import MCPServerConfig
+from spade_llm.providers import LLMProvider
 
 from ..communication import AgentMessage, Performative, build_spade_message
 
@@ -19,12 +21,12 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class BaseRoleAgent(Agent):
-    """Common SPADE runtime for every logical role in the MAS.
+class BaseAgent(LLMAgent):
+    """Common SPADE-LLM base class for every project agent.
 
-    This layer provides lifecycle, transport and per-agent observability concerns
-    only. BDI deliberation and ReAct execution are added later instead of being
-    simulated here.
+    SPADE-LLM owns the LLM provider, conversation context, interaction memory,
+    tool execution and MCP integration. This project layer only adds role
+    metadata, XMPP observability and health endpoints.
     """
 
     class LifecycleBehaviour(CyclicBehaviour):
@@ -33,7 +35,7 @@ class BaseRoleAgent(Agent):
             await asyncio.sleep(5)
 
     class SendMessageBehaviour(OneShotBehaviour):
-        """Send one semantic AgentMessage through SPADE's Behaviour API."""
+        """Send one project control message through SPADE/XMPP."""
 
         def __init__(
             self,
@@ -68,8 +70,20 @@ class BaseRoleAgent(Agent):
         role: str,
         display_name: str,
         health_port: int,
+        provider: LLMProvider,
+        mcp_servers: list[MCPServerConfig],
+        system_prompt: str,
+        interaction_memory_path: str,
     ) -> None:
-        super().__init__(jid, password, verify_security=False)
+        super().__init__(
+            jid=jid,
+            password=password,
+            provider=provider,
+            system_prompt=system_prompt,
+            mcp_servers=mcp_servers,
+            interaction_memory=(True, interaction_memory_path),
+            verify_security=False,
+        )
         self.role = role
         self.display_name = display_name
         self.health_port = health_port
@@ -84,16 +98,24 @@ class BaseRoleAgent(Agent):
         self.last_xmpp_connected_at: str | None = None
         self.last_xmpp_disconnected_at: str | None = None
         self.last_communication_at: str | None = None
+        self._tools_before_mcp = len(self.tools)
+        self.mcp_tool_count = 0
 
     async def setup(self) -> None:
+        # LLMAgent.setup() registers the SPADE-LLM behaviour and discovers MCP
+        # tools. It must run before project-specific behaviours are installed.
+        await super().setup()
+
+        self.mcp_tool_count = len(self.tools) - self._tools_before_mcp
+        if self.mcp_servers and self.mcp_tool_count <= 0:
+            raise RuntimeError(
+                f"{self.display_name} did not discover any tools from the configured MCP server"
+            )
+
         self.lifecycle_state = "running"
         self.started_at = _utc_now()
         self.last_heartbeat_at = self.started_at
 
-        # setup() is invoked by SPADE only after the initial XMPP connection and
-        # authentication succeed. From this point on we also observe Slixmpp's
-        # connection events so a later server-side c2s disconnect is visible in
-        # the per-agent health endpoint instead of being confused with is_alive().
         self._mark_xmpp_connected()
         if self.client is not None:
             self.client.add_event_handler("session_start", self._on_xmpp_session_start)
@@ -111,9 +133,10 @@ class BaseRoleAgent(Agent):
         await self.web.start(hostname="0.0.0.0", port=self.health_port)
 
         LOGGER.info(
-            "%s connected to XMPP as %s; health endpoint on port %d",
+            "%s connected as SPADE-LLM agent %s with %d MCP tools; health endpoint on port %d",
             self.display_name,
             self.jid,
+            self.mcp_tool_count,
             self.health_port,
         )
 
@@ -157,7 +180,7 @@ class BaseRoleAgent(Agent):
         performative: Performative,
         timeout: float = 5.0,
     ) -> None:
-        """Send a semantic message using a one-shot SPADE behaviour."""
+        """Send a project control message using a one-shot SPADE behaviour."""
 
         behaviour = self.SendMessageBehaviour(envelope, performative)
         self.add_behaviour(behaviour)
@@ -211,6 +234,14 @@ class BaseRoleAgent(Agent):
             "xmpp_connected": self.xmpp_connected,
             "communication_ok": self.communication_ok,
             "health_port": self.health_port,
+            "framework": "SPADE-LLM",
+            "llm_agent": True,
+            "provider_model": self.provider.model,
+            "context_enabled": self.context is not None,
+            "interaction_memory_enabled": self.interaction_memory is not None,
+            "mcp_server_count": len(self.mcp_servers),
+            "mcp_tool_count": self.mcp_tool_count,
+            "tool_names": [tool.name for tool in self.tools],
             "started_at": self.started_at,
             "last_heartbeat_at": self.last_heartbeat_at,
             "last_xmpp_connected_at": self.last_xmpp_connected_at,
@@ -228,6 +259,14 @@ class BaseRoleAgent(Agent):
             "display_name": self.display_name,
             "jid": str(self.jid),
             "state": self.lifecycle_state,
+            "framework": "SPADE-LLM",
+            "llm_agent": True,
+            "provider_model": self.provider.model,
+            "context_enabled": self.context is not None,
+            "interaction_memory_enabled": self.interaction_memory is not None,
+            "mcp_server_count": len(self.mcp_servers),
+            "mcp_tool_count": self.mcp_tool_count,
+            "tool_names": [tool.name for tool in self.tools],
             "started_at": self.started_at,
             "last_heartbeat_at": self.last_heartbeat_at,
             "messages_sent": self.messages_sent,

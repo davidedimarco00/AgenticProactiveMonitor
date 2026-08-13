@@ -51,17 +51,15 @@ def _set_health(**values: Any) -> None:
 
 def _log_runtime(config: RuntimeConfig) -> None:
     LOGGER.info("Agentic backend container initialized")
-    LOGGER.info("Configured logical agents: %d", len(config.agents))
+    LOGGER.info("Configured SPADE-LLM agents: %d", len(config.agents))
     for agent in config.agents:
         LOGGER.info("  - %s [%s] jid=%s", agent.display_name, agent.role, agent.jid)
 
     LOGGER.info("XMPP endpoint: %s:%d", config.xmpp_host, config.xmpp_port)
     LOGGER.info("MCP endpoint: %s", config.mcp_url)
     LOGGER.info("Ollama endpoint: %s", config.ollama_url)
-    LOGGER.info("Reasoning model: %s", config.reasoning_model)
-    LOGGER.info("Tool model: %s", config.tool_model)
-    LOGGER.info("LLM context: %d", config.llm_context)
-    LOGGER.info("Max concurrent LLM calls: %d", config.max_llm_concurrency)
+    LOGGER.info("SPADE-LLM reasoning provider: ollama/%s", config.reasoning_model)
+    LOGGER.info("SPADE-LLM interaction memory: %s", config.spade_llm_memory_path)
 
 
 def _start_health_server(config: RuntimeConfig) -> tuple[ThreadingHTTPServer, threading.Thread]:
@@ -105,13 +103,14 @@ async def _run_backend() -> None:
     _set_health(
         status="starting",
         phase="starting-agents",
+        framework="SPADE-LLM",
         agents_configured=len(config.agents),
         agents_running=0,
         roles=[agent.role for agent in config.agents],
         xmpp_domain=config.xmpp_domain,
         mcp_url=config.mcp_url,
-        reasoning_model=config.reasoning_model,
-        tool_model=config.tool_model,
+        provider_model=f"ollama/{config.reasoning_model}",
+        interaction_memory_enabled=True,
         team_communication_ok=False,
         unreachable_specialists=[],
     )
@@ -128,7 +127,7 @@ async def _run_backend() -> None:
             team_communication_ok=runtime.team_communication_ok,
             unreachable_specialists=runtime.unreachable_specialists,
         )
-        LOGGER.info("Agentic backend is ready with five active SPADE agents")
+        LOGGER.info("Agentic backend is ready with five active SPADE-LLM agents")
 
         while not stop_event.is_set():
             _set_health(

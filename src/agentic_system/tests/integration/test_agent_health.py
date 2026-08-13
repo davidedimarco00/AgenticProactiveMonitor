@@ -29,12 +29,15 @@ def _get_agent_health(port: int) -> dict[str, object]:
 
 
 @pytest.mark.integration
-def test_each_spade_agent_exposes_its_own_health_port(
+def test_each_spade_llm_agent_exposes_its_own_health_port(
     backend_health: dict[str, object],
 ) -> None:
-    """Every logical agent must expose a distinct live health endpoint."""
+    """Every logical role must be a live SPADE-LLM agent with MCP and memory."""
 
     assert backend_health["status"] == "ok"
+    assert backend_health["framework"] == "SPADE-LLM"
+    assert str(backend_health["provider_model"]).startswith("ollama/")
+    assert backend_health["interaction_memory_enabled"] is True
 
     for role, (jid, port) in EXPECTED_AGENT_HEALTH.items():
         payload = _get_agent_health(port)
@@ -46,6 +49,15 @@ def test_each_spade_agent_exposes_its_own_health_port(
         assert payload["spade_alive"] is True
         assert payload["xmpp_connected"] is True
         assert payload["communication_ok"] is True
+        assert payload["framework"] == "SPADE-LLM"
+        assert payload["llm_agent"] is True
+        assert payload["provider_model"] == backend_health["provider_model"]
+        assert payload["context_enabled"] is True
+        assert payload["interaction_memory_enabled"] is True
+        assert payload["mcp_server_count"] == 1
+        assert payload["mcp_tool_count"] > 0
+        assert "remember_interaction_info" in payload["tool_names"]
+        assert "ping" in payload["tool_names"]
         assert payload["last_heartbeat_at"]
         assert payload["last_communication_at"]
 
@@ -64,12 +76,15 @@ def test_global_backend_snapshot_reports_real_agent_communication_health(
 
     for role, (_, port) in EXPECTED_AGENT_HEALTH.items():
         agent = by_role[role]
+        assert agent["framework"] == "SPADE-LLM"
+        assert agent["llm_agent"] is True
+        assert agent["context_enabled"] is True
+        assert agent["interaction_memory_enabled"] is True
+        assert agent["mcp_tool_count"] > 0
         assert agent["communication_ok"] is True
         assert agent["health_port"] == port
         assert agent["last_communication_at"]
 
-    # Complete team reachability is deliberately distinct from any one agent's
-    # own health. In the healthy baseline every specialist must be reachable.
     assert backend_health["team_communication_ok"] is True
     assert backend_health["unreachable_specialists"] == []
 
@@ -95,5 +110,7 @@ def test_each_agent_streams_health_over_websocket(
         assert payload["role"] == role
         assert payload["jid"] == jid
         assert payload["status"] == "ONLINE"
+        assert payload["framework"] == "SPADE-LLM"
+        assert payload["llm_agent"] is True
         assert payload["xmpp_connected"] is True
         assert payload["communication_ok"] is True

@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Any
 
-from .agents.base import BaseRoleAgent
+from .agents.base import BaseAgent
 from .agents.factory import build_agents
 from .agents.roles import SystemEngineerAgent, TechnicalLeadAgent
 from .communication import Performative
@@ -18,11 +18,11 @@ HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
 
 
 class AgentRuntime:
-    """Owns the five SPADE agents hosted by the single backend container."""
+    """Owns the five SPADE-LLM agents hosted by the backend container."""
 
     def __init__(self, config: RuntimeConfig) -> None:
         self.config = config
-        self.agents = build_agents(config.agents)
+        self.agents = build_agents(config)
         self.started = False
         self.communication_probe: dict[str, Any] | None = None
         self.team_communication_ok = False
@@ -30,7 +30,7 @@ class AgentRuntime:
         self._health_probe_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        LOGGER.info("Starting %d SPADE agents", len(self.agents))
+        LOGGER.info("Starting %d SPADE-LLM agents", len(self.agents))
 
         results = await asyncio.gather(
             *(
@@ -48,16 +48,13 @@ class AgentRuntime:
         if failures:
             await self.stop()
             raise RuntimeError(
-                "One or more SPADE agents failed to start: " + "; ".join(failures)
+                "One or more SPADE-LLM agents failed to start: " + "; ".join(failures)
             )
 
-        LOGGER.info("All %d SPADE agents are connected", len(self.agents))
+        LOGGER.info("All %d SPADE-LLM agents are connected", len(self.agents))
 
         try:
-            # Preserve TEST E's explicit Technical Lead <-> System Engineer round-trip.
             self.communication_probe = await self._run_communication_probe()
-            # Then prove that every specialist can exchange a real XMPP message with
-            # the Technical Lead before marking the backend ready.
             await self._run_health_probe_cycle(strict=True)
         except BaseException:
             await self.stop()
@@ -75,14 +72,14 @@ class AgentRuntime:
             (agent for agent in self.agents if agent.role == "technical_lead"), None
         )
         if not isinstance(agent, TechnicalLeadAgent):
-            raise RuntimeError("Technical Lead SPADE agent is not available")
+            raise RuntimeError("Technical Lead SPADE-LLM agent is not available")
         return agent
 
-    def _specialists(self) -> list[BaseRoleAgent]:
+    def _specialists(self) -> list[BaseAgent]:
         return [agent for agent in self.agents if agent.role != "technical_lead"]
 
     async def _run_communication_probe(self) -> dict[str, Any]:
-        """Verify the original TEST E Technical Lead/System Engineer path."""
+        """Verify the Technical Lead/System Engineer XMPP control path."""
 
         technical_lead = self._technical_lead()
         system_engineer = next(
@@ -90,7 +87,7 @@ class AgentRuntime:
         )
 
         if not isinstance(system_engineer, SystemEngineerAgent):
-            raise RuntimeError("System Engineer SPADE agent is not available")
+            raise RuntimeError("System Engineer SPADE-LLM agent is not available")
 
         request, acknowledgement = await technical_lead.request_specialist(
             receiver=str(system_engineer.jid),
@@ -130,12 +127,8 @@ class AgentRuntime:
     async def _probe_specialist(
         self,
         technical_lead: TechnicalLeadAgent,
-        specialist: BaseRoleAgent,
+        specialist: BaseAgent,
     ) -> bool:
-        # Slixmpp can still have already-queued stanzas around a c2s disconnect.
-        # A role whose session_end/disconnected event has fired is therefore
-        # unreachable by definition even if a late acknowledgement is observed.
-        # Do not start a fresh transport probe until the XMPP session is connected.
         if not specialist.xmpp_connected:
             specialist.mark_communication_failed()
             LOGGER.warning(
@@ -169,8 +162,6 @@ class AgentRuntime:
                 )
                 return False
 
-            # The session may have dropped while this REQUEST/AGREE exchange was in
-            # flight. Connectivity remains the authoritative transport prerequisite.
             if not specialist.xmpp_connected:
                 specialist.mark_communication_failed()
                 return False
@@ -195,11 +186,6 @@ class AgentRuntime:
         self.unreachable_specialists = failures
         self.team_communication_ok = not failures
 
-        # Per-agent presence and team reachability are deliberately separate.
-        # A healthy Technical Lead stays ONLINE if one specialist is unavailable.
-        # Its own communication_ok reflects its own XMPP session/transport activity,
-        # while team_communication_ok reports whether the full specialist set is
-        # reachable.
         if technical_lead.xmpp_connected:
             technical_lead.mark_communication_ok()
         else:
@@ -231,7 +217,7 @@ class AgentRuntime:
         if not self.agents:
             return
 
-        LOGGER.info("Stopping SPADE agents")
+        LOGGER.info("Stopping SPADE-LLM agents")
         for agent in self.agents:
             agent.mark_stopping()
 

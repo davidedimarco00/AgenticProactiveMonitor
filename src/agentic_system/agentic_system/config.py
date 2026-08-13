@@ -37,10 +37,7 @@ class RuntimeConfig:
     mcp_url: str
     ollama_url: str
     reasoning_model: str
-    tool_model: str
-    fallback_tool_model: str
-    llm_context: int
-    max_llm_concurrency: int
+    spade_llm_memory_path: str
     health_host: str
     health_port: int
 
@@ -138,23 +135,35 @@ def load_runtime_config() -> RuntimeConfig:
             "Agent roles/order must be exactly: " + ", ".join(EXPECTED_ROLES)
         )
 
+    mcp_url = os.getenv("MCP_URL", "http://mcp-server:8000/mcp").strip()
+    ollama_url = os.getenv(
+        "OLLAMA_URL", "http://host.docker.internal:11434"
+    ).strip()
+    reasoning_model = os.getenv("OLLAMA_REASONING_MODEL", "gemma4:e2b").strip()
+    spade_llm_memory_path = os.getenv(
+        "SPADE_LLM_MEMORY_PATH",
+        "/home/agentic/.spade_llm/memory",
+    ).strip()
+
+    if not mcp_url:
+        raise RuntimeError("MCP_URL cannot be empty")
+    if not ollama_url:
+        raise RuntimeError("OLLAMA_URL cannot be empty")
+    if not reasoning_model:
+        raise RuntimeError("OLLAMA_REASONING_MODEL cannot be empty")
+    if not spade_llm_memory_path:
+        raise RuntimeError("SPADE_LLM_MEMORY_PATH cannot be empty")
+
     return RuntimeConfig(
         agents=tuple(agents),
         xmpp_domain=xmpp_domain,
         xmpp_host=os.getenv("XMPP_HOST", "xmpp").strip(),
         xmpp_port=int(os.getenv("XMPP_PORT", "5222")),
         xmpp_auto_register=_env_bool("XMPP_AUTO_REGISTER", True),
-        mcp_url=os.getenv("MCP_URL", "http://mcp-server:8000/mcp").strip(),
-        ollama_url=os.getenv(
-            "OLLAMA_URL", "http://host.docker.internal:11434"
-        ).strip(),
-        reasoning_model=os.getenv("OLLAMA_REASONING_MODEL", "gemma4:e2b").strip(),
-        tool_model=os.getenv("OLLAMA_TOOL_MODEL", "qwen3.5:4b").strip(),
-        fallback_tool_model=os.getenv(
-            "OLLAMA_FALLBACK_TOOL_MODEL", "qwen2.5:latest"
-        ).strip(),
-        llm_context=int(os.getenv("AGENT_LLM_CONTEXT", "8192")),
-        max_llm_concurrency=int(os.getenv("AGENT_MAX_LLM_CONCURRENCY", "2")),
+        mcp_url=mcp_url,
+        ollama_url=ollama_url,
+        reasoning_model=reasoning_model,
+        spade_llm_memory_path=spade_llm_memory_path,
         health_host=os.getenv("AGENT_HEALTH_HOST", "0.0.0.0").strip(),
         health_port=int(os.getenv("AGENT_HEALTH_PORT", "8081")),
     )

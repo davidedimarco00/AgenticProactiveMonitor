@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from spade_llm.mcp import StreamableHttpServerConfig
+from spade_llm.providers import LLMProvider
 
-from ..config import AgentSpec
-from .base import BaseRoleAgent
+from ..config import RuntimeConfig
+from .base import BaseAgent
 from .roles import (
     ApplicationEngineerAgent,
     NetworkEngineerAgent,
@@ -13,9 +14,7 @@ from .roles import (
 )
 
 
-AgentConstructor = Callable[[str, str, str, int], BaseRoleAgent]
-
-ROLE_CONSTRUCTORS: dict[str, AgentConstructor] = {
+ROLE_CONSTRUCTORS: dict[str, type[BaseAgent]] = {
     "technical_lead": TechnicalLeadAgent,
     "system_engineer": SystemEngineerAgent,
     "network_engineer": NetworkEngineerAgent,
@@ -24,13 +23,24 @@ ROLE_CONSTRUCTORS: dict[str, AgentConstructor] = {
 }
 
 
-def build_agents(specs: tuple[AgentSpec, ...]) -> list[BaseRoleAgent]:
-    agents: list[BaseRoleAgent] = []
+def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
+    """Build the five project agents on top of SPADE-LLM official primitives."""
 
-    for spec in specs:
+    provider = LLMProvider(
+        model=f"ollama/{config.reasoning_model}",
+        base_url=config.ollama_url,
+    )
+    mcp_server = StreamableHttpServerConfig(
+        name="AgenticProactiveMonitor MCP",
+        url=config.mcp_url,
+        cache_tools=True,
+    )
+
+    agents: list[BaseAgent] = []
+    for spec in config.agents:
         constructor = ROLE_CONSTRUCTORS.get(spec.role)
         if constructor is None:
-            raise RuntimeError(f"No SPADE agent implementation for role: {spec.role}")
+            raise RuntimeError(f"No SPADE-LLM agent implementation for role: {spec.role}")
 
         agents.append(
             constructor(
@@ -38,6 +48,9 @@ def build_agents(specs: tuple[AgentSpec, ...]) -> list[BaseRoleAgent]:
                 spec.password,
                 spec.display_name,
                 spec.health_port,
+                provider=provider,
+                mcp_servers=[mcp_server],
+                interaction_memory_path=config.spade_llm_memory_path,
             )
         )
 

@@ -1,4 +1,4 @@
-from .base import BaseRoleAgent
+from .base import BaseAgent
 from .roles import (
     ApplicationEngineerAgent,
     NetworkEngineerAgent,
@@ -8,7 +8,7 @@ from .roles import (
 )
 
 __all__ = [
-    "BaseRoleAgent",
+    "BaseAgent",
     "TechnicalLeadAgent",
     "SystemEngineerAgent",
     "NetworkEngineerAgent",

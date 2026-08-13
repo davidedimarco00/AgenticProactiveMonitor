@@ -6,6 +6,8 @@ from typing import Any
 
 from spade.behaviour import CyclicBehaviour
 from spade.template import Template
+from spade_llm.mcp import MCPServerConfig
+from spade_llm.providers import LLMProvider
 
 from ..communication import (
     AGENTIC_PROTOCOL,
@@ -13,14 +15,18 @@ from ..communication import (
     Performative,
     parse_spade_message,
 )
-from .base import BaseRoleAgent
+from .base import BaseAgent
 
 
 LOGGER = logging.getLogger("agentic_system.agents.roles")
 HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
 
 
-class TechnicalLeadAgent(BaseRoleAgent):
+class TechnicalLeadAgent(BaseAgent):
+    SYSTEM_PROMPT = """You are the Technical Lead Agent of an IT monitoring multi-agent team.
+Coordinate specialist agents and keep the diagnosis grounded in monitoring evidence.
+Use the available MCP tools when evidence is needed and do not invent observations or actions."""
+
     class AcknowledgementBehaviour(CyclicBehaviour):
         async def run(self) -> None:
             message = await self.receive(timeout=1)
@@ -53,6 +59,10 @@ class TechnicalLeadAgent(BaseRoleAgent):
         password: str,
         display_name: str,
         health_port: int,
+        *,
+        provider: LLMProvider,
+        mcp_servers: list[MCPServerConfig],
+        interaction_memory_path: str,
     ) -> None:
         super().__init__(
             jid,
@@ -60,6 +70,10 @@ class TechnicalLeadAgent(BaseRoleAgent):
             role="technical_lead",
             display_name=display_name,
             health_port=health_port,
+            provider=provider,
+            mcp_servers=mcp_servers,
+            system_prompt=self.SYSTEM_PROMPT,
+            interaction_memory_path=interaction_memory_path,
         )
         self._pending_acknowledgements: dict[
             str, asyncio.Future[AgentMessage]
@@ -101,12 +115,8 @@ class TechnicalLeadAgent(BaseRoleAgent):
         return request, acknowledgement
 
 
-class _AcknowledgingSpecialistAgent(BaseRoleAgent):
-    """Common health-probe transport behaviour for specialist SPADE agents.
-
-    This is deliberately limited to the runtime connectivity probe. Future BDI or
-    diagnostic REQUEST messages will use their own message types and behaviours.
-    """
+class _SpecialistAgent(BaseAgent):
+    """Shared XMPP health-probe behaviour for the four specialist LLM agents."""
 
     class HealthProbeRequestBehaviour(CyclicBehaviour):
         async def run(self) -> None:
@@ -158,6 +168,10 @@ class _AcknowledgingSpecialistAgent(BaseRoleAgent):
         health_port: int,
         *,
         role: str,
+        system_prompt: str,
+        provider: LLMProvider,
+        mcp_servers: list[MCPServerConfig],
+        interaction_memory_path: str,
     ) -> None:
         super().__init__(
             jid,
@@ -165,6 +179,10 @@ class _AcknowledgingSpecialistAgent(BaseRoleAgent):
             role=role,
             display_name=display_name,
             health_port=health_port,
+            provider=provider,
+            mcp_servers=mcp_servers,
+            system_prompt=system_prompt,
+            interaction_memory_path=interaction_memory_path,
         )
         self.last_received_request: AgentMessage | None = None
 
@@ -177,13 +195,21 @@ class _AcknowledgingSpecialistAgent(BaseRoleAgent):
         self.add_behaviour(self.HealthProbeRequestBehaviour(), template)
 
 
-class SystemEngineerAgent(_AcknowledgingSpecialistAgent):
+class SystemEngineerAgent(_SpecialistAgent):
+    SYSTEM_PROMPT = """You are the System Engineer Agent of an IT monitoring multi-agent team.
+Focus on operating systems, hosts, processes, resources, containers and runtime health.
+Use MCP tools to collect evidence before giving technical conclusions."""
+
     def __init__(
         self,
         jid: str,
         password: str,
         display_name: str,
         health_port: int,
+        *,
+        provider: LLMProvider,
+        mcp_servers: list[MCPServerConfig],
+        interaction_memory_path: str,
     ) -> None:
         super().__init__(
             jid,
@@ -191,16 +217,28 @@ class SystemEngineerAgent(_AcknowledgingSpecialistAgent):
             display_name,
             health_port,
             role="system_engineer",
+            system_prompt=self.SYSTEM_PROMPT,
+            provider=provider,
+            mcp_servers=mcp_servers,
+            interaction_memory_path=interaction_memory_path,
         )
 
 
-class NetworkEngineerAgent(_AcknowledgingSpecialistAgent):
+class NetworkEngineerAgent(_SpecialistAgent):
+    SYSTEM_PROMPT = """You are the Network Engineer Agent of an IT monitoring multi-agent team.
+Focus on connectivity, latency, ports, network paths and network-related anomalies.
+Use MCP tools to collect evidence before giving technical conclusions."""
+
     def __init__(
         self,
         jid: str,
         password: str,
         display_name: str,
         health_port: int,
+        *,
+        provider: LLMProvider,
+        mcp_servers: list[MCPServerConfig],
+        interaction_memory_path: str,
     ) -> None:
         super().__init__(
             jid,
@@ -208,16 +246,28 @@ class NetworkEngineerAgent(_AcknowledgingSpecialistAgent):
             display_name,
             health_port,
             role="network_engineer",
+            system_prompt=self.SYSTEM_PROMPT,
+            provider=provider,
+            mcp_servers=mcp_servers,
+            interaction_memory_path=interaction_memory_path,
         )
 
 
-class ApplicationEngineerAgent(_AcknowledgingSpecialistAgent):
+class ApplicationEngineerAgent(_SpecialistAgent):
+    SYSTEM_PROMPT = """You are the Application Engineer Agent of an IT monitoring multi-agent team.
+Focus on application behaviour, service dependencies, logs, APIs and application failures.
+Use MCP tools to collect evidence before giving technical conclusions."""
+
     def __init__(
         self,
         jid: str,
         password: str,
         display_name: str,
         health_port: int,
+        *,
+        provider: LLMProvider,
+        mcp_servers: list[MCPServerConfig],
+        interaction_memory_path: str,
     ) -> None:
         super().__init__(
             jid,
@@ -225,16 +275,28 @@ class ApplicationEngineerAgent(_AcknowledgingSpecialistAgent):
             display_name,
             health_port,
             role="application_engineer",
+            system_prompt=self.SYSTEM_PROMPT,
+            provider=provider,
+            mcp_servers=mcp_servers,
+            interaction_memory_path=interaction_memory_path,
         )
 
 
-class SoftwareDeveloperAgent(_AcknowledgingSpecialistAgent):
+class SoftwareDeveloperAgent(_SpecialistAgent):
+    SYSTEM_PROMPT = """You are the Software Developer Agent of an IT monitoring multi-agent team.
+Focus on source-level defects, software behaviour, configuration and implementation issues.
+Use MCP tools to collect evidence before giving technical conclusions."""
+
     def __init__(
         self,
         jid: str,
         password: str,
         display_name: str,
         health_port: int,
+        *,
+        provider: LLMProvider,
+        mcp_servers: list[MCPServerConfig],
+        interaction_memory_path: str,
     ) -> None:
         super().__init__(
             jid,
@@ -242,4 +304,8 @@ class SoftwareDeveloperAgent(_AcknowledgingSpecialistAgent):
             display_name,
             health_port,
             role="software_developer",
+            system_prompt=self.SYSTEM_PROMPT,
+            provider=provider,
+            mcp_servers=mcp_servers,
+            interaction_memory_path=interaction_memory_path,
         )
