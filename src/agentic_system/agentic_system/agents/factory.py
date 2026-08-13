@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from spade_llm.mcp import StreamableHttpServerConfig
-from spade_llm.providers import LLMProvider
 
 from ..config import RuntimeConfig
 from ..providers import HybridLLMProvider
