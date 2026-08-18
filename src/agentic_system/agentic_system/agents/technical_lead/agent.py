@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -16,10 +17,18 @@ from ...communication import (
     parse_spade_message,
 )
 from ..base import BaseAgent
+from .commands import IncidentAssignment
 from .prompts import SYSTEM_PROMPT as ROLE_SYSTEM_PROMPT
 
 
 LOGGER = logging.getLogger("agentic_system.agents.technical_lead")
+INCIDENT_INBOX_MAXSIZE = 64
+
+
+@dataclass(slots=True)
+class _PendingIncidentAssignment:
+    assignment: IncidentAssignment
+    accepted: asyncio.Future[None]
 
 
 class TechnicalLeadAgent(BaseAgent):
@@ -51,6 +60,39 @@ class TechnicalLeadAgent(BaseAgent):
                 envelope.correlation_id,
             )
 
+    class IncidentAssignmentBehaviour(CyclicBehaviour):
+        """Accept persisted incidents from the application ingress queue."""
+
+        async def run(self) -> None:
+            try:
+                pending = await asyncio.wait_for(
+                    self.agent._incident_inbox.get(),
+                    timeout=1.0,
+                )
+            except TimeoutError:
+                return
+
+            try:
+                assignment = pending.assignment
+                self.agent.incidents_received += 1
+                self.agent.last_incident_id = assignment.incident_id
+                self.agent.last_incident_assignment = assignment
+                if not pending.accepted.done():
+                    pending.accepted.set_result(None)
+
+                LOGGER.warning(
+                    "Technical Lead accepted incident=%s severity=%s entity=%s",
+                    assignment.incident_id,
+                    assignment.severity,
+                    assignment.entity,
+                )
+            except Exception as exc:
+                if not pending.accepted.done():
+                    pending.accepted.set_exception(exc)
+                raise
+            finally:
+                self.agent._incident_inbox.task_done()
+
     def __init__(
         self,
         jid: str,
@@ -75,6 +117,12 @@ class TechnicalLeadAgent(BaseAgent):
         )
         self._pending_acknowledgements: dict[str, asyncio.Future[AgentMessage]] = {}
         self.last_acknowledgement: AgentMessage | None = None
+        self._incident_inbox: asyncio.Queue[_PendingIncidentAssignment] = asyncio.Queue(
+            maxsize=INCIDENT_INBOX_MAXSIZE
+        )
+        self.incidents_received = 0
+        self.last_incident_id: str | None = None
+        self.last_incident_assignment: IncidentAssignment | None = None
 
     async def setup(self) -> None:
         await super().setup()
@@ -82,6 +130,30 @@ class TechnicalLeadAgent(BaseAgent):
         template.set_metadata("protocol", AGENTIC_PROTOCOL)
         template.set_metadata("performative", Performative.AGREE.value)
         self.add_behaviour(self.AcknowledgementBehaviour(), template)
+        self.add_behaviour(self.IncidentAssignmentBehaviour())
+
+    async def submit_incident(
+        self,
+        incident: dict[str, Any],
+        *,
+        timeout: float = 5.0,
+    ) -> IncidentAssignment:
+        """Deliver a persisted incident to the Technical Lead SPADE behaviour."""
+
+        if self.lifecycle_state != "running":
+            raise RuntimeError("Technical Lead is not running")
+
+        assignment = IncidentAssignment.from_incident(incident)
+        loop = asyncio.get_running_loop()
+        accepted: asyncio.Future[None] = loop.create_future()
+        await self._incident_inbox.put(
+            _PendingIncidentAssignment(
+                assignment=assignment,
+                accepted=accepted,
+            )
+        )
+        await asyncio.wait_for(accepted, timeout=timeout)
+        return assignment
 
     async def request_specialist(
         self,
@@ -109,3 +181,15 @@ class TechnicalLeadAgent(BaseAgent):
             self._pending_acknowledgements.pop(request.correlation_id, None)
 
         return request, acknowledgement
+
+    def health_snapshot(self) -> dict[str, Any]:
+        snapshot = super().health_snapshot()
+        snapshot.update(
+            {
+                "incident_inbox_depth": self._incident_inbox.qsize(),
+                "incident_inbox_maxsize": self._incident_inbox.maxsize,
+                "incidents_received": self.incidents_received,
+                "last_incident_id": self.last_incident_id,
+            }
+        )
+        return snapshot
