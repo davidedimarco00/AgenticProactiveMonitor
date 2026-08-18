@@ -31,7 +31,7 @@ def _overview(incidents: list[dict[str, Any]]) -> dict[str, int]:
 def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> FastAPI:
     app = FastAPI(
         title="Agentic Proactive Monitor API",
-        summary="Read API for the operator dashboard and internal incident persistence endpoints.",
+        summary="Read-only operator API for the autonomous agentic monitoring backend.",
         description=(
             "The operator-facing API is read-only: the autonomous multi-agent core starts from "
             "OpenSearch anomaly events, not from operator commands. MongoDB stores incidents, "
@@ -46,7 +46,6 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
             {"name": "Health", "description": "Backend API and persistence health."},
             {"name": "Incidents", "description": "Read-only incident information for operators."},
             {"name": "Agents", "description": "Structured runtime and agent activity information."},
-            {"name": "Internal", "description": "Write endpoints for the autonomous backend only."},
         ],
     )
 
@@ -136,11 +135,14 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         events = await repository.list_events(agent_role=agent_role, limit=limit, ascending=False)
         return {"events": events}
 
-    @app.post("/internal/v1/incidents", status_code=201, tags=["Internal"])
+    # These writes are for the autonomous backend workflow only. They are
+    # deliberately excluded from the public OpenAPI/Swagger contract so the
+    # operator UI remains read-only and cannot start or steer an investigation.
+    @app.post("/internal/v1/incidents", status_code=201, include_in_schema=False)
     async def create_incident(payload: IncidentCreate) -> dict[str, Any]:
         return await repository.create_incident(payload.model_dump(exclude_none=True))
 
-    @app.patch("/internal/v1/incidents/{incident_id}", tags=["Internal"])
+    @app.patch("/internal/v1/incidents/{incident_id}", include_in_schema=False)
     async def update_incident(incident_id: str, payload: IncidentPatch) -> dict[str, Any]:
         updated = await repository.update_incident(
             incident_id,
@@ -150,7 +152,11 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
             raise HTTPException(status_code=404, detail="Incident not found")
         return updated
 
-    @app.post("/internal/v1/incidents/{incident_id}/events", status_code=201, tags=["Internal"])
+    @app.post(
+        "/internal/v1/incidents/{incident_id}/events",
+        status_code=201,
+        include_in_schema=False,
+    )
     async def create_event(incident_id: str, payload: IncidentEventCreate) -> dict[str, Any]:
         event = await repository.add_event(
             incident_id,
