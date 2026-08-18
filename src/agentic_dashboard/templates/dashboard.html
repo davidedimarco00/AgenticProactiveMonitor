@@ -61,7 +61,7 @@
             <strong>{{ incident.incident_id }}</strong>
             <small>
               <span class="severity {{ (incident.severity or 'medium')|lower }}">{{ incident.severity or 'MEDIUM' }}</span>
-              {{ incident.anomaly.metric or 'Anomaly' }}
+              {{ incident.anomaly.anomaly_type or 'Anomaly' }}
             </small>
           </td>
           <td><strong>{{ incident.entity or incident.service }}</strong></td>
