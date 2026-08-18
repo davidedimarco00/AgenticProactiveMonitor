@@ -24,3 +24,6 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     assert tuple(agent.role for agent in config.agents) == EXPECTED_ROLES
     assert len({agent.jid for agent in config.agents}) == 5
     assert len({agent.health_port for agent in config.agents}) == 5
+    assert config.opensearch_url == "http://opensearch:9200"
+    assert config.anomaly_watch_poll_seconds == 5.0
+    assert config.anomaly_watch_lookback_seconds == 300
