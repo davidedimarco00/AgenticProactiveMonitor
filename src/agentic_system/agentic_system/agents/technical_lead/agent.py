@@ -105,7 +105,7 @@ class TechnicalLeadAgent(BaseAgent):
                 self.agent._incident_inbox.task_done()
 
     class TriageBehaviour(CyclicBehaviour):
-        """Run TL first analysis, then commit the BDI primary-investigator intention."""
+        """Use BDI to start triage, Gemma to assess, then BDI to select a primary."""
 
         async def run(self) -> None:
             try:
@@ -123,38 +123,52 @@ class TechnicalLeadAgent(BaseAgent):
                         "Technical Lead triage requires an incident in TAKEN_IN_CHARGE state"
                     )
 
+                triage_commitment = await self.agent._bdi_gateway.begin_triage(
+                    incident_id=assignment.incident_id,
+                    available_agents=pending.available_agents,
+                )
                 assessment = await self.agent._triage_reasoner.assess(
                     assignment,
                     detector_context=pending.detector_context,
                     available_agents=pending.available_agents,
                 )
-                deliberation = await self.agent._bdi_gateway.select_primary_investigator(
-                    incident_id=assignment.incident_id,
-                    probable_domain=assessment.probable_domain,
-                    recommended_agent=assessment.recommended_agent,
-                    available_agents=pending.available_agents,
+                selection_commitment = (
+                    await self.agent._bdi_gateway.select_primary_investigator(
+                        incident_id=assignment.incident_id,
+                        probable_domain=assessment.probable_domain,
+                        recommended_agent=assessment.recommended_agent,
+                        available_agents=pending.available_agents,
+                    )
                 )
+                if selection_commitment.primary_investigator is None:
+                    raise RuntimeError("Jason BDI did not select a primary investigator")
 
                 decision = TechnicalLeadTriageDecision(
                     incident_id=assignment.incident_id,
                     probable_domain=assessment.probable_domain,
-                    primary_investigator=deliberation.primary_investigator,
+                    primary_investigator=selection_commitment.primary_investigator,
                     confidence=assessment.confidence,
                     rationale=assessment.rationale,
-                    bdi_goal=deliberation.goal,
-                    bdi_intention=deliberation.intention,
+                    bdi_goal=selection_commitment.goal,
+                    bdi_triage_intention=triage_commitment.intention,
+                    bdi_intention=selection_commitment.intention,
                 )
                 self.agent.triages_completed += 1
                 self.agent.last_triage_decision = decision
+                self.agent.last_triage_error = None
 
                 if not pending.completed.done():
                     pending.completed.set_result(decision)
 
                 LOGGER.warning(
-                    "Technical Lead BDI triage completed incident=%s domain=%s primary=%s confidence=%.3f",
+                    "Technical Lead BDI triage completed incident=%s goal=%s triage_intention=%s "
+                    "domain=%s primary=%s selection_intention=%s confidence=%.3f",
                     decision.incident_id,
+                    decision.bdi_goal,
+                    decision.bdi_triage_intention,
                     decision.probable_domain,
                     decision.primary_investigator,
+                    decision.bdi_intention,
                     decision.confidence,
                 )
             except Exception as exc:
@@ -253,7 +267,7 @@ class TechnicalLeadAgent(BaseAgent):
         available_agents: list[str],
         timeout: float = 120.0,
     ) -> TechnicalLeadTriageDecision:
-        """Perform first analysis and BDI commitment without diagnosing the incident."""
+        """Perform BDI-led first analysis without diagnosing or delegating the incident."""
 
         if self.lifecycle_state != "running":
             raise RuntimeError("Technical Lead is not running")
@@ -308,6 +322,7 @@ class TechnicalLeadAgent(BaseAgent):
                 "confidence": self.last_triage_decision.confidence,
                 "rationale": self.last_triage_decision.rationale,
                 "bdi_goal": self.last_triage_decision.bdi_goal,
+                "bdi_triage_intention": self.last_triage_decision.bdi_triage_intention,
                 "bdi_intention": self.last_triage_decision.bdi_intention,
             }
         snapshot.update(
