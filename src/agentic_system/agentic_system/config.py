@@ -42,6 +42,10 @@ class RuntimeConfig:
     spade_llm_memory_path: str
     health_host: str
     health_port: int
+    api_host: str
+    api_port: int
+    mongodb_uri: str
+    mongodb_database: str
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -151,19 +155,25 @@ def load_runtime_config() -> RuntimeConfig:
         "SPADE_LLM_MEMORY_PATH",
         "/home/agentic/.spade_llm/memory",
     ).strip()
+    mongodb_uri = os.getenv(
+        "MONGODB_URI",
+        "mongodb://agentic:change-this-local-password@mongodb:27017/agentic_monitor?authSource=admin",
+    ).strip()
+    mongodb_database = os.getenv("MONGODB_DATABASE", "agentic_monitor").strip()
 
-    if not mcp_url:
-        raise RuntimeError("MCP_URL cannot be empty")
-    if not ollama_url:
-        raise RuntimeError("OLLAMA_URL cannot be empty")
-    if not reasoning_model:
-        raise RuntimeError("OLLAMA_REASONING_MODEL cannot be empty")
-    if not tool_model:
-        raise RuntimeError("OLLAMA_TOOL_MODEL cannot be empty")
-    if not embedding_model:
-        raise RuntimeError("OLLAMA_EMBEDDING_MODEL cannot be empty")
-    if not spade_llm_memory_path:
-        raise RuntimeError("SPADE_LLM_MEMORY_PATH cannot be empty")
+    required_values = {
+        "MCP_URL": mcp_url,
+        "OLLAMA_URL": ollama_url,
+        "OLLAMA_REASONING_MODEL": reasoning_model,
+        "OLLAMA_TOOL_MODEL": tool_model,
+        "OLLAMA_EMBEDDING_MODEL": embedding_model,
+        "SPADE_LLM_MEMORY_PATH": spade_llm_memory_path,
+        "MONGODB_URI": mongodb_uri,
+        "MONGODB_DATABASE": mongodb_database,
+    }
+    for name, value in required_values.items():
+        if not value:
+            raise RuntimeError(f"{name} cannot be empty")
 
     return RuntimeConfig(
         agents=tuple(agents),
@@ -179,4 +189,8 @@ def load_runtime_config() -> RuntimeConfig:
         spade_llm_memory_path=spade_llm_memory_path,
         health_host=os.getenv("AGENT_HEALTH_HOST", "0.0.0.0").strip(),
         health_port=int(os.getenv("AGENT_HEALTH_PORT", "8081")),
+        api_host=os.getenv("AGENT_API_HOST", "0.0.0.0").strip(),
+        api_port=int(os.getenv("AGENT_API_PORT", "8082")),
+        mongodb_uri=mongodb_uri,
+        mongodb_database=mongodb_database,
     )
