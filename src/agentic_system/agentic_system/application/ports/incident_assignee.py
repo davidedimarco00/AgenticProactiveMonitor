@@ -23,6 +23,7 @@ class IncidentTriageReceipt:
     confidence: float
     rationale: str
     bdi_goal: str
+    bdi_triage_intention: str
     bdi_intention: str
 
 
