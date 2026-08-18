@@ -1,1 +1,3 @@
-"""Incident lifecycle use-cases, independent from the operator HTTP API."""
+from .workflow import IncidentWorkflow
+
+__all__ = ["IncidentWorkflow"]
