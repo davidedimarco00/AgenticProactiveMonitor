@@ -25,6 +25,7 @@ def test_normalize_incident_keeps_agentic_conclusions_without_raw_metrics() -> N
                 "triage_confidence": 0.88,
                 "triage_rationale": "System resource investigation should start first.",
                 "bdi_goal": "manage_incident",
+                "bdi_triage_intention": "triage_incident",
                 "bdi_intention": "select_primary_investigator",
                 "raw_metrics": {"cpu": [391.2]},
             },
@@ -51,6 +52,7 @@ def test_normalize_incident_keeps_agentic_conclusions_without_raw_metrics() -> N
         "triage_confidence": 0.88,
         "triage_rationale": "System resource investigation should start first.",
         "bdi_goal": "manage_incident",
+        "bdi_triage_intention": "triage_incident",
         "bdi_intention": "select_primary_investigator",
     }
     assert incident["incident_id"].startswith("INC-")
