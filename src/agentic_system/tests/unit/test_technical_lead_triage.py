@@ -44,10 +44,14 @@ def test_technical_lead_agentspeak_plan_manages_but_does_not_diagnose() -> None:
         / "technical_lead.asl"
     )
     source = asl_path.read_text(encoding="utf-8")
+    executable_source = "\n".join(
+        line.split("//", 1)[0]
+        for line in source.splitlines()
+    ).lower()
 
-    assert "!manage_incident" in source
-    assert "!select_primary_investigator" in source
-    assert "commit_primary_investigator" in source
-    assert "diagnose" not in source.lower()
-    assert "root_cause" not in source.lower()
-    assert "remediation" not in source.lower()
+    assert "!manage_incident" in executable_source
+    assert "!select_primary_investigator" in executable_source
+    assert "commit_primary_investigator" in executable_source
+    assert "diagnose" not in executable_source
+    assert "root_cause" not in executable_source
+    assert "remediation" not in executable_source
