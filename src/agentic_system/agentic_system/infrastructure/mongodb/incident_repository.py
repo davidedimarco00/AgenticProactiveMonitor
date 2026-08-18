@@ -154,10 +154,7 @@ class IncidentRepository:
     """MongoDB persistence for agentic incidents and their append-only event history."""
 
     def __init__(self, uri: str, database_name: str) -> None:
-        self.client = AsyncMongoClient(
-            uri,
-            server_api=ServerApi("1"),
-        )
+        self.client = AsyncMongoClient(uri, server_api=ServerApi("1"))
         self.database = self.client[database_name]
         self.incidents = self.database["incidents"]
         self.events = self.database["incident_events"]
@@ -167,6 +164,13 @@ class IncidentRepository:
         await self.incidents.create_index("incident_id", unique=True)
         await self.incidents.create_index([("updated_at", DESCENDING)])
         await self.incidents.create_index([("status", ASCENDING), ("updated_at", DESCENDING)])
+        await self.incidents.create_index(
+            [
+                ("anomaly.detector_id", ASCENDING),
+                ("status", ASCENDING),
+                ("updated_at", DESCENDING),
+            ]
+        )
         await self.events.create_index("event_id", unique=True)
         await self.events.create_index([("incident_id", ASCENDING), ("timestamp", ASCENDING)])
         await self.events.create_index([("agent_role", ASCENDING), ("timestamp", DESCENDING)])
@@ -210,6 +214,19 @@ class IncidentRepository:
         async for document in cursor:
             documents.append(public_document(document) or {})
         return documents
+
+    async def find_active_incident_by_detector(
+        self,
+        detector_id: str,
+    ) -> dict[str, Any] | None:
+        document = await self.incidents.find_one(
+            {
+                "anomaly.detector_id": detector_id,
+                "status": {"$in": sorted(ACTIVE_STATUSES)},
+            },
+            sort=[("updated_at", DESCENDING)],
+        )
+        return public_document(document)
 
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
         document = await self.incidents.find_one({"incident_id": incident_id})
