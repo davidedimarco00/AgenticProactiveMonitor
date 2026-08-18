@@ -60,6 +60,12 @@ def _log_runtime(config: RuntimeConfig) -> None:
 
     LOGGER.info("XMPP endpoint: %s:%d", config.xmpp_host, config.xmpp_port)
     LOGGER.info("MCP endpoint: %s", config.mcp_url)
+    LOGGER.info("OpenSearch endpoint: %s", config.opensearch_url)
+    LOGGER.info(
+        "Anomaly watcher: poll=%.1fs lookback=%ss",
+        config.anomaly_watch_poll_seconds,
+        config.anomaly_watch_lookback_seconds,
+    )
     LOGGER.info("Ollama endpoint: %s", config.ollama_url)
     LOGGER.info("Reasoning model: ollama/%s", config.reasoning_model)
     LOGGER.info("Tool-calling model: ollama/%s", config.tool_model)
@@ -136,6 +142,7 @@ async def _run_backend() -> None:
         roles=[agent.role for agent in config.agents],
         xmpp_domain=config.xmpp_domain,
         mcp_url=config.mcp_url,
+        opensearch_url=config.opensearch_url,
         provider_model=f"ollama/{config.reasoning_model}",
         reasoning_model=f"ollama/{config.reasoning_model}",
         tool_model=f"ollama/{config.tool_model}",
@@ -146,6 +153,7 @@ async def _run_backend() -> None:
         api_port=config.api_port,
         team_communication_ok=False,
         unreachable_specialists=[],
+        anomaly_watcher=runtime.anomaly_watch_snapshot(),
     )
 
     try:
@@ -176,6 +184,7 @@ async def _run_backend() -> None:
             communication_probe=runtime.communication_probe,
             team_communication_ok=runtime.team_communication_ok,
             unreachable_specialists=runtime.unreachable_specialists,
+            anomaly_watcher=runtime.anomaly_watch_snapshot(),
             api_docs=f"http://{config.api_host}:{config.api_port}/docs",
         )
         LOGGER.info("Agentic backend is ready with five active SPADE-LLM agents")
@@ -187,6 +196,7 @@ async def _run_backend() -> None:
                 communication_probe=runtime.communication_probe,
                 team_communication_ok=runtime.team_communication_ok,
                 unreachable_specialists=runtime.unreachable_specialists,
+                anomaly_watcher=runtime.anomaly_watch_snapshot(),
             )
             if api_task.done():
                 exc = api_task.exception()
@@ -211,6 +221,7 @@ async def _run_backend() -> None:
             mongodb_reachable=False,
             team_communication_ok=runtime.team_communication_ok,
             unreachable_specialists=runtime.unreachable_specialists,
+            anomaly_watcher=runtime.anomaly_watch_snapshot(),
         )
         health_server.shutdown()
         health_server.server_close()
