@@ -50,6 +50,7 @@ AGENTIC_FIELDS = {
     "triage_confidence",
     "triage_rationale",
     "bdi_goal",
+    "bdi_triage_intention",
     "bdi_intention",
 }
 EVENT_FIELDS = {
