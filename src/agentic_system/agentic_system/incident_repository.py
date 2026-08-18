@@ -205,8 +205,10 @@ class IncidentRepository:
 
         bounded_limit = min(max(limit, 1), 500)
         cursor = self.incidents.find(mongo_query).sort("updated_at", DESCENDING).limit(bounded_limit)
-        documents = await cursor.to_list(length=bounded_limit)
-        return [public_document(document) or {} for document in documents]
+        documents: list[dict[str, Any]] = []
+        async for document in cursor:
+            documents.append(public_document(document) or {})
+        return documents
 
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
         document = await self.incidents.find_one({"incident_id": incident_id})
@@ -260,5 +262,7 @@ class IncidentRepository:
         bounded_limit = min(max(limit, 1), 500)
         direction = ASCENDING if ascending else DESCENDING
         cursor = self.events.find(query).sort("timestamp", direction).limit(bounded_limit)
-        documents = await cursor.to_list(length=bounded_limit)
-        return [public_document(document) or {} for document in documents]
+        documents: list[dict[str, Any]] = []
+        async for document in cursor:
+            documents.append(public_document(document) or {})
+        return documents
