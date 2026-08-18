@@ -18,6 +18,44 @@ ACTIVE_STATUSES = {
     "OPERATOR_ACTION_REQUIRED",
 }
 
+INCIDENT_FIELDS = {
+    "incident_id",
+    "status",
+    "severity",
+    "entity",
+    "service",
+    "machine_role",
+    "takeover_reason",
+    "takeover_factors",
+    "anomaly",
+    "diagnosis",
+    "remediation",
+    "validation",
+    "agentic",
+    "detected_at",
+    "created_at",
+    "updated_at",
+    "closed_at",
+}
+ANOMALY_FIELDS = {"detector_id", "anomaly_type", "grade", "confidence"}
+DIAGNOSIS_FIELDS = {"summary", "root_cause", "confidence", "evidence"}
+REMEDIATION_FIELDS = {"summary", "status", "steps", "verification", "risks"}
+VALIDATION_FIELDS = {"status", "summary"}
+EVENT_FIELDS = {
+    "event_id",
+    "timestamp",
+    "event_type",
+    "agent_role",
+    "agent_jid",
+    "action",
+    "called_by",
+    "reason",
+    "description",
+    "tool",
+    "status",
+    "outcome",
+}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -33,6 +71,33 @@ def deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _keep_fields(value: Any, allowed: set[str]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: deepcopy(item) for key, item in value.items() if key in allowed}
+
+
+def sanitize_incident_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep agentic incident conclusions while excluding raw observability payloads."""
+
+    doc = {key: deepcopy(value) for key, value in payload.items() if key in INCIDENT_FIELDS}
+    if "anomaly" in doc:
+        doc["anomaly"] = _keep_fields(doc["anomaly"], ANOMALY_FIELDS)
+    if "diagnosis" in doc:
+        doc["diagnosis"] = _keep_fields(doc["diagnosis"], DIAGNOSIS_FIELDS)
+    if "remediation" in doc:
+        doc["remediation"] = _keep_fields(doc["remediation"], REMEDIATION_FIELDS)
+    if "validation" in doc:
+        doc["validation"] = _keep_fields(doc["validation"], VALIDATION_FIELDS)
+    if "agentic" in doc and not isinstance(doc["agentic"], dict):
+        doc["agentic"] = {}
+    return doc
+
+
+def sanitize_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: deepcopy(value) for key, value in payload.items() if key in EVENT_FIELDS}
+
+
 def new_incident_id() -> str:
     return f"INC-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6].upper()}"
 
@@ -43,7 +108,7 @@ def new_event_id() -> str:
 
 def normalize_incident(payload: dict[str, Any], incident_id: str | None = None) -> dict[str, Any]:
     now = utc_now()
-    doc = deepcopy(payload)
+    doc = sanitize_incident_payload(payload)
     doc["incident_id"] = incident_id or doc.get("incident_id") or new_incident_id()
     doc.setdefault("created_at", now)
     doc.setdefault("detected_at", doc["created_at"])
@@ -64,7 +129,7 @@ def normalize_incident(payload: dict[str, Any], incident_id: str | None = None) 
 
 
 def normalize_event(payload: dict[str, Any], incident_id: str) -> dict[str, Any]:
-    doc = deepcopy(payload)
+    doc = sanitize_event_payload(payload)
     doc["event_id"] = doc.get("event_id") or new_event_id()
     doc["incident_id"] = incident_id
     doc["timestamp"] = doc.get("timestamp") or utc_now()
@@ -88,7 +153,7 @@ class IncidentRepository:
     """MongoDB persistence for agentic incidents and their append-only event history."""
 
     def __init__(self, uri: str, database_name: str) -> None:
-        self.client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+        self.client = AsyncMongoClient(
             uri,
             server_api=ServerApi("1"),
         )
@@ -158,7 +223,7 @@ class IncidentRepository:
         if current is None:
             return None
 
-        merged = deep_merge(current, patch)
+        merged = deep_merge(current, sanitize_incident_payload(patch))
         merged = normalize_incident(merged, incident_id=incident_id)
         merged["created_at"] = current.get("created_at", merged["created_at"])
         if merged.get("status") in {"RESOLVED", "CLOSED"} and not merged.get("closed_at"):
