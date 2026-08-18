@@ -8,7 +8,10 @@ from ..agents.base import BaseAgent
 from ..agents.factory import build_agents
 from ..agents.roles import SystemEngineerAgent, TechnicalLeadAgent
 from ..application.anomaly_ingestion import AnomalyIntake
-from ..application.ports.incident_assignee import IncidentAssigneeReceipt
+from ..application.ports.incident_assignee import (
+    IncidentAssigneeReceipt,
+    IncidentTriageReceipt,
+)
 from ..communication import Performative
 from ..config import RuntimeConfig
 from ..infrastructure.opensearch import AnomalyObservation, OpenSearchAnomalyWatcher
@@ -74,6 +77,35 @@ class AgentRuntime:
             incident_id=assignment.incident_id,
             agent_role=technical_lead.role,
             agent_jid=str(technical_lead.jid),
+        )
+
+    async def triage_incident(
+        self,
+        incident: dict[str, Any],
+        *,
+        detector_context: dict[str, Any],
+    ) -> IncidentTriageReceipt:
+        """Run TL first analysis and Jason BDI commitment without delegating yet."""
+
+        technical_lead = self._technical_lead()
+        available_agents = [
+            specialist.role
+            for specialist in self._specialists()
+            if specialist.xmpp_connected and specialist.communication_ok
+        ]
+        decision = await technical_lead.triage_incident(
+            incident,
+            detector_context=detector_context,
+            available_agents=available_agents,
+        )
+        return IncidentTriageReceipt(
+            incident_id=decision.incident_id,
+            probable_domain=decision.probable_domain,
+            primary_investigator=decision.primary_investigator,
+            confidence=decision.confidence,
+            rationale=decision.rationale,
+            bdi_goal=decision.bdi_goal,
+            bdi_intention=decision.bdi_intention,
         )
 
     async def start(self) -> None:
