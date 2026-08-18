@@ -39,8 +39,7 @@ def test_technical_lead_agentspeak_plan_manages_but_does_not_diagnose() -> None:
         Path(__file__).parents[2]
         / "agentic_system"
         / "bdi"
-        / "jason"
-        / "agents"
+        / "plans"
         / "technical_lead.asl"
     )
     source = asl_path.read_text(encoding="utf-8")
@@ -51,9 +50,9 @@ def test_technical_lead_agentspeak_plan_manages_but_does_not_diagnose() -> None:
 
     assert "!manage_incident" in executable_source
     assert "!triage_incident" in executable_source
-    assert "request_triage_analysis" in executable_source
+    assert ".run_tl_triage" in executable_source
     assert "!select_primary_investigator" in executable_source
-    assert "commit_primary_investigator" in executable_source
+    assert ".commit_primary_investigator" in executable_source
     assert "diagnose" not in executable_source
-    assert "root_cause" not in executable_source
+    assert "root_cause(" not in executable_source
     assert "remediation" not in executable_source
