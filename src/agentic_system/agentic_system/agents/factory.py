@@ -39,15 +39,28 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
         if constructor is None:
             raise RuntimeError(f"No SPADE-LLM agent implementation for role: {spec.role}")
 
+        common_kwargs = {
+            "provider": provider,
+            "mcp_servers": [mcp_server],
+            "interaction_memory_path": config.spade_llm_memory_path,
+        }
+        if spec.role == "technical_lead":
+            common_kwargs.update(
+                {
+                    "jason_bdi_command": config.jason_bdi_command,
+                    "jason_technical_lead_asl": config.jason_technical_lead_asl,
+                    "jason_bdi_timeout_seconds": config.jason_bdi_timeout_seconds,
+                    "jason_bdi_max_concurrency": config.jason_bdi_max_concurrency,
+                }
+            )
+
         agents.append(
             constructor(
                 spec.jid,
                 spec.password,
                 spec.display_name,
                 spec.health_port,
-                provider=provider,
-                mcp_servers=[mcp_server],
-                interaction_memory_path=config.spade_llm_memory_path,
+                **common_kwargs,
             )
         )
 
