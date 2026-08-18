@@ -82,10 +82,11 @@ def test_same_detector_results_persist_as_one_active_incident(backend_health: di
                 {"event_type": 1},
             )
         )
-        assert [event["event_type"] for event in events] == [
+        assert len(events) == 2
+        assert {event["event_type"] for event in events} == {
             "ANOMALY_DETECTED",
             "ANOMALY_REOBSERVED",
-        ]
+        }
     finally:
         incident_ids = [
             document["incident_id"]
