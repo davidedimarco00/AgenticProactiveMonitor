@@ -6,7 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AnomalyInfo(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    # Keep only anomaly metadata required to identify and classify the incident.
+    # Raw metrics and logs stay in OpenSearch.
+    model_config = ConfigDict(extra="ignore")
 
     detector_id: str | None = None
     anomaly_type: str | None = None
@@ -15,7 +17,7 @@ class AnomalyInfo(BaseModel):
 
 
 class DiagnosisInfo(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     summary: str | None = None
     root_cause: str | None = None
@@ -24,7 +26,7 @@ class DiagnosisInfo(BaseModel):
 
 
 class RemediationInfo(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     summary: str | None = None
     status: str | None = None
@@ -34,14 +36,14 @@ class RemediationInfo(BaseModel):
 
 
 class ValidationInfo(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     status: str | None = None
     summary: str | None = None
 
 
 class IncidentCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     incident_id: str | None = None
     status: str = "NEW"
@@ -63,7 +65,7 @@ class IncidentCreate(BaseModel):
 
 
 class IncidentPatch(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     status: str | None = None
     severity: str | None = None
@@ -82,7 +84,7 @@ class IncidentPatch(BaseModel):
 
 
 class IncidentEventCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     event_id: str | None = None
     timestamp: str | None = None
