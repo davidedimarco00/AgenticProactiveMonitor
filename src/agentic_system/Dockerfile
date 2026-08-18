@@ -5,7 +5,7 @@ COPY agentic_system/bdi/jason ./
 RUN gradle --no-daemon installDist
 
 
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
