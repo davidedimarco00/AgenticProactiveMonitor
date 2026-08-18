@@ -49,6 +49,7 @@ class RuntimeConfig:
     api_port: int
     mongodb_uri: str
     mongodb_database: str
+    incident_correlation_window_seconds: int = 600
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -146,15 +147,12 @@ def load_runtime_config() -> RuntimeConfig:
 
     mcp_url = os.getenv("MCP_URL", "http://mcp-server:8000/mcp").strip()
     opensearch_url = os.getenv("OPENSEARCH_URL", "http://opensearch:9200").strip()
-    anomaly_watch_poll_seconds = float(
-        os.getenv("ANOMALY_WATCH_POLL_SECONDS", "5")
+    anomaly_watch_poll_seconds = float(os.getenv("ANOMALY_WATCH_POLL_SECONDS", "5"))
+    anomaly_watch_lookback_seconds = int(os.getenv("ANOMALY_WATCH_LOOKBACK_SECONDS", "300"))
+    incident_correlation_window_seconds = int(
+        os.getenv("INCIDENT_CORRELATION_WINDOW_SECONDS", "600")
     )
-    anomaly_watch_lookback_seconds = int(
-        os.getenv("ANOMALY_WATCH_LOOKBACK_SECONDS", "300")
-    )
-    ollama_url = os.getenv(
-        "OLLAMA_URL", "http://host.docker.internal:11434"
-    ).strip()
+    ollama_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").strip()
     reasoning_model = os.getenv("OLLAMA_REASONING_MODEL", "gemma4:e2b").strip()
     tool_model = os.getenv("OLLAMA_TOOL_MODEL", "qwen3.5:4b").strip()
     embedding_model = os.getenv(
@@ -190,6 +188,8 @@ def load_runtime_config() -> RuntimeConfig:
         raise RuntimeError("ANOMALY_WATCH_POLL_SECONDS must be greater than zero")
     if anomaly_watch_lookback_seconds <= 0:
         raise RuntimeError("ANOMALY_WATCH_LOOKBACK_SECONDS must be greater than zero")
+    if incident_correlation_window_seconds <= 0:
+        raise RuntimeError("INCIDENT_CORRELATION_WINDOW_SECONDS must be greater than zero")
 
     return RuntimeConfig(
         agents=tuple(agents),
@@ -212,4 +212,5 @@ def load_runtime_config() -> RuntimeConfig:
         api_port=int(os.getenv("AGENT_API_PORT", "8082")),
         mongodb_uri=mongodb_uri,
         mongodb_database=mongodb_database,
+        incident_correlation_window_seconds=incident_correlation_window_seconds,
     )
