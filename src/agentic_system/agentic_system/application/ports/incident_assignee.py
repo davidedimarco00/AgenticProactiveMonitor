@@ -13,10 +13,30 @@ class IncidentAssigneeReceipt:
     agent_jid: str
 
 
+@dataclass(frozen=True, slots=True)
+class IncidentTriageReceipt:
+    """Technical Lead triage outcome after real BDI deliberation."""
+
+    incident_id: str
+    probable_domain: str
+    primary_investigator: str
+    confidence: float
+    rationale: str
+    bdi_goal: str
+    bdi_intention: str
+
+
 class IncidentAssigneePort(Protocol):
-    """Application-facing port for assigning a persisted incident to an agent."""
+    """Application-facing port for assigning and triaging persisted incidents."""
 
     async def assign_incident(
         self,
         incident: dict[str, Any],
     ) -> IncidentAssigneeReceipt: ...
+
+    async def triage_incident(
+        self,
+        incident: dict[str, Any],
+        *,
+        detector_context: dict[str, Any],
+    ) -> IncidentTriageReceipt: ...
