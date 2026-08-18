@@ -36,6 +36,16 @@ def _prepare_demo(raw: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, A
         "root_cause",
         "Abnormal processing workload causing sustained CPU saturation in processing-service.",
     )
+    evidence = diagnosis.get("evidence")
+    if isinstance(evidence, list):
+        diagnosis["evidence"] = [
+            (
+                "System Engineer confirmed sustained CPU saturation while memory and host pressure remained normal."
+                if isinstance(item, str) and "392%" in item
+                else item
+            )
+            for item in evidence
+        ]
 
     incident.setdefault(
         "validation",
