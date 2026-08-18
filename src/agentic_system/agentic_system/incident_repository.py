@@ -41,6 +41,7 @@ ANOMALY_FIELDS = {"detector_id", "anomaly_type", "grade", "confidence"}
 DIAGNOSIS_FIELDS = {"summary", "root_cause", "confidence", "evidence"}
 REMEDIATION_FIELDS = {"summary", "status", "steps", "verification", "risks"}
 VALIDATION_FIELDS = {"status", "summary"}
+AGENTIC_FIELDS = {"current_agent", "active_agents"}
 EVENT_FIELDS = {
     "event_id",
     "timestamp",
@@ -89,8 +90,8 @@ def sanitize_incident_payload(payload: dict[str, Any]) -> dict[str, Any]:
         doc["remediation"] = _keep_fields(doc["remediation"], REMEDIATION_FIELDS)
     if "validation" in doc:
         doc["validation"] = _keep_fields(doc["validation"], VALIDATION_FIELDS)
-    if "agentic" in doc and not isinstance(doc["agentic"], dict):
-        doc["agentic"] = {}
+    if "agentic" in doc:
+        doc["agentic"] = _keep_fields(doc["agentic"], AGENTIC_FIELDS)
     return doc
 
 
