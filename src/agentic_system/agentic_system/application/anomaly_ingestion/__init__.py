@@ -1,1 +1,3 @@
-"""Anomaly intake use-cases. The queued autonomous intake will be added next."""
+from .intake import AnomalyIntake
+
+__all__ = ["AnomalyIntake"]
