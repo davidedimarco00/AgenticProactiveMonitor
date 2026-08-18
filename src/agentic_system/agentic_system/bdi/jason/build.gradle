@@ -12,5 +12,4 @@ dependencies {
 
 application {
     mainClass = 'io.apm.bdi.TechnicalLeadDecisionRunner'
-    applicationName = 'apm-jason-bdi'
 }
