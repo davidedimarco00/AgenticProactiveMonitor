@@ -203,6 +203,7 @@ class IncidentWorkflow:
                     "triage_confidence": receipt.confidence,
                     "triage_rationale": receipt.rationale,
                     "bdi_goal": receipt.bdi_goal,
+                    "bdi_triage_intention": receipt.bdi_triage_intention,
                     "bdi_intention": receipt.bdi_intention,
                 },
             },
@@ -230,12 +231,13 @@ class IncidentWorkflow:
             )
 
         LOGGER.warning(
-            "Incident=%s triaged: domain=%s primary=%s confidence=%.3f BDI=%s/%s",
+            "Incident=%s triaged: domain=%s primary=%s confidence=%.3f BDI=%s/%s->%s",
             receipt.incident_id,
             receipt.probable_domain,
             receipt.primary_investigator,
             receipt.confidence,
             receipt.bdi_goal,
+            receipt.bdi_triage_intention,
             receipt.bdi_intention,
         )
         return updated
