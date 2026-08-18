@@ -28,12 +28,12 @@ class FakeRepository:
         incident = deepcopy(payload)
         incident.update(
             {
-                "incident_id": "INC-TEST-1",
+                "incident_id": "INC-20260818-001",
                 "created_at": now,
                 "updated_at": now,
             }
         )
-        self.incidents["INC-TEST-1"] = incident
+        self.incidents["INC-20260818-001"] = incident
         return deepcopy(incident)
 
     async def update_incident(self, incident_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
@@ -79,6 +79,8 @@ class FakeAssignee:
 
     async def assign_incident(self, incident: dict[str, Any]) -> IncidentAssigneeReceipt:
         self.assign_calls += 1
+        assert incident["entity"] == "CPU-processing-service"
+        assert incident["anomaly"]["detector_name"] == "CPU-processing-service"
         return IncidentAssigneeReceipt(
             incident_id=str(incident["incident_id"]),
             agent_role="technical_lead",
@@ -133,6 +135,9 @@ def test_new_incident_is_triaged_once_without_technical_lead_diagnosis() -> None
 
     assert first.created is True
     assert first["status"] == "TRIAGED"
+    assert first["incident_id"] == "INC-20260818-001"
+    assert first["entity"] == "CPU-processing-service"
+    assert first["anomaly"]["detector_name"] == "CPU-processing-service"
     assert first["agentic"] == {
         "current_agent": "technical_lead",
         "active_agents": ["technical_lead"],
@@ -150,9 +155,10 @@ def test_new_incident_is_triaged_once_without_technical_lead_diagnosis() -> None
 
     assert second.created is False
     assert second.correlated is True
+    assert second["entity"] == "CPU-processing-service"
     assert assignee.assign_calls == 1
     assert assignee.triage_calls == 1
-    assert detector_context.calls == 1
+    assert detector_context.calls == 2
     assert coordinator.assigned_count == 1
     assert coordinator.triaged_count == 1
     assert [event["event_type"] for event in repository.events] == [
