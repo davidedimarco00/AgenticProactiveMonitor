@@ -11,6 +11,7 @@ class AnomalyInfo(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     detector_id: str | None = None
+    detector_name: str | None = None
     anomaly_type: str | None = None
     grade: float | None = None
     confidence: float | None = None
