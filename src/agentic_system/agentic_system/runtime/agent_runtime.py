@@ -8,6 +8,7 @@ from ..agents.base import BaseAgent
 from ..agents.factory import build_agents
 from ..agents.roles import SystemEngineerAgent, TechnicalLeadAgent
 from ..application.anomaly_ingestion import AnomalyIntake
+from ..application.ports.incident_assignee import IncidentAssigneeReceipt
 from ..communication import Performative
 from ..config import RuntimeConfig
 from ..infrastructure.opensearch import AnomalyObservation, OpenSearchAnomalyWatcher
@@ -40,8 +41,6 @@ class AgentRuntime:
         self._anomaly_watcher_task: asyncio.Task[None] | None = None
         self._anomaly_intake_task: asyncio.Task[None] | None = None
 
-        # The bounded queue decouples OpenSearch polling from downstream incident
-        # processing while still providing backpressure if intake falls behind.
         self.anomaly_queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(
             maxsize=ANOMALY_QUEUE_MAXSIZE
         )
@@ -54,6 +53,27 @@ class AgentRuntime:
             on_anomaly=self.anomaly_queue.put,
             poll_interval_seconds=config.anomaly_watch_poll_seconds,
             lookback_seconds=config.anomaly_watch_lookback_seconds,
+        )
+
+    def configure_anomaly_handler(self, handler: AnomalyHandler) -> None:
+        """Attach the application workflow before the runtime is started."""
+
+        if self.started:
+            raise RuntimeError("Anomaly handler must be configured before runtime start")
+        self.anomaly_intake.on_anomaly = handler
+
+    async def assign_incident(
+        self,
+        incident: dict[str, Any],
+    ) -> IncidentAssigneeReceipt:
+        """Assign one persisted incident to the Technical Lead SPADE behaviour."""
+
+        technical_lead = self._technical_lead()
+        assignment = await technical_lead.submit_incident(incident)
+        return IncidentAssigneeReceipt(
+            incident_id=assignment.incident_id,
+            agent_role=technical_lead.role,
+            agent_jid=str(technical_lead.jid),
         )
 
     async def start(self) -> None:
