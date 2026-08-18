@@ -85,6 +85,11 @@ class TechnicalLeadAgent(BaseAgent):
 
             try:
                 assignment = pending.assignment
+                self.agent.set_activity(
+                    "WORKING",
+                    incident_id=assignment.incident_id,
+                    detail="taking_incident_in_charge",
+                )
                 self.agent.incidents_received += 1
                 self.agent.last_incident_id = assignment.incident_id
                 self.agent.last_incident_assignment = assignment
@@ -116,8 +121,14 @@ class TechnicalLeadAgent(BaseAgent):
             except TimeoutError:
                 return
 
+            incident_id = str(pending.incident.get("incident_id") or "") or None
             try:
                 assignment = IncidentAssignment.from_incident(pending.incident)
+                self.agent.set_activity(
+                    "WORKING",
+                    incident_id=assignment.incident_id,
+                    detail="triaging_incident",
+                )
                 if assignment.status != "TAKEN_IN_CHARGE":
                     raise RuntimeError(
                         "Technical Lead triage requires an incident in TAKEN_IN_CHARGE state"
@@ -156,6 +167,11 @@ class TechnicalLeadAgent(BaseAgent):
                 self.agent.triages_completed += 1
                 self.agent.last_triage_decision = decision
                 self.agent.last_triage_error = None
+                self.agent.set_activity(
+                    "WAITING",
+                    incident_id=assignment.incident_id,
+                    detail="primary_investigator_selected",
+                )
 
                 if not pending.completed.done():
                     pending.completed.set_result(decision)
@@ -174,6 +190,11 @@ class TechnicalLeadAgent(BaseAgent):
                 )
             except Exception as exc:
                 self.agent.last_triage_error = str(exc)
+                self.agent.set_activity(
+                    "WAITING",
+                    incident_id=incident_id,
+                    detail="triage_failed",
+                )
                 if not pending.completed.done():
                     pending.completed.set_exception(exc)
                 LOGGER.exception("Technical Lead triage failed: %s", exc)
