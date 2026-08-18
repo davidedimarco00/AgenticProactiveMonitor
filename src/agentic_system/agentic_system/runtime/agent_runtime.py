@@ -85,7 +85,7 @@ class AgentRuntime:
         *,
         detector_context: dict[str, Any],
     ) -> IncidentTriageReceipt:
-        """Run TL first analysis and Jason BDI commitment without delegating yet."""
+        """Run BDI-led TL triage without delegating to a specialist yet."""
 
         technical_lead = self._technical_lead()
         available_agents = [
@@ -105,6 +105,7 @@ class AgentRuntime:
             confidence=decision.confidence,
             rationale=decision.rationale,
             bdi_goal=decision.bdi_goal,
+            bdi_triage_intention=decision.bdi_triage_intention,
             bdi_intention=decision.bdi_intention,
         )
 
