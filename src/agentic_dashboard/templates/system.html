@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}System · {{ app_name }}{% endblock %}
 {% block page_title %}Agentic System Status{% endblock %}
-{% block page_actions %}<a class="secondary-button" href="/">Back to operations</a>{% endblock %}
+{% block page_actions %}
+<a class="secondary-button" href="{{ backend_docs_url }}" target="_blank" rel="noopener">Backend API Swagger</a>
+<a class="secondary-button" href="/">Back to operations</a>
+{% endblock %}
 
 {% block content %}
 <section class="panel status-panel standalone">
@@ -27,7 +30,7 @@
     <div>
       <span class="eyebrow">RUNTIME DEPENDENCIES</span>
       <h2>Core services</h2>
-      <p class="section-description">Only components required by the agentic monitoring runtime are shown.</p>
+      <p class="section-description">The dashboard consumes incident data from the backend API. Raw metrics and logs remain in OpenSearch.</p>
     </div>
     <span class="muted nowrap">Checked {{ now|human_time }}</span>
   </div>
