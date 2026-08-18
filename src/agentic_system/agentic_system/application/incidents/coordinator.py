@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from ...domain.anomalies import AnomalyObservation
+from ..ports.detector_context import DetectorContextPort
 from ..ports.incident_assignee import IncidentAssigneePort
 from .models import IncidentWorkflowResult
 from .workflow import IncidentWorkflow
@@ -12,17 +13,21 @@ LOGGER = logging.getLogger("agentic_system.application.incidents.coordinator")
 
 
 class IncidentCoordinator:
-    """Orchestrate persistence and first assignment without embedding agent logic."""
+    """Orchestrate persistence, Technical Lead takeover and first BDI triage."""
 
     def __init__(
         self,
         workflow: IncidentWorkflow,
         assignee: IncidentAssigneePort,
+        detector_context: DetectorContextPort,
     ) -> None:
         self.workflow = workflow
         self.assignee = assignee
+        self.detector_context = detector_context
         self.assigned_count = 0
+        self.triaged_count = 0
         self.last_assigned_incident_id: str | None = None
+        self.last_triaged_incident_id: str | None = None
 
     async def handle_anomaly(
         self,
@@ -31,26 +36,41 @@ class IncidentCoordinator:
         result = await self.workflow.handle_anomaly(observation)
 
         # Re-observations remain attached to the already active incident and do
-        # not enqueue a duplicate assignment to the Technical Lead.
+        # not enqueue duplicate takeover or triage work.
         if not result.created:
             return result
 
-        receipt = await self.assignee.assign_incident(result.incident)
-        updated = await self.workflow.mark_taken_in_charge(
-            receipt.incident_id,
-            agent_role=receipt.agent_role,
-            agent_jid=receipt.agent_jid,
+        assignment_receipt = await self.assignee.assign_incident(result.incident)
+        taken_in_charge = await self.workflow.mark_taken_in_charge(
+            assignment_receipt.incident_id,
+            agent_role=assignment_receipt.agent_role,
+            agent_jid=assignment_receipt.agent_jid,
         )
         self.assigned_count += 1
-        self.last_assigned_incident_id = receipt.incident_id
+        self.last_assigned_incident_id = assignment_receipt.incident_id
+
+        detector_context = await self.detector_context.get_detector_context(
+            observation.detector_id
+        )
+        triage_receipt = await self.assignee.triage_incident(
+            taken_in_charge,
+            detector_context=detector_context,
+        )
+        triaged = await self.workflow.mark_triaged(
+            triage_receipt,
+            agent_role=assignment_receipt.agent_role,
+            agent_jid=assignment_receipt.agent_jid,
+        )
+        self.triaged_count += 1
+        self.last_triaged_incident_id = triage_receipt.incident_id
+
         LOGGER.info(
-            "Assigned incident=%s to %s [%s]",
-            receipt.incident_id,
-            receipt.agent_role,
-            receipt.agent_jid,
+            "Incident=%s takeover and BDI triage completed; primary investigator=%s",
+            triage_receipt.incident_id,
+            triage_receipt.primary_investigator,
         )
         return IncidentWorkflowResult(
-            incident=updated,
+            incident=triaged,
             created=True,
             correlated=False,
         )
