@@ -101,6 +101,7 @@ class FakeAssignee:
             confidence=0.91,
             rationale="CPU detector metadata makes system resources the best first domain to inspect.",
             bdi_goal="manage_incident",
+            bdi_triage_intention="triage_incident",
             bdi_intention="select_primary_investigator",
         )
 
@@ -142,6 +143,7 @@ def test_new_incident_is_triaged_once_without_technical_lead_diagnosis() -> None
             "CPU detector metadata makes system resources the best first domain to inspect."
         ),
         "bdi_goal": "manage_incident",
+        "bdi_triage_intention": "triage_incident",
         "bdi_intention": "select_primary_investigator",
     }
     assert first.get("diagnosis", {}) == {}
