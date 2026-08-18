@@ -50,10 +50,9 @@ class RuntimeConfig:
     mongodb_uri: str
     mongodb_database: str
     incident_correlation_window_seconds: int = 600
-    jason_bdi_command: str = "/opt/apm-jason-bdi/bin/apm-jason-bdi"
-    jason_technical_lead_asl: str = "/app/agentic_system/bdi/jason/agents/technical_lead.asl"
-    jason_bdi_timeout_seconds: float = 10.0
-    jason_bdi_max_concurrency: int = 2
+    agentspeak_technical_lead_asl: str = "/app/agentic_system/bdi/plans/technical_lead.asl"
+    agentspeak_action_timeout_seconds: float = 120.0
+    agentspeak_bdi_max_concurrency: int = 2
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -156,16 +155,16 @@ def load_runtime_config() -> RuntimeConfig:
     incident_correlation_window_seconds = int(
         os.getenv("INCIDENT_CORRELATION_WINDOW_SECONDS", "600")
     )
-    jason_bdi_command = os.getenv(
-        "JASON_BDI_COMMAND",
-        "/opt/apm-jason-bdi/bin/apm-jason-bdi",
+    agentspeak_technical_lead_asl = os.getenv(
+        "AGENTSPEAK_TECHNICAL_LEAD_ASL",
+        "/app/agentic_system/bdi/plans/technical_lead.asl",
     ).strip()
-    jason_technical_lead_asl = os.getenv(
-        "JASON_TECHNICAL_LEAD_ASL",
-        "/app/agentic_system/bdi/jason/agents/technical_lead.asl",
-    ).strip()
-    jason_bdi_timeout_seconds = float(os.getenv("JASON_BDI_TIMEOUT_SECONDS", "10"))
-    jason_bdi_max_concurrency = int(os.getenv("JASON_BDI_MAX_CONCURRENCY", "2"))
+    agentspeak_action_timeout_seconds = float(
+        os.getenv("AGENTSPEAK_ACTION_TIMEOUT_SECONDS", "120")
+    )
+    agentspeak_bdi_max_concurrency = int(
+        os.getenv("AGENTSPEAK_BDI_MAX_CONCURRENCY", "2")
+    )
     ollama_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").strip()
     reasoning_model = os.getenv("OLLAMA_REASONING_MODEL", "gemma4:e2b").strip()
     tool_model = os.getenv("OLLAMA_TOOL_MODEL", "qwen3.5:4b").strip()
@@ -193,8 +192,7 @@ def load_runtime_config() -> RuntimeConfig:
         "SPADE_LLM_MEMORY_PATH": spade_llm_memory_path,
         "MONGODB_URI": mongodb_uri,
         "MONGODB_DATABASE": mongodb_database,
-        "JASON_BDI_COMMAND": jason_bdi_command,
-        "JASON_TECHNICAL_LEAD_ASL": jason_technical_lead_asl,
+        "AGENTSPEAK_TECHNICAL_LEAD_ASL": agentspeak_technical_lead_asl,
     }
     for name, value in required_values.items():
         if not value:
@@ -206,10 +204,10 @@ def load_runtime_config() -> RuntimeConfig:
         raise RuntimeError("ANOMALY_WATCH_LOOKBACK_SECONDS must be greater than zero")
     if incident_correlation_window_seconds <= 0:
         raise RuntimeError("INCIDENT_CORRELATION_WINDOW_SECONDS must be greater than zero")
-    if jason_bdi_timeout_seconds <= 0:
-        raise RuntimeError("JASON_BDI_TIMEOUT_SECONDS must be greater than zero")
-    if jason_bdi_max_concurrency <= 0:
-        raise RuntimeError("JASON_BDI_MAX_CONCURRENCY must be greater than zero")
+    if agentspeak_action_timeout_seconds <= 0:
+        raise RuntimeError("AGENTSPEAK_ACTION_TIMEOUT_SECONDS must be greater than zero")
+    if agentspeak_bdi_max_concurrency <= 0:
+        raise RuntimeError("AGENTSPEAK_BDI_MAX_CONCURRENCY must be greater than zero")
 
     return RuntimeConfig(
         agents=tuple(agents),
@@ -233,8 +231,7 @@ def load_runtime_config() -> RuntimeConfig:
         mongodb_uri=mongodb_uri,
         mongodb_database=mongodb_database,
         incident_correlation_window_seconds=incident_correlation_window_seconds,
-        jason_bdi_command=jason_bdi_command,
-        jason_technical_lead_asl=jason_technical_lead_asl,
-        jason_bdi_timeout_seconds=jason_bdi_timeout_seconds,
-        jason_bdi_max_concurrency=jason_bdi_max_concurrency,
+        agentspeak_technical_lead_asl=agentspeak_technical_lead_asl,
+        agentspeak_action_timeout_seconds=agentspeak_action_timeout_seconds,
+        agentspeak_bdi_max_concurrency=agentspeak_bdi_max_concurrency,
     )
