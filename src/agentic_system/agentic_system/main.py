@@ -16,6 +16,7 @@ from .application.incidents import IncidentCoordinator, IncidentWorkflow
 from .config import RuntimeConfig, load_runtime_config
 from .domain.incidents import IncidentCorrelationPolicy
 from .infrastructure.mongodb import IncidentRepository
+from .infrastructure.opensearch import OpenSearchDetectorCatalog
 from .runtime import AgentRuntime
 
 
@@ -71,6 +72,13 @@ def _log_runtime(config: RuntimeConfig) -> None:
     LOGGER.info(
         "Incident correlation window: %ss",
         config.incident_correlation_window_seconds,
+    )
+    LOGGER.info(
+        "Jason BDI: command=%s TechnicalLeadASL=%s timeout=%.1fs concurrency=%d",
+        config.jason_bdi_command,
+        config.jason_technical_lead_asl,
+        config.jason_bdi_timeout_seconds,
+        config.jason_bdi_max_concurrency,
     )
     LOGGER.info("Ollama endpoint: %s", config.ollama_url)
     LOGGER.info("Reasoning model: ollama/%s", config.reasoning_model)
@@ -131,12 +139,17 @@ async def _run_backend() -> None:
 
     health_server, health_thread = _start_health_server(config)
     repository = IncidentRepository(config.mongodb_uri, config.mongodb_database)
+    detector_context = OpenSearchDetectorCatalog(config.opensearch_url)
     correlation_policy = IncidentCorrelationPolicy(
         window_seconds=config.incident_correlation_window_seconds
     )
     incident_workflow = IncidentWorkflow(repository, correlation_policy)
     runtime = AgentRuntime(config)
-    incident_coordinator = IncidentCoordinator(incident_workflow, runtime)
+    incident_coordinator = IncidentCoordinator(
+        incident_workflow,
+        runtime,
+        detector_context,
+    )
     runtime.configure_anomaly_handler(incident_coordinator.handle_anomaly)
 
     stop_event = asyncio.Event()
@@ -160,6 +173,7 @@ async def _run_backend() -> None:
         tool_model=f"ollama/{config.tool_model}",
         embedding_model=f"ollama/{config.embedding_model}",
         interaction_memory_enabled=True,
+        bdi_engine="Jason/AgentSpeak(L)",
         mongodb_database=config.mongodb_database,
         mongodb_reachable=False,
         api_port=config.api_port,
