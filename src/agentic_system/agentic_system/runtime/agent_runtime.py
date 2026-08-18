@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from ..agents.base import BaseAgent
 from ..agents.factory import build_agents
@@ -18,12 +18,18 @@ HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
 HEALTH_PROBE_INTERVAL_SECONDS = 5.0
 HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
 ANOMALY_QUEUE_MAXSIZE = 256
+AnomalyHandler = Callable[[AnomalyObservation], Awaitable[object]]
 
 
 class AgentRuntime:
     """Owns the five SPADE-LLM agents hosted by the backend container."""
 
-    def __init__(self, config: RuntimeConfig) -> None:
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        *,
+        anomaly_handler: AnomalyHandler | None = None,
+    ) -> None:
         self.config = config
         self.agents = build_agents(config)
         self.started = False
@@ -39,7 +45,10 @@ class AgentRuntime:
         self.anomaly_queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(
             maxsize=ANOMALY_QUEUE_MAXSIZE
         )
-        self.anomaly_intake = AnomalyIntake(self.anomaly_queue)
+        self.anomaly_intake = AnomalyIntake(
+            self.anomaly_queue,
+            on_anomaly=anomaly_handler,
+        )
         self.anomaly_watcher = OpenSearchAnomalyWatcher(
             opensearch_url=config.opensearch_url,
             on_anomaly=self.anomaly_queue.put,
@@ -96,14 +105,10 @@ class AgentRuntime:
 
     @property
     def anomalies_received(self) -> int:
-        """Number of anomalies consumed by the application intake worker."""
-
         return self.anomaly_intake.processed_count
 
     @property
     def last_anomaly(self) -> AnomalyObservation | None:
-        """Last anomaly consumed by the application intake worker."""
-
         return self.anomaly_intake.last_anomaly
 
     def anomaly_watch_snapshot(self) -> dict[str, Any]:
@@ -136,8 +141,6 @@ class AgentRuntime:
         return [agent for agent in self.agents if agent.role != "technical_lead"]
 
     async def _run_communication_probe(self) -> dict[str, Any]:
-        """Verify the Technical Lead/System Engineer XMPP control path."""
-
         technical_lead = self._technical_lead()
         system_engineer = next(
             (agent for agent in self.agents if agent.role == "system_engineer"), None
@@ -263,8 +266,6 @@ class AgentRuntime:
             return
 
     async def stop(self) -> None:
-        # Stop producers first, then let the intake worker drain what was already
-        # accepted before cancelling the consumer task.
         if self._anomaly_watcher_task is not None:
             self.anomaly_watcher.stop()
             try:
