@@ -20,6 +20,12 @@ def test_normalize_incident_keeps_agentic_conclusions_without_raw_metrics() -> N
             "agentic": {
                 "current_agent": "technical_lead",
                 "active_agents": ["technical_lead", "system_engineer"],
+                "primary_investigator": "system_engineer",
+                "triage_domain": "system",
+                "triage_confidence": 0.88,
+                "triage_rationale": "System resource investigation should start first.",
+                "bdi_goal": "manage_incident",
+                "bdi_intention": "select_primary_investigator",
                 "raw_metrics": {"cpu": [391.2]},
             },
             "raw_metrics": {"cpu": [1, 2, 3]},
@@ -40,6 +46,12 @@ def test_normalize_incident_keeps_agentic_conclusions_without_raw_metrics() -> N
     assert incident["agentic"] == {
         "current_agent": "technical_lead",
         "active_agents": ["technical_lead", "system_engineer"],
+        "primary_investigator": "system_engineer",
+        "triage_domain": "system",
+        "triage_confidence": 0.88,
+        "triage_rationale": "System resource investigation should start first.",
+        "bdi_goal": "manage_incident",
+        "bdi_intention": "select_primary_investigator",
     }
     assert incident["incident_id"].startswith("INC-")
 
