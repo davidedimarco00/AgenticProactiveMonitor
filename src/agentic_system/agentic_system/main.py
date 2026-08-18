@@ -12,7 +12,7 @@ import spade
 import uvicorn
 
 from .api import create_api_app
-from .application.incidents.workflow import IncidentWorkflow
+from .application.incidents import IncidentCoordinator, IncidentWorkflow
 from .config import RuntimeConfig, load_runtime_config
 from .domain.incidents import IncidentCorrelationPolicy
 from .infrastructure.mongodb import IncidentRepository
@@ -29,7 +29,7 @@ HEALTH_STATE: dict[str, Any] = {
 
 
 class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+    def do_GET(self) -> None:
         if self.path not in {"/health", "/ready"}:
             self.send_response(404)
             self.end_headers()
@@ -99,7 +99,6 @@ def _start_health_server(config: RuntimeConfig) -> tuple[ThreadingHTTPServer, th
 
 def _install_signal_handlers(stop_event: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
-
     for signum in (signal.SIGTERM, signal.SIGINT):
         try:
             loop.add_signal_handler(signum, stop_event.set)
@@ -136,10 +135,10 @@ async def _run_backend() -> None:
         window_seconds=config.incident_correlation_window_seconds
     )
     incident_workflow = IncidentWorkflow(repository, correlation_policy)
-    runtime = AgentRuntime(
-        config,
-        anomaly_handler=incident_workflow.handle_anomaly,
-    )
+    runtime = AgentRuntime(config)
+    incident_coordinator = IncidentCoordinator(incident_workflow, runtime)
+    runtime.configure_anomaly_handler(incident_coordinator.handle_anomaly)
+
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
 
@@ -172,7 +171,6 @@ async def _run_backend() -> None:
     try:
         await repository.connect()
         _set_health(mongodb_reachable=True, phase="starting-agents")
-
         await runtime.start()
 
         api = create_api_app(runtime, repository)
