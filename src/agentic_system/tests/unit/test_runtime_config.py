@@ -27,3 +27,4 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     assert config.opensearch_url == "http://opensearch:9200"
     assert config.anomaly_watch_poll_seconds == 5.0
     assert config.anomaly_watch_lookback_seconds == 300
+    assert config.incident_correlation_window_seconds == 600
