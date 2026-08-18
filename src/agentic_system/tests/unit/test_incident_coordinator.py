@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agentic_system.application.incidents import IncidentCoordinator, IncidentWorkflow
-from agentic_system.application.ports.incident_assignee import IncidentAssigneeReceipt
+from agentic_system.application.ports.incident_assignee import (
+    IncidentAssigneeReceipt,
+    IncidentTriageReceipt,
+)
 from agentic_system.domain.anomalies import AnomalyObservation
 from agentic_system.domain.incidents import IncidentCorrelationPolicy
 
@@ -54,16 +57,51 @@ class FakeRepository:
         return event
 
 
-class FakeAssignee:
+class FakeDetectorContext:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def assign_incident(self, incident: dict[str, Any]) -> IncidentAssigneeReceipt:
+    async def get_detector_context(self, detector_id: str) -> dict[str, Any]:
         self.calls += 1
+        return {
+            "detector_id": detector_id,
+            "detector_type": "SINGLE_ENTITY",
+            "name": "CPU-processing-service",
+            "description": "Container CPU usage anomaly detector for processing-service",
+            "indices": ["metrics-processing-service-*"],
+        }
+
+
+class FakeAssignee:
+    def __init__(self) -> None:
+        self.assign_calls = 0
+        self.triage_calls = 0
+
+    async def assign_incident(self, incident: dict[str, Any]) -> IncidentAssigneeReceipt:
+        self.assign_calls += 1
         return IncidentAssigneeReceipt(
             incident_id=str(incident["incident_id"]),
             agent_role="technical_lead",
             agent_jid="technical-lead@xmpp",
+        )
+
+    async def triage_incident(
+        self,
+        incident: dict[str, Any],
+        *,
+        detector_context: dict[str, Any],
+    ) -> IncidentTriageReceipt:
+        self.triage_calls += 1
+        assert incident["status"] == "TAKEN_IN_CHARGE"
+        assert detector_context["detector_type"] == "SINGLE_ENTITY"
+        return IncidentTriageReceipt(
+            incident_id=str(incident["incident_id"]),
+            probable_domain="system",
+            primary_investigator="system_engineer",
+            confidence=0.91,
+            rationale="CPU detector metadata makes system resources the best first domain to inspect.",
+            bdi_goal="manage_incident",
+            bdi_intention="select_primary_investigator",
         )
 
 
@@ -82,24 +120,42 @@ def _observation(result_id: str) -> AnomalyObservation:
     )
 
 
-def test_new_incident_is_assigned_once_and_marked_taken_in_charge() -> None:
+def test_new_incident_is_triaged_once_without_technical_lead_diagnosis() -> None:
     repository = FakeRepository()
     assignee = FakeAssignee()
+    detector_context = FakeDetectorContext()
     workflow = IncidentWorkflow(repository, IncidentCorrelationPolicy(window_seconds=600))
-    coordinator = IncidentCoordinator(workflow, assignee)
+    coordinator = IncidentCoordinator(workflow, assignee, detector_context)
 
     first = asyncio.run(coordinator.handle_anomaly(_observation("result-a")))
     second = asyncio.run(coordinator.handle_anomaly(_observation("result-b")))
 
     assert first.created is True
-    assert first["status"] == "TAKEN_IN_CHARGE"
-    assert first["agentic"]["current_agent"] == "technical_lead"
+    assert first["status"] == "TRIAGED"
+    assert first["agentic"] == {
+        "current_agent": "technical_lead",
+        "active_agents": ["technical_lead"],
+        "primary_investigator": "system_engineer",
+        "triage_domain": "system",
+        "triage_confidence": 0.91,
+        "triage_rationale": (
+            "CPU detector metadata makes system resources the best first domain to inspect."
+        ),
+        "bdi_goal": "manage_incident",
+        "bdi_intention": "select_primary_investigator",
+    }
+    assert first.get("diagnosis", {}) == {}
+
     assert second.created is False
     assert second.correlated is True
-    assert assignee.calls == 1
+    assert assignee.assign_calls == 1
+    assert assignee.triage_calls == 1
+    assert detector_context.calls == 1
     assert coordinator.assigned_count == 1
+    assert coordinator.triaged_count == 1
     assert [event["event_type"] for event in repository.events] == [
         "ANOMALY_DETECTED",
         "INCIDENT_TAKEN_IN_CHARGE",
+        "INCIDENT_TRIAGED",
         "ANOMALY_REOBSERVED",
     ]
