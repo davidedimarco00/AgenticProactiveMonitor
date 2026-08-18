@@ -17,6 +17,11 @@ def test_normalize_incident_keeps_agentic_conclusions_without_raw_metrics() -> N
                 "raw_log": "must not be persisted",
             },
             "diagnosis": {"summary": "CPU saturation is the most probable cause."},
+            "agentic": {
+                "current_agent": "technical_lead",
+                "active_agents": ["technical_lead", "system_engineer"],
+                "raw_metrics": {"cpu": [391.2]},
+            },
             "raw_metrics": {"cpu": [1, 2, 3]},
             "logs": ["raw log entry"],
         }
@@ -32,6 +37,10 @@ def test_normalize_incident_keeps_agentic_conclusions_without_raw_metrics() -> N
     assert "raw_log" not in incident["anomaly"]
     assert "raw_metrics" not in incident
     assert "logs" not in incident
+    assert incident["agentic"] == {
+        "current_agent": "technical_lead",
+        "active_agents": ["technical_lead", "system_engineer"],
+    }
     assert incident["incident_id"].startswith("INC-")
 
 
