@@ -52,6 +52,8 @@ http://agentic-backend:8082/api/v1/...
 
 MongoDB is the dedicated persistence layer for incidents and history. OpenSearch remains dedicated to metrics, logs and anomaly detection; Qdrant remains dedicated to RAG knowledge.
 
+Incident writes are performed directly inside the autonomous backend through its MongoDB repository. The HTTP API itself is read-only and therefore does not expose POST, PUT, PATCH or DELETE operations for incident handling.
+
 ## PDF reports
 
 Each incident detail page includes **Download PDF report**. The dashboard proxies the backend endpoint:
@@ -107,4 +109,4 @@ The Swagger contract exposed to the operator is read-only:
 - `GET /api/v1/agents`
 - `GET /api/v1/agent-events`
 
-Internal persistence writes used by the autonomous backend are deliberately excluded from Swagger and are not used by the dashboard.
+There are no HTTP write endpoints for the operator. Autonomous incident creation and updates stay inside the backend application boundary.
