@@ -27,13 +27,15 @@ Integration and end-to-end tests require the Docker infrastructure and the confi
 
 ## Incident API and MongoDB integration
 
-`tests/integration/test_incident_api_mongodb.py` verifies the complete persistence path:
+`tests/integration/test_incident_api_mongodb.py` verifies the persistence and read path:
 
 ```text
-internal backend write -> FastAPI -> MongoDB -> public GET -> PDF report
+IncidentRepository -> MongoDB -> public FastAPI GET -> PDF report
 ```
 
-The test also verifies that raw metric/baseline values are not required by the public incident object and cleans up the temporary incident from MongoDB when it finishes.
+The autonomous backend writes incidents and structured events directly through its MongoDB repository. There are no HTTP write endpoints for the operator and no hidden HTTP endpoint is required for persistence.
+
+The integration test also verifies that raw metric, baseline and log payloads are excluded from MongoDB incident records and cleans up the temporary incident when it finishes.
 
 Defaults:
 
