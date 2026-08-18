@@ -10,6 +10,7 @@ from spade.template import Template
 from spade_llm.mcp import MCPServerConfig
 from spade_llm.providers import LLMProvider
 
+from ...bdi import JasonBDIGateway
 from ...communication import (
     AGENTIC_PROTOCOL,
     AgentMessage,
@@ -19,16 +20,26 @@ from ...communication import (
 from ..base import BaseAgent
 from .commands import IncidentAssignment
 from .prompts import SYSTEM_PROMPT as ROLE_SYSTEM_PROMPT
+from .triage import TechnicalLeadTriageDecision, TechnicalLeadTriageReasoner
 
 
 LOGGER = logging.getLogger("agentic_system.agents.technical_lead")
 INCIDENT_INBOX_MAXSIZE = 64
+TRIAGE_INBOX_MAXSIZE = 32
 
 
 @dataclass(slots=True)
 class _PendingIncidentAssignment:
     assignment: IncidentAssignment
     accepted: asyncio.Future[None]
+
+
+@dataclass(slots=True)
+class _PendingTriage:
+    incident: dict[str, Any]
+    detector_context: dict[str, Any]
+    available_agents: list[str]
+    completed: asyncio.Future[TechnicalLeadTriageDecision]
 
 
 class TechnicalLeadAgent(BaseAgent):
@@ -93,6 +104,67 @@ class TechnicalLeadAgent(BaseAgent):
             finally:
                 self.agent._incident_inbox.task_done()
 
+    class TriageBehaviour(CyclicBehaviour):
+        """Run TL first analysis, then commit the BDI primary-investigator intention."""
+
+        async def run(self) -> None:
+            try:
+                pending = await asyncio.wait_for(
+                    self.agent._triage_inbox.get(),
+                    timeout=1.0,
+                )
+            except TimeoutError:
+                return
+
+            try:
+                assignment = IncidentAssignment.from_incident(pending.incident)
+                if assignment.status != "TAKEN_IN_CHARGE":
+                    raise RuntimeError(
+                        "Technical Lead triage requires an incident in TAKEN_IN_CHARGE state"
+                    )
+
+                assessment = await self.agent._triage_reasoner.assess(
+                    assignment,
+                    detector_context=pending.detector_context,
+                    available_agents=pending.available_agents,
+                )
+                deliberation = await self.agent._bdi_gateway.select_primary_investigator(
+                    incident_id=assignment.incident_id,
+                    probable_domain=assessment.probable_domain,
+                    recommended_agent=assessment.recommended_agent,
+                    available_agents=pending.available_agents,
+                )
+
+                decision = TechnicalLeadTriageDecision(
+                    incident_id=assignment.incident_id,
+                    probable_domain=assessment.probable_domain,
+                    primary_investigator=deliberation.primary_investigator,
+                    confidence=assessment.confidence,
+                    rationale=assessment.rationale,
+                    bdi_goal=deliberation.goal,
+                    bdi_intention=deliberation.intention,
+                )
+                self.agent.triages_completed += 1
+                self.agent.last_triage_decision = decision
+
+                if not pending.completed.done():
+                    pending.completed.set_result(decision)
+
+                LOGGER.warning(
+                    "Technical Lead BDI triage completed incident=%s domain=%s primary=%s confidence=%.3f",
+                    decision.incident_id,
+                    decision.probable_domain,
+                    decision.primary_investigator,
+                    decision.confidence,
+                )
+            except Exception as exc:
+                self.agent.last_triage_error = str(exc)
+                if not pending.completed.done():
+                    pending.completed.set_exception(exc)
+                LOGGER.exception("Technical Lead triage failed: %s", exc)
+            finally:
+                self.agent._triage_inbox.task_done()
+
     def __init__(
         self,
         jid: str,
@@ -103,6 +175,10 @@ class TechnicalLeadAgent(BaseAgent):
         provider: LLMProvider,
         mcp_servers: list[MCPServerConfig],
         interaction_memory_path: str,
+        jason_bdi_command: str,
+        jason_technical_lead_asl: str,
+        jason_bdi_timeout_seconds: float,
+        jason_bdi_max_concurrency: int,
     ) -> None:
         super().__init__(
             jid,
@@ -120,9 +196,22 @@ class TechnicalLeadAgent(BaseAgent):
         self._incident_inbox: asyncio.Queue[_PendingIncidentAssignment] = asyncio.Queue(
             maxsize=INCIDENT_INBOX_MAXSIZE
         )
+        self._triage_inbox: asyncio.Queue[_PendingTriage] = asyncio.Queue(
+            maxsize=TRIAGE_INBOX_MAXSIZE
+        )
+        self._triage_reasoner = TechnicalLeadTriageReasoner(provider)
+        self._bdi_gateway = JasonBDIGateway(
+            command=jason_bdi_command,
+            technical_lead_asl=jason_technical_lead_asl,
+            timeout_seconds=jason_bdi_timeout_seconds,
+            max_concurrency=jason_bdi_max_concurrency,
+        )
         self.incidents_received = 0
+        self.triages_completed = 0
         self.last_incident_id: str | None = None
         self.last_incident_assignment: IncidentAssignment | None = None
+        self.last_triage_decision: TechnicalLeadTriageDecision | None = None
+        self.last_triage_error: str | None = None
 
     async def setup(self) -> None:
         await super().setup()
@@ -131,6 +220,7 @@ class TechnicalLeadAgent(BaseAgent):
         template.set_metadata("performative", Performative.AGREE.value)
         self.add_behaviour(self.AcknowledgementBehaviour(), template)
         self.add_behaviour(self.IncidentAssignmentBehaviour())
+        self.add_behaviour(self.TriageBehaviour())
 
     async def submit_incident(
         self,
@@ -154,6 +244,31 @@ class TechnicalLeadAgent(BaseAgent):
         )
         await asyncio.wait_for(accepted, timeout=timeout)
         return assignment
+
+    async def triage_incident(
+        self,
+        incident: dict[str, Any],
+        *,
+        detector_context: dict[str, Any],
+        available_agents: list[str],
+        timeout: float = 120.0,
+    ) -> TechnicalLeadTriageDecision:
+        """Perform first analysis and BDI commitment without diagnosing the incident."""
+
+        if self.lifecycle_state != "running":
+            raise RuntimeError("Technical Lead is not running")
+
+        loop = asyncio.get_running_loop()
+        completed: asyncio.Future[TechnicalLeadTriageDecision] = loop.create_future()
+        await self._triage_inbox.put(
+            _PendingTriage(
+                incident=dict(incident),
+                detector_context=dict(detector_context),
+                available_agents=list(available_agents),
+                completed=completed,
+            )
+        )
+        return await asyncio.wait_for(completed, timeout=timeout)
 
     async def request_specialist(
         self,
@@ -184,12 +299,28 @@ class TechnicalLeadAgent(BaseAgent):
 
     def health_snapshot(self) -> dict[str, Any]:
         snapshot = super().health_snapshot()
+        last_triage = None
+        if self.last_triage_decision is not None:
+            last_triage = {
+                "incident_id": self.last_triage_decision.incident_id,
+                "probable_domain": self.last_triage_decision.probable_domain,
+                "primary_investigator": self.last_triage_decision.primary_investigator,
+                "confidence": self.last_triage_decision.confidence,
+                "rationale": self.last_triage_decision.rationale,
+                "bdi_goal": self.last_triage_decision.bdi_goal,
+                "bdi_intention": self.last_triage_decision.bdi_intention,
+            }
         snapshot.update(
             {
                 "incident_inbox_depth": self._incident_inbox.qsize(),
                 "incident_inbox_maxsize": self._incident_inbox.maxsize,
+                "triage_inbox_depth": self._triage_inbox.qsize(),
+                "triage_inbox_maxsize": self._triage_inbox.maxsize,
                 "incidents_received": self.incidents_received,
+                "triages_completed": self.triages_completed,
                 "last_incident_id": self.last_incident_id,
+                "last_triage": last_triage,
+                "last_triage_error": self.last_triage_error,
             }
         )
         return snapshot
