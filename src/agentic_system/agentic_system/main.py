@@ -9,8 +9,11 @@ import threading
 from typing import Any
 
 import spade
+import uvicorn
 
+from .api import create_api_app
 from .config import RuntimeConfig, load_runtime_config
+from .incident_repository import IncidentRepository
 from .runtime import AgentRuntime
 
 
@@ -62,6 +65,8 @@ def _log_runtime(config: RuntimeConfig) -> None:
     LOGGER.info("Tool-calling model: ollama/%s", config.tool_model)
     LOGGER.info("Embedding model: ollama/%s", config.embedding_model)
     LOGGER.info("SPADE-LLM interaction memory: %s", config.spade_llm_memory_path)
+    LOGGER.info("MongoDB database: %s", config.mongodb_database)
+    LOGGER.info("REST API: http://%s:%d (Swagger: /docs)", config.api_host, config.api_port)
 
 
 def _start_health_server(config: RuntimeConfig) -> tuple[ThreadingHTTPServer, threading.Thread]:
@@ -99,12 +104,16 @@ async def _run_backend() -> None:
 
     health_server, health_thread = _start_health_server(config)
     runtime = AgentRuntime(config)
+    repository = IncidentRepository(config.mongodb_uri, config.mongodb_database)
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
 
+    api_server: uvicorn.Server | None = None
+    api_task: asyncio.Task[None] | None = None
+
     _set_health(
         status="starting",
-        phase="starting-agents",
+        phase="connecting-mongodb",
         framework="SPADE-LLM",
         agents_configured=len(config.agents),
         agents_running=0,
@@ -116,12 +125,31 @@ async def _run_backend() -> None:
         tool_model=f"ollama/{config.tool_model}",
         embedding_model=f"ollama/{config.embedding_model}",
         interaction_memory_enabled=True,
+        mongodb_database=config.mongodb_database,
+        mongodb_reachable=False,
+        api_port=config.api_port,
         team_communication_ok=False,
         unreachable_specialists=[],
     )
 
     try:
+        await repository.connect()
+        _set_health(mongodb_reachable=True, phase="starting-agents")
+
         await runtime.start()
+
+        api = create_api_app(runtime, repository)
+        api_server = uvicorn.Server(
+            uvicorn.Config(
+                api,
+                host=config.api_host,
+                port=config.api_port,
+                log_level="info",
+                access_log=False,
+                loop="asyncio",
+            )
+        )
+        api_task = asyncio.create_task(api_server.serve(), name="agentic-fastapi")
 
         _set_health(
             status="ok",
@@ -131,6 +159,7 @@ async def _run_backend() -> None:
             communication_probe=runtime.communication_probe,
             team_communication_ok=runtime.team_communication_ok,
             unreachable_specialists=runtime.unreachable_specialists,
+            api_docs=f"http://{config.api_host}:{config.api_port}/docs",
         )
         LOGGER.info("Agentic backend is ready with five active SPADE-LLM agents")
 
@@ -142,13 +171,27 @@ async def _run_backend() -> None:
                 team_communication_ok=runtime.team_communication_ok,
                 unreachable_specialists=runtime.unreachable_specialists,
             )
+            if api_task.done():
+                exc = api_task.exception()
+                raise RuntimeError("FastAPI server stopped unexpectedly") from exc
             await asyncio.sleep(1)
     finally:
-        _set_health(status="stopping", phase="stopping-agents")
+        _set_health(status="stopping", phase="stopping-api")
+        if api_server is not None:
+            api_server.should_exit = True
+        if api_task is not None:
+            try:
+                await asyncio.wait_for(api_task, timeout=10)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                api_task.cancel()
+
+        _set_health(phase="stopping-agents")
         await runtime.stop()
+        await repository.close()
         _set_health(
             agents_running=0,
             agents=runtime.snapshot(),
+            mongodb_reachable=False,
             team_communication_ok=runtime.team_communication_ok,
             unreachable_specialists=runtime.unreachable_specialists,
         )
