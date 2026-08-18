@@ -1,6 +1,4 @@
-"""Backward-compatible facade for MongoDB incident persistence."""
-
-from .infrastructure.mongodb import (
+from .incident_repository import (
     ACTIVE_STATUSES,
     IncidentRepository,
     deep_merge,
