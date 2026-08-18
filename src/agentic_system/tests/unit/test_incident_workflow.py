@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agentic_system.application.incidents import IncidentWorkflow
+from agentic_system.application.ports.incident_assignee import IncidentTriageReceipt
 from agentic_system.domain.anomalies import AnomalyObservation
 from agentic_system.domain.incidents import IncidentCorrelationPolicy
 
@@ -22,6 +23,7 @@ class FakeIncidentRepository:
             if incident.get("status") in {
                 "NEW",
                 "TAKEN_IN_CHARGE",
+                "TRIAGED",
                 "UNDER_ANALYSIS",
                 "DIAGNOSED",
                 "OPERATOR_ACTION_REQUIRED",
@@ -124,3 +126,42 @@ def test_second_result_from_same_detector_updates_existing_incident() -> None:
         "ANOMALY_DETECTED",
         "ANOMALY_REOBSERVED",
     ]
+
+
+def test_mark_triaged_persists_coordination_state_without_diagnosis() -> None:
+    repository = FakeIncidentRepository()
+    workflow = IncidentWorkflow(repository, IncidentCorrelationPolicy(window_seconds=600))
+    created = asyncio.run(workflow.handle_anomaly(_observation(result_id="result-a")))
+    asyncio.run(
+        workflow.mark_taken_in_charge(
+            created["incident_id"],
+            agent_role="technical_lead",
+            agent_jid="technical-lead@xmpp",
+        )
+    )
+
+    triaged = asyncio.run(
+        workflow.mark_triaged(
+            IncidentTriageReceipt(
+                incident_id=created["incident_id"],
+                probable_domain="network",
+                primary_investigator="network_engineer",
+                confidence=0.84,
+                rationale="The detector describes service latency, so network analysis should start first.",
+                bdi_goal="manage_incident",
+                bdi_intention="select_primary_investigator",
+            ),
+            agent_role="technical_lead",
+            agent_jid="technical-lead@xmpp",
+        )
+    )
+
+    assert triaged["status"] == "TRIAGED"
+    assert triaged["agentic"]["current_agent"] == "technical_lead"
+    assert triaged["agentic"]["active_agents"] == ["technical_lead"]
+    assert triaged["agentic"]["primary_investigator"] == "network_engineer"
+    assert triaged["agentic"]["bdi_goal"] == "manage_incident"
+    assert triaged["agentic"]["bdi_intention"] == "select_primary_investigator"
+    assert triaged.get("diagnosis", {}) == {}
+    assert repository.events[-1]["event_type"] == "INCIDENT_TRIAGED"
+    assert repository.events[-1]["outcome"] == "network_engineer"
