@@ -7,6 +7,7 @@ from typing import Any
 from ..agents.base import BaseAgent
 from ..agents.factory import build_agents
 from ..agents.roles import SystemEngineerAgent, TechnicalLeadAgent
+from ..application.anomaly_ingestion import AnomalyIntake
 from ..communication import Performative
 from ..config import RuntimeConfig
 from ..infrastructure.opensearch import AnomalyObservation, OpenSearchAnomalyWatcher
@@ -16,6 +17,7 @@ LOGGER = logging.getLogger("agentic_system.runtime")
 HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
 HEALTH_PROBE_INTERVAL_SECONDS = 5.0
 HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+ANOMALY_QUEUE_MAXSIZE = 256
 
 
 class AgentRuntime:
@@ -28,13 +30,19 @@ class AgentRuntime:
         self.communication_probe: dict[str, Any] | None = None
         self.team_communication_ok = False
         self.unreachable_specialists: list[str] = []
-        self.anomalies_received = 0
-        self.last_anomaly: AnomalyObservation | None = None
         self._health_probe_task: asyncio.Task[None] | None = None
         self._anomaly_watcher_task: asyncio.Task[None] | None = None
+        self._anomaly_intake_task: asyncio.Task[None] | None = None
+
+        # The bounded queue decouples OpenSearch polling from downstream incident
+        # processing while still providing backpressure if intake falls behind.
+        self.anomaly_queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(
+            maxsize=ANOMALY_QUEUE_MAXSIZE
+        )
+        self.anomaly_intake = AnomalyIntake(self.anomaly_queue)
         self.anomaly_watcher = OpenSearchAnomalyWatcher(
             opensearch_url=config.opensearch_url,
-            on_anomaly=self._on_anomaly,
+            on_anomaly=self.anomaly_queue.put,
             poll_interval_seconds=config.anomaly_watch_poll_seconds,
             lookback_seconds=config.anomaly_watch_lookback_seconds,
         )
@@ -75,30 +83,28 @@ class AgentRuntime:
             self._health_probe_loop(),
             name="agent-xmpp-health-probe",
         )
+        self._anomaly_intake_task = asyncio.create_task(
+            self.anomaly_intake.run(),
+            name="anomaly-intake-worker",
+        )
         self._anomaly_watcher_task = asyncio.create_task(
             self.anomaly_watcher.run(),
             name="opensearch-anomaly-watcher",
         )
         LOGGER.info("Inter-agent XMPP communication probe passed for all five agents")
-        LOGGER.info("OpenSearch anomaly watcher attached to the agentic runtime")
+        LOGGER.info("Queued OpenSearch anomaly intake attached to the agentic runtime")
 
-    async def _on_anomaly(self, observation: AnomalyObservation) -> None:
-        """Accept a newly observed anomaly into the agentic runtime.
+    @property
+    def anomalies_received(self) -> int:
+        """Number of anomalies consumed by the application intake worker."""
 
-        For this first step the runtime only records that the anomaly entered the
-        system. The next workflow step will persist the incident and dispatch it to
-        the Technical Lead.
-        """
+        return self.anomaly_intake.processed_count
 
-        self.anomalies_received += 1
-        self.last_anomaly = observation
-        LOGGER.warning(
-            "OpenSearch anomaly entered agentic runtime: result=%s detector=%s grade=%.3f confidence=%.3f",
-            observation.result_id,
-            observation.detector_id,
-            observation.anomaly_grade,
-            observation.confidence,
-        )
+    @property
+    def last_anomaly(self) -> AnomalyObservation | None:
+        """Last anomaly consumed by the application intake worker."""
+
+        return self.anomaly_intake.last_anomaly
 
     def anomaly_watch_snapshot(self) -> dict[str, Any]:
         return {
@@ -107,8 +113,12 @@ class AgentRuntime:
             "poll_interval_seconds": self.config.anomaly_watch_poll_seconds,
             "lookback_seconds": self.config.anomaly_watch_lookback_seconds,
             "poll_count": self.anomaly_watcher.poll_count,
+            "intake_running": self.anomaly_intake.running,
+            "queue_depth": self.anomaly_queue.qsize(),
+            "queue_maxsize": self.anomaly_queue.maxsize,
             "anomalies_received": self.anomalies_received,
             "last_error": self.anomaly_watcher.last_error,
+            "intake_last_error": self.anomaly_intake.last_error,
             "last_anomaly": (
                 self.last_anomaly.to_dict() if self.last_anomaly is not None else None
             ),
@@ -253,6 +263,8 @@ class AgentRuntime:
             return
 
     async def stop(self) -> None:
+        # Stop producers first, then let the intake worker drain what was already
+        # accepted before cancelling the consumer task.
         if self._anomaly_watcher_task is not None:
             self.anomaly_watcher.stop()
             try:
@@ -260,6 +272,15 @@ class AgentRuntime:
             except asyncio.CancelledError:
                 pass
             self._anomaly_watcher_task = None
+
+        if self._anomaly_intake_task is not None:
+            await self.anomaly_queue.join()
+            self._anomaly_intake_task.cancel()
+            try:
+                await self._anomaly_intake_task
+            except asyncio.CancelledError:
+                pass
+            self._anomaly_intake_task = None
 
         if self._health_probe_task is not None:
             self._health_probe_task.cancel()
