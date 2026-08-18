@@ -2,29 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Awaitable, Callable
 
 from ...domain.anomalies import AnomalyObservation
 
 
 LOGGER = logging.getLogger("agentic_system.application.anomaly_ingestion")
+AnomalyHandler = Callable[[AnomalyObservation], Awaitable[object]]
 
 
 class AnomalyIntake:
-    """Consume anomaly observations independently from the OpenSearch poller.
+    """Consume anomaly observations independently from the OpenSearch poller."""
 
-    This application-layer component is intentionally small for now: it records
-    that an anomaly has entered the autonomous backend. Incident persistence and
-    Technical Lead dispatch will be attached here in subsequent steps.
-    """
-
-    def __init__(self, queue: asyncio.Queue[AnomalyObservation]) -> None:
+    def __init__(
+        self,
+        queue: asyncio.Queue[AnomalyObservation],
+        *,
+        on_anomaly: AnomalyHandler | None = None,
+    ) -> None:
         self.queue = queue
+        self.on_anomaly = on_anomaly
         self.running = False
         self.processed_count = 0
         self.last_anomaly: AnomalyObservation | None = None
         self.last_error: str | None = None
 
     async def _process(self, observation: AnomalyObservation) -> None:
+        if self.on_anomaly is not None:
+            await self.on_anomaly(observation)
+
         self.processed_count += 1
         self.last_anomaly = observation
         self.last_error = None
