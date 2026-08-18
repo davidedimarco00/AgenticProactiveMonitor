@@ -187,6 +187,31 @@ services:
       - monitoring-net
     restart: unless-stopped
 
+  mongodb:
+    image: mongo:${MONGODB_VERSION:-8.0}
+    container_name: agentic-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:-agentic}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-change-this-local-password}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-agentic_monitor}
+    ports:
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - monitoring-net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'mongosh --quiet --username "$$MONGO_INITDB_ROOT_USERNAME" --password "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.adminCommand({ ping: 1 }).ok" | grep 1 >/dev/null || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
   xmpp-bootstrap:
     image: prosodyim/prosody:${PROSODY_VERSION:-13.0}
     container_name: agentic-xmpp-bootstrap
@@ -277,6 +302,8 @@ services:
       AGENT_CONFIG_PATH: /app/config/agents.yaml
       AGENT_HEALTH_HOST: 0.0.0.0
       AGENT_HEALTH_PORT: 8081
+      AGENT_API_HOST: 0.0.0.0
+      AGENT_API_PORT: 8082
       AGENT_LLM_CONTEXT: ${AGENT_LLM_CONTEXT:-8192}
       AGENT_MAX_LLM_CONCURRENCY: ${AGENT_MAX_LLM_CONCURRENCY:-2}
       XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
@@ -293,8 +320,11 @@ services:
       OLLAMA_REASONING_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e2b}
       OLLAMA_TOOL_MODEL: ${OLLAMA_TOOL_MODEL:-qwen3.5:4b}
       OLLAMA_FALLBACK_TOOL_MODEL: ${OLLAMA_FALLBACK_TOOL_MODEL:-qwen2.5:latest}
+      MONGODB_URI: "mongodb://${MONGODB_ROOT_USERNAME:-agentic}:${MONGODB_ROOT_PASSWORD:-change-this-local-password}@mongodb:27017/${MONGODB_DATABASE:-agentic_monitor}?authSource=admin"
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-agentic_monitor}
     ports:
       - "127.0.0.1:${AGENTIC_BACKEND_HEALTH_PORT:-8081}:8081"
+      - "127.0.0.1:${AGENTIC_BACKEND_API_PORT:-8082}:8082"
       - "127.0.0.1:${TECHNICAL_LEAD_HEALTH_PORT:-8101}:8101"
       - "127.0.0.1:${SYSTEM_ENGINEER_HEALTH_PORT:-8102}:8102"
       - "127.0.0.1:${NETWORK_ENGINEER_HEALTH_PORT:-8103}:8103"
@@ -305,6 +335,8 @@ services:
         condition: service_healthy
       mcp-server:
         condition: service_started
+      mongodb:
+        condition: service_healthy
     networks:
       - monitoring-net
     healthcheck:
@@ -326,6 +358,8 @@ services:
       dockerfile: Dockerfile
     container_name: agentic-system-dashboard
     environment:
+      AGENTIC_BACKEND_URL: http://agentic-backend:8082
+      AGENTIC_BACKEND_PUBLIC_URL: http://localhost:${AGENTIC_BACKEND_API_PORT:-8082}
       OPENSEARCH_URL: http://opensearch:9200
       QDRANT_URL: http://qdrant:6333
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
@@ -333,8 +367,6 @@ services:
       MCP_PORT: 8000
       XMPP_HOST: xmpp
       XMPP_PORT: 5222
-      INCIDENT_INDEX_PREFIX: ${INCIDENT_INDEX_PREFIX:-agentic-incidents}
-      AGENT_EVENT_INDEX_PREFIX: ${AGENT_EVENT_INDEX_PREFIX:-agentic-agent-events}
       DASHBOARD_REQUEST_TIMEOUT_SECONDS: ${DASHBOARD_REQUEST_TIMEOUT_SECONDS:-2.5}
     ports:
       - "127.0.0.1:${AGENTIC_DASHBOARD_PORT:-5050}:5050"
@@ -408,5 +440,6 @@ volumes:
   opensearch-data:
   qdrant-data:
   open-webui-data:
+  mongodb-data:
   xmpp-data:
   xmpp-certs:
