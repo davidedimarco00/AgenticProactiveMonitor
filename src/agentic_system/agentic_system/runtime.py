@@ -7,6 +7,7 @@ from typing import Any
 from .agents.base import BaseAgent
 from .agents.factory import build_agents
 from .agents.roles import SystemEngineerAgent, TechnicalLeadAgent
+from .anomaly_watcher import AnomalyObservation, OpenSearchAnomalyWatcher
 from .communication import Performative
 from .config import RuntimeConfig
 
@@ -27,7 +28,16 @@ class AgentRuntime:
         self.communication_probe: dict[str, Any] | None = None
         self.team_communication_ok = False
         self.unreachable_specialists: list[str] = []
+        self.anomalies_received = 0
+        self.last_anomaly: AnomalyObservation | None = None
         self._health_probe_task: asyncio.Task[None] | None = None
+        self._anomaly_watcher_task: asyncio.Task[None] | None = None
+        self.anomaly_watcher = OpenSearchAnomalyWatcher(
+            opensearch_url=config.opensearch_url,
+            on_anomaly=self._on_anomaly,
+            poll_interval_seconds=config.anomaly_watch_poll_seconds,
+            lookback_seconds=config.anomaly_watch_lookback_seconds,
+        )
 
     async def start(self) -> None:
         LOGGER.info("Starting %d SPADE-LLM agents", len(self.agents))
@@ -65,7 +75,44 @@ class AgentRuntime:
             self._health_probe_loop(),
             name="agent-xmpp-health-probe",
         )
+        self._anomaly_watcher_task = asyncio.create_task(
+            self.anomaly_watcher.run(),
+            name="opensearch-anomaly-watcher",
+        )
         LOGGER.info("Inter-agent XMPP communication probe passed for all five agents")
+        LOGGER.info("OpenSearch anomaly watcher attached to the agentic runtime")
+
+    async def _on_anomaly(self, observation: AnomalyObservation) -> None:
+        """Accept a newly observed anomaly into the agentic runtime.
+
+        For this first step the runtime only records that the anomaly entered the
+        system. The next workflow step will persist the incident and dispatch it to
+        the Technical Lead.
+        """
+
+        self.anomalies_received += 1
+        self.last_anomaly = observation
+        LOGGER.warning(
+            "OpenSearch anomaly entered agentic runtime: result=%s detector=%s grade=%.3f confidence=%.3f",
+            observation.result_id,
+            observation.detector_id,
+            observation.anomaly_grade,
+            observation.confidence,
+        )
+
+    def anomaly_watch_snapshot(self) -> dict[str, Any]:
+        return {
+            "running": self.anomaly_watcher.running,
+            "opensearch_url": self.config.opensearch_url,
+            "poll_interval_seconds": self.config.anomaly_watch_poll_seconds,
+            "lookback_seconds": self.config.anomaly_watch_lookback_seconds,
+            "poll_count": self.anomaly_watcher.poll_count,
+            "anomalies_received": self.anomalies_received,
+            "last_error": self.anomaly_watcher.last_error,
+            "last_anomaly": (
+                self.last_anomaly.to_dict() if self.last_anomaly is not None else None
+            ),
+        }
 
     def _technical_lead(self) -> TechnicalLeadAgent:
         agent = next(
@@ -206,6 +253,14 @@ class AgentRuntime:
             return
 
     async def stop(self) -> None:
+        if self._anomaly_watcher_task is not None:
+            self.anomaly_watcher.stop()
+            try:
+                await self._anomaly_watcher_task
+            except asyncio.CancelledError:
+                pass
+            self._anomaly_watcher_task = None
+
         if self._health_probe_task is not None:
             self._health_probe_task.cancel()
             try:
