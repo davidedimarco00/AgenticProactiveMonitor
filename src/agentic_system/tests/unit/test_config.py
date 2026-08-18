@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_system.config import _env_bool, _load_yaml
+from agentic_system.config.settings import _env_bool, _load_yaml
 
 
 def test_env_bool_accepts_enabled_values(monkeypatch: pytest.MonkeyPatch) -> None:
