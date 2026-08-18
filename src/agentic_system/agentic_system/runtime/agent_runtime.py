@@ -19,7 +19,7 @@ from ..infrastructure.opensearch import AnomalyObservation, OpenSearchAnomalyWat
 
 LOGGER = logging.getLogger("agentic_system.runtime")
 HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
-HEALTH_PROBE_INTERVAL_SECONDS = 5.0
+HEALTH_PROBE_INTERVAL_SECONDS = 30.0
 HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
 ANOMALY_QUEUE_MAXSIZE = 256
 AnomalyHandler = Callable[[AnomalyObservation], Awaitable[object]]
