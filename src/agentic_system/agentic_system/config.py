@@ -35,6 +35,9 @@ class RuntimeConfig:
     xmpp_port: int
     xmpp_auto_register: bool
     mcp_url: str
+    opensearch_url: str
+    anomaly_watch_poll_seconds: float
+    anomaly_watch_lookback_seconds: int
     ollama_url: str
     reasoning_model: str
     tool_model: str
@@ -142,6 +145,13 @@ def load_runtime_config() -> RuntimeConfig:
         )
 
     mcp_url = os.getenv("MCP_URL", "http://mcp-server:8000/mcp").strip()
+    opensearch_url = os.getenv("OPENSEARCH_URL", "http://opensearch:9200").strip()
+    anomaly_watch_poll_seconds = float(
+        os.getenv("ANOMALY_WATCH_POLL_SECONDS", "5")
+    )
+    anomaly_watch_lookback_seconds = int(
+        os.getenv("ANOMALY_WATCH_LOOKBACK_SECONDS", "300")
+    )
     ollama_url = os.getenv(
         "OLLAMA_URL", "http://host.docker.internal:11434"
     ).strip()
@@ -163,6 +173,7 @@ def load_runtime_config() -> RuntimeConfig:
 
     required_values = {
         "MCP_URL": mcp_url,
+        "OPENSEARCH_URL": opensearch_url,
         "OLLAMA_URL": ollama_url,
         "OLLAMA_REASONING_MODEL": reasoning_model,
         "OLLAMA_TOOL_MODEL": tool_model,
@@ -175,6 +186,11 @@ def load_runtime_config() -> RuntimeConfig:
         if not value:
             raise RuntimeError(f"{name} cannot be empty")
 
+    if anomaly_watch_poll_seconds <= 0:
+        raise RuntimeError("ANOMALY_WATCH_POLL_SECONDS must be greater than zero")
+    if anomaly_watch_lookback_seconds <= 0:
+        raise RuntimeError("ANOMALY_WATCH_LOOKBACK_SECONDS must be greater than zero")
+
     return RuntimeConfig(
         agents=tuple(agents),
         xmpp_domain=xmpp_domain,
@@ -182,6 +198,9 @@ def load_runtime_config() -> RuntimeConfig:
         xmpp_port=int(os.getenv("XMPP_PORT", "5222")),
         xmpp_auto_register=_env_bool("XMPP_AUTO_REGISTER", True),
         mcp_url=mcp_url,
+        opensearch_url=opensearch_url,
+        anomaly_watch_poll_seconds=anomaly_watch_poll_seconds,
+        anomaly_watch_lookback_seconds=anomaly_watch_lookback_seconds,
         ollama_url=ollama_url,
         reasoning_model=reasoning_model,
         tool_model=tool_model,
