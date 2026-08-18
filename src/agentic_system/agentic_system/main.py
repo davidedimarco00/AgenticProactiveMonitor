@@ -98,6 +98,22 @@ def _install_signal_handlers(stop_event: asyncio.Event) -> None:
             )
 
 
+async def _wait_for_api_server(
+    api_server: uvicorn.Server,
+    api_task: asyncio.Task[None],
+    *,
+    timeout_seconds: float = 10.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not api_server.started:
+        if api_task.done():
+            exc = api_task.exception()
+            raise RuntimeError("FastAPI server stopped during startup") from exc
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("FastAPI server did not become ready in time")
+        await asyncio.sleep(0.05)
+
+
 async def _run_backend() -> None:
     config = load_runtime_config()
     _log_runtime(config)
@@ -150,6 +166,7 @@ async def _run_backend() -> None:
             )
         )
         api_task = asyncio.create_task(api_server.serve(), name="agentic-fastapi")
+        await _wait_for_api_server(api_server, api_task)
 
         _set_health(
             status="ok",
