@@ -1,1 +1,3 @@
-"""Application-facing contracts for external adapters."""
+from .incident_repository import IncidentRepositoryPort
+
+__all__ = ["IncidentRepositoryPort"]
