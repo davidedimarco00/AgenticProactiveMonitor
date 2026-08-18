@@ -12,8 +12,10 @@ import spade
 import uvicorn
 
 from .api import create_api_app
+from .application.incidents.workflow import IncidentWorkflow
 from .config import RuntimeConfig, load_runtime_config
-from .incident_repository import IncidentRepository
+from .domain.incidents import IncidentCorrelationPolicy
+from .infrastructure.mongodb import IncidentRepository
 from .runtime import AgentRuntime
 
 
@@ -65,6 +67,10 @@ def _log_runtime(config: RuntimeConfig) -> None:
         "Anomaly watcher: poll=%.1fs lookback=%ss",
         config.anomaly_watch_poll_seconds,
         config.anomaly_watch_lookback_seconds,
+    )
+    LOGGER.info(
+        "Incident correlation window: %ss",
+        config.incident_correlation_window_seconds,
     )
     LOGGER.info("Ollama endpoint: %s", config.ollama_url)
     LOGGER.info("Reasoning model: ollama/%s", config.reasoning_model)
@@ -125,8 +131,15 @@ async def _run_backend() -> None:
     _log_runtime(config)
 
     health_server, health_thread = _start_health_server(config)
-    runtime = AgentRuntime(config)
     repository = IncidentRepository(config.mongodb_uri, config.mongodb_database)
+    correlation_policy = IncidentCorrelationPolicy(
+        window_seconds=config.incident_correlation_window_seconds
+    )
+    incident_workflow = IncidentWorkflow(repository, correlation_policy)
+    runtime = AgentRuntime(
+        config,
+        anomaly_handler=incident_workflow.handle_anomaly,
+    )
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
 
