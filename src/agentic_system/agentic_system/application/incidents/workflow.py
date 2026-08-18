@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+from typing import Any
 
 from ...domain.anomalies import AnomalyObservation
 from ...domain.incidents import IncidentCorrelationPolicy
@@ -23,6 +24,16 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _detector_display_name(
+    detector_context: dict[str, Any] | None,
+    detector_id: str,
+) -> str:
+    name = str((detector_context or {}).get("name") or "").strip()
+    if name and name.lower() != "unknown":
+        return name
+    return f"single-entity-detector:{detector_id}"
+
+
 class IncidentWorkflow:
     """Create, correlate and update the lifecycle of persisted incidents."""
 
@@ -40,7 +51,10 @@ class IncidentWorkflow:
     async def handle_anomaly(
         self,
         observation: AnomalyObservation,
+        *,
+        detector_context: dict[str, Any] | None = None,
     ) -> IncidentWorkflowResult:
+        detector_name = _detector_display_name(detector_context, observation.detector_id)
         existing = await self.repository.find_active_incident_by_detector(
             observation.detector_id
         )
@@ -53,12 +67,14 @@ class IncidentWorkflow:
             updated = await self.repository.update_incident(
                 incident_id,
                 {
+                    "entity": detector_name,
                     "anomaly": {
                         "detector_id": observation.detector_id,
+                        "detector_name": detector_name,
                         "anomaly_type": "opensearch_anomaly",
                         "grade": observation.anomaly_grade,
                         "confidence": observation.confidence,
-                    }
+                    },
                 },
             )
             if updated is None:
@@ -81,8 +97,9 @@ class IncidentWorkflow:
             self.correlated_count += 1
             self.last_incident_id = incident_id
             LOGGER.info(
-                "Correlated anomaly result=%s detector=%s with incident=%s",
+                "Correlated anomaly result=%s detector=%s (%s) with incident=%s",
                 observation.result_id,
+                detector_name,
                 observation.detector_id,
                 incident_id,
             )
@@ -97,7 +114,7 @@ class IncidentWorkflow:
             {
                 "status": "NEW",
                 "severity": "MEDIUM",
-                "entity": f"single-entity-detector:{observation.detector_id}",
+                "entity": detector_name,
                 "service": "unknown",
                 "takeover_reason": "OpenSearch SINGLE_ENTITY detector reported an anomaly.",
                 "takeover_factors": [
@@ -106,6 +123,7 @@ class IncidentWorkflow:
                 ],
                 "anomaly": {
                     "detector_id": observation.detector_id,
+                    "detector_name": detector_name,
                     "anomaly_type": "opensearch_anomaly",
                     "grade": observation.anomaly_grade,
                     "confidence": observation.confidence,
@@ -127,9 +145,10 @@ class IncidentWorkflow:
         self.created_count += 1
         self.last_incident_id = incident_id
         LOGGER.warning(
-            "Created incident=%s from anomaly result=%s detector=%s",
+            "Created incident=%s from anomaly result=%s detector=%s (%s)",
             incident_id,
             observation.result_id,
+            detector_name,
             observation.detector_id,
         )
         return IncidentWorkflowResult(
