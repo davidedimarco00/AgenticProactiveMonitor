@@ -1,15 +1,18 @@
 import os
 import socket
-import uuid
-from copy import deepcopy
 from datetime import datetime, timezone
+from io import BytesIO
 from typing import Any
 
 import requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 
 
 APP_NAME = "Agentic Monitoring Operator Console"
+AGENTIC_BACKEND_URL = os.getenv("AGENTIC_BACKEND_URL", "http://agentic-backend:8082").rstrip("/")
+AGENTIC_BACKEND_PUBLIC_URL = os.getenv(
+    "AGENTIC_BACKEND_PUBLIC_URL", "http://localhost:8082"
+).rstrip("/")
 OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://opensearch:9200").rstrip("/")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333").rstrip("/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").rstrip("/")
@@ -17,8 +20,6 @@ MCP_HOST = os.getenv("MCP_HOST", "mcp-server")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 XMPP_HOST = os.getenv("XMPP_HOST", "xmpp")
 XMPP_PORT = int(os.getenv("XMPP_PORT", "5222"))
-INCIDENT_INDEX_PREFIX = os.getenv("INCIDENT_INDEX_PREFIX", "agentic-incidents")
-AGENT_EVENT_INDEX_PREFIX = os.getenv("AGENT_EVENT_INDEX_PREFIX", "agentic-agent-events")
 REQUEST_TIMEOUT = float(os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "2.5"))
 
 ACTIVE_STATUSES = {
@@ -28,39 +29,44 @@ ACTIVE_STATUSES = {
     "DIAGNOSED",
     "OPERATOR_ACTION_REQUIRED",
 }
-
 WORKING_STATUSES = {"TAKEN_IN_CHARGE", "UNDER_ANALYSIS"}
 
+# The keys are retained for compatibility with the existing dashboard layout.
 AGENT_TEAM = [
     {
         "key": "coordinator",
-        "name": "Coordinator",
-        "jid": "coordinator@xmpp",
-        "role": "Incident orchestration and task coordination",
+        "name": "Technical Lead",
+        "jid": "technical-lead@xmpp",
+        "backend_role": "technical_lead",
+        "role": "Incident triage, coordination and critical review",
     },
     {
         "key": "evidence",
-        "name": "Evidence",
-        "jid": "evidence@xmpp",
-        "role": "Telemetry, log and tool evidence collection",
-    },
-    {
-        "key": "reasoning",
-        "name": "Reasoning",
-        "jid": "reasoning@xmpp",
-        "role": "ReAct diagnosis and hypothesis refinement",
+        "name": "System Engineer",
+        "jid": "system-engineer@xmpp",
+        "backend_role": "system_engineer",
+        "role": "Linux, containers, host resources and runtime diagnostics",
     },
     {
         "key": "critic",
-        "name": "Critic",
-        "jid": "critic@xmpp",
-        "role": "Diagnosis validation and contradiction checks",
+        "name": "Network Engineer",
+        "jid": "network-engineer@xmpp",
+        "backend_role": "network_engineer",
+        "role": "Connectivity, latency, network paths and traffic analysis",
+    },
+    {
+        "key": "reasoning",
+        "name": "Application Engineer",
+        "jid": "application-engineer@xmpp",
+        "backend_role": "application_engineer",
+        "role": "Service health, application behaviour and dependency diagnosis",
     },
     {
         "key": "remediation",
-        "name": "Remediation",
-        "jid": "remediation@xmpp",
-        "role": "Operator remediation guidance",
+        "name": "Software Developer",
+        "jid": "software-developer@xmpp",
+        "backend_role": "software_developer",
+        "role": "Code behaviour, defects and application-level corrective guidance",
     },
 ]
 
@@ -85,142 +91,45 @@ def parse_timestamp(value: str | None) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def monthly_index(prefix: str, value: str | None) -> str:
-    stamp = parse_timestamp(value)
-    return f"{prefix}-{stamp:%Y.%m}"
-
-
-def index_for_timestamp(value: str | None) -> str:
-    return monthly_index(INCIDENT_INDEX_PREFIX, value)
-
-
-def opensearch_request(method: str, path: str, **kwargs: Any) -> requests.Response:
+def backend_request(method: str, path: str, **kwargs: Any) -> requests.Response:
     return http.request(
         method,
-        f"{OPENSEARCH_URL}{path}",
+        f"{AGENTIC_BACKEND_URL}{path}",
         timeout=REQUEST_TIMEOUT,
         **kwargs,
     )
 
 
-def ensure_incident_template() -> None:
-    template = {
-        "index_patterns": [f"{INCIDENT_INDEX_PREFIX}-*"],
-        "priority": 250,
-        "template": {
-            "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-            "mappings": {
-                "dynamic": True,
-                "properties": {
-                    "incident_id": {"type": "keyword"},
-                    "created_at": {"type": "date"},
-                    "updated_at": {"type": "date"},
-                    "status": {"type": "keyword"},
-                    "severity": {"type": "keyword"},
-                    "entity": {"type": "keyword"},
-                    "service": {"type": "keyword"},
-                    "machine_role": {"type": "keyword"},
-                    "takeover_reason": {"type": "text"},
-                    "diagnosis": {
-                        "properties": {
-                            "summary": {"type": "text"},
-                            "confidence": {"type": "float"},
-                        }
-                    },
-                    "anomaly": {
-                        "properties": {
-                            "detector_id": {"type": "keyword"},
-                            "metric": {"type": "keyword"},
-                            "grade": {"type": "float"},
-                            "confidence": {"type": "float"},
-                            "observed_value": {"type": "float"},
-                            "baseline_value": {"type": "float"},
-                        }
-                    },
-                },
-            },
-        },
-    }
+def search_incidents(
+    limit: int = 100,
+    *,
+    status: str | None = None,
+    query: str | None = None,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"limit": min(max(limit, 1), 500)}
+    if status:
+        params["status"] = status
+    if query:
+        params["q"] = query
     try:
-        response = opensearch_request(
-            "PUT",
-            "/_index_template/agentic-dashboard-incidents",
-            json=template,
-        )
+        response = backend_request("GET", "/api/v1/incidents", params=params)
         response.raise_for_status()
-    except requests.RequestException:
-        app.logger.warning("OpenSearch incident template could not be ensured")
+        return response.json().get("incidents", [])
+    except (requests.RequestException, ValueError):
+        app.logger.warning("Could not load incidents from the agentic backend API")
+        return []
 
 
-def ensure_agent_event_template() -> None:
-    template = {
-        "index_patterns": [f"{AGENT_EVENT_INDEX_PREFIX}-*"],
-        "priority": 255,
-        "template": {
-            "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-            "mappings": {
-                "dynamic": True,
-                "properties": {
-                    "event_id": {"type": "keyword"},
-                    "timestamp": {"type": "date"},
-                    "agent_jid": {"type": "keyword"},
-                    "agent_name": {"type": "keyword"},
-                    "action": {"type": "text"},
-                    "called_by": {"type": "keyword"},
-                    "reason": {"type": "text"},
-                    "incident_id": {"type": "keyword"},
-                    "tool": {"type": "keyword"},
-                    "status": {"type": "keyword"},
-                    "outcome": {"type": "text"},
-                },
-            },
-        },
-    }
+def get_incident(incident_id: str) -> dict[str, Any] | None:
     try:
-        response = opensearch_request(
-            "PUT",
-            "/_index_template/agentic-dashboard-agent-events",
-            json=template,
-        )
+        response = backend_request("GET", f"/api/v1/incidents/{incident_id}")
+        if response.status_code == 404:
+            return None
         response.raise_for_status()
-    except requests.RequestException:
-        app.logger.warning("OpenSearch agent-event template could not be ensured")
-
-
-def normalize_incident(payload: dict[str, Any], incident_id: str | None = None) -> dict[str, Any]:
-    now = utc_now()
-    normalized = deepcopy(payload)
-    normalized["incident_id"] = incident_id or normalized.get("incident_id") or (
-        f"INC-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6].upper()}"
-    )
-    normalized.setdefault("created_at", now)
-    normalized["updated_at"] = now
-    normalized.setdefault("status", "NEW")
-    normalized.setdefault("severity", "MEDIUM")
-    normalized.setdefault("entity", normalized.get("service", "unknown"))
-    normalized.setdefault("service", normalized.get("entity", "unknown"))
-    normalized.setdefault("machine_role", "unknown")
-    normalized.setdefault("takeover_reason", "")
-    normalized.setdefault("anomaly", {})
-    normalized.setdefault("diagnosis", {})
-    normalized.setdefault("remediation", {})
-    normalized.setdefault("timeline", [])
-    normalized.setdefault("agentic", {})
-    normalized.setdefault("agent_events", [])
-
-    normalized["status"] = str(normalized["status"]).upper()
-    normalized["severity"] = str(normalized["severity"]).upper()
-    return normalized
-
-
-def deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    result = deepcopy(base)
-    for key, value in patch.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
+        return response.json()
+    except (requests.RequestException, ValueError):
+        app.logger.warning("Could not load incident %s from the backend API", incident_id)
+        return None
 
 
 def agent_definition(identity: str | None) -> dict[str, Any] | None:
@@ -228,172 +137,30 @@ def agent_definition(identity: str | None) -> dict[str, Any] | None:
         return None
     normalized = str(identity).strip().lower()
     for definition in AGENT_TEAM:
-        if normalized in {definition["key"].lower(), definition["jid"].lower()}:
+        aliases = {
+            definition["key"].lower(),
+            definition["jid"].lower(),
+            definition["backend_role"].lower(),
+            definition["jid"].split("@", 1)[0].replace("-", "_").lower(),
+        }
+        if normalized in aliases:
             return definition
     return None
 
 
-def normalize_agent_event(
-    payload: dict[str, Any], incident_id: str | None = None
-) -> dict[str, Any]:
-    normalized = deepcopy(payload)
-    identity = normalized.get("agent_jid") or normalized.get("agent")
-    definition = agent_definition(str(identity) if identity else None)
-
-    if definition is not None:
-        jid = definition["jid"]
-    elif identity:
-        jid = str(identity).strip().lower()
-    else:
-        raise ValueError("agent_jid is required")
-
-    timestamp = normalized.get("timestamp") or utc_now()
-    normalized["event_id"] = normalized.get("event_id") or (
-        f"AEV-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8].upper()}"
-    )
-    normalized["timestamp"] = timestamp
-    normalized["agent_jid"] = jid
-    normalized["agent_name"] = normalized.get("agent_name") or (
-        definition["name"] if definition else jid.split("@", 1)[0].replace("-", " ").title()
-    )
-    normalized["action"] = normalized.get("action") or normalized.get("event_type") or "Agent activity"
-    normalized["called_by"] = normalized.get("called_by") or "system"
-    normalized["reason"] = normalized.get("reason") or ""
-    normalized["incident_id"] = normalized.get("incident_id") or incident_id
-    normalized["tool"] = normalized.get("tool") or ""
-    normalized["status"] = str(normalized.get("status") or "COMPLETED").upper()
-    normalized["outcome"] = normalized.get("outcome") or ""
-    return normalized
-
-
-def search_incidents(limit: int = 100) -> list[dict[str, Any]]:
-    body = {
-        "size": min(max(limit, 1), 500),
-        "sort": [{"updated_at": {"order": "desc", "unmapped_type": "date"}}],
-        "query": {"match_all": {}},
-    }
+def search_agent_events(agent_identity: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    definition = agent_definition(agent_identity)
+    params: dict[str, Any] = {"limit": min(max(limit, 1), 500)}
+    if definition:
+        params["agent_role"] = definition["backend_role"]
+    elif agent_identity:
+        params["agent_role"] = agent_identity
     try:
-        response = opensearch_request(
-            "POST",
-            f"/{INCIDENT_INDEX_PREFIX}-*/_search?ignore_unavailable=true&allow_no_indices=true",
-            json=body,
-        )
-        if response.status_code == 404:
-            return []
+        response = backend_request("GET", "/api/v1/agent-events", params=params)
         response.raise_for_status()
-        hits = response.json().get("hits", {}).get("hits", [])
-        incidents = []
-        for hit in hits:
-            source = hit.get("_source", {})
-            source["_index"] = hit.get("_index")
-            incidents.append(source)
-        return incidents
-    except requests.RequestException:
-        app.logger.warning("Could not load incidents from OpenSearch")
+        return response.json().get("events", [])
+    except (requests.RequestException, ValueError):
         return []
-
-
-def search_agent_events(
-    agent_jid: str | None = None, limit: int = 100
-) -> list[dict[str, Any]]:
-    query: dict[str, Any] = {"match_all": {}}
-    if agent_jid:
-        query = {"term": {"agent_jid": agent_jid.lower()}}
-
-    body = {
-        "size": min(max(limit, 1), 500),
-        "sort": [{"timestamp": {"order": "desc", "unmapped_type": "date"}}],
-        "query": query,
-    }
-    try:
-        response = opensearch_request(
-            "POST",
-            f"/{AGENT_EVENT_INDEX_PREFIX}-*/_search?ignore_unavailable=true&allow_no_indices=true",
-            json=body,
-        )
-        if response.status_code == 404:
-            return []
-        response.raise_for_status()
-        hits = response.json().get("hits", {}).get("hits", [])
-        events = []
-        for hit in hits:
-            source = hit.get("_source", {})
-            source["_index"] = hit.get("_index")
-            events.append(source)
-        return events
-    except requests.RequestException:
-        app.logger.warning("Could not load agent events from OpenSearch")
-        return []
-
-
-def get_incident(incident_id: str) -> dict[str, Any] | None:
-    body = {
-        "size": 1,
-        "query": {"term": {"incident_id": incident_id}},
-        "sort": [{"updated_at": {"order": "desc", "unmapped_type": "date"}}],
-    }
-    try:
-        response = opensearch_request(
-            "POST",
-            f"/{INCIDENT_INDEX_PREFIX}-*/_search?ignore_unavailable=true&allow_no_indices=true",
-            json=body,
-        )
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        hits = response.json().get("hits", {}).get("hits", [])
-        if not hits:
-            return None
-        source = hits[0].get("_source", {})
-        source["_index"] = hits[0].get("_index")
-        return source
-    except requests.RequestException:
-        return None
-
-
-def save_incident(incident: dict[str, Any]) -> dict[str, Any]:
-    clean = {k: v for k, v in incident.items() if not k.startswith("_")}
-    index = incident.get("_index") or index_for_timestamp(clean.get("created_at"))
-    response = opensearch_request(
-        "PUT",
-        f"/{index}/_doc/{clean['incident_id']}?refresh=true",
-        json=clean,
-    )
-    response.raise_for_status()
-    clean["_index"] = index
-    return clean
-
-
-def save_agent_event(event: dict[str, Any]) -> dict[str, Any]:
-    clean = {k: v for k, v in event.items() if not k.startswith("_")}
-    index = event.get("_index") or monthly_index(
-        AGENT_EVENT_INDEX_PREFIX, clean.get("timestamp")
-    )
-    response = opensearch_request(
-        "PUT",
-        f"/{index}/_doc/{clean['event_id']}?refresh=true",
-        json=clean,
-    )
-    response.raise_for_status()
-    clean["_index"] = index
-    return clean
-
-
-def persist_embedded_agent_events(incident: dict[str, Any]) -> int:
-    saved_count = 0
-    for payload in incident.get("agent_events", []) or []:
-        if not isinstance(payload, dict):
-            continue
-        try:
-            event = normalize_agent_event(payload, incident.get("incident_id"))
-            save_agent_event(event)
-            saved_count += 1
-        except (ValueError, requests.RequestException):
-            app.logger.warning(
-                "Embedded agent event could not be persisted for incident %s",
-                incident.get("incident_id"),
-            )
-    return saved_count
 
 
 def tcp_check(host: str, port: int) -> tuple[bool, str]:
@@ -414,19 +181,40 @@ def http_check(
         if "application/json" in response.headers.get("content-type", ""):
             data = response.json()
         return ok, f"HTTP {response.status_code}", data
-    except requests.RequestException as exc:
+    except (requests.RequestException, ValueError) as exc:
         return False, str(exc), None
 
 
 def system_health() -> list[dict[str, Any]]:
     services: list[dict[str, Any]] = []
 
+    backend_ok, backend_detail, backend_data = http_check(f"{AGENTIC_BACKEND_URL}/health")
+    services.append(
+        {
+            "name": "Agentic Backend API",
+            "role": "Incidents, diagnoses, remediation, reports and operator API",
+            "status": "ONLINE" if backend_ok else "OFFLINE",
+            "detail": backend_detail,
+            "critical": True,
+        }
+    )
+    mongo_ok = bool((backend_data or {}).get("mongodb") == "reachable")
+    services.append(
+        {
+            "name": "MongoDB",
+            "role": "Agentic incident and history persistence",
+            "status": "ONLINE" if mongo_ok else "OFFLINE",
+            "detail": "reachable through backend" if mongo_ok else "backend reports unavailable",
+            "critical": True,
+        }
+    )
+
     os_ok, os_detail, os_data = http_check(f"{OPENSEARCH_URL}/_cluster/health")
     cluster_status = (os_data or {}).get("status")
     services.append(
         {
             "name": "OpenSearch",
-            "role": "Anomalies, metrics, logs and incident history",
+            "role": "Metrics, logs and single-entity anomaly detection",
             "status": "ONLINE" if os_ok else "OFFLINE",
             "detail": f"cluster {cluster_status}" if cluster_status else os_detail,
             "critical": True,
@@ -471,7 +259,7 @@ def system_health() -> list[dict[str, Any]]:
     services.append(
         {
             "name": "Ollama",
-            "role": "Local LLM reasoning",
+            "role": "Local LLM reasoning and tool selection",
             "status": "ONLINE" if ollama_ok else "OFFLINE",
             "detail": f"{models} model(s) available" if ollama_ok else ollama_detail,
             "critical": True,
@@ -482,19 +270,11 @@ def system_health() -> list[dict[str, Any]]:
 
 
 def build_overview(incidents: list[dict[str, Any]]) -> dict[str, Any]:
-    active = [i for i in incidents if i.get("status", "").upper() in ACTIVE_STATUSES]
-    under_analysis = [
-        i for i in incidents if i.get("status", "").upper() == "UNDER_ANALYSIS"
-    ]
-    operator_action = [
-        i
-        for i in incidents
-        if i.get("status", "").upper() == "OPERATOR_ACTION_REQUIRED"
-    ]
-    resolved = [
-        i for i in incidents if i.get("status", "").upper() in {"RESOLVED", "CLOSED"}
-    ]
-    critical = [i for i in active if i.get("severity", "").upper() == "CRITICAL"]
+    active = [i for i in incidents if str(i.get("status", "")).upper() in ACTIVE_STATUSES]
+    under_analysis = [i for i in incidents if str(i.get("status", "")).upper() == "UNDER_ANALYSIS"]
+    operator_action = [i for i in incidents if str(i.get("status", "")).upper() == "OPERATOR_ACTION_REQUIRED"]
+    resolved = [i for i in incidents if str(i.get("status", "")).upper() in {"RESOLVED", "CLOSED"}]
+    critical = [i for i in active if str(i.get("severity", "")).upper() == "CRITICAL"]
     return {
         "total": len(incidents),
         "active": len(active),
@@ -522,11 +302,15 @@ def build_agent_team(incidents: list[dict[str, Any]]) -> dict[str, Any]:
             active_agents.add(str(active_agent).lower())
 
     if working_incidents and not active_agents:
-        active_agents.add("coordinator@xmpp")
+        active_agents.add("technical_lead")
 
     members = []
     for definition in AGENT_TEAM:
-        aliases = {definition["key"].lower(), definition["jid"].lower()}
+        aliases = {
+            definition["key"].lower(),
+            definition["jid"].lower(),
+            definition["backend_role"].lower(),
+        }
         working = bool(aliases.intersection(active_agents))
         members.append({**definition, "activity": "WORKING" if working else "IDLE"})
 
@@ -568,43 +352,21 @@ def dashboard() -> str:
         incidents=incidents[:100],
         services=health,
         team=build_agent_team(incidents),
-        overall_online=all(
-            s["status"] == "ONLINE" for s in health if s["critical"]
-        ),
+        overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
         now=utc_now(),
     )
 
 
 @app.route("/incidents")
 def incidents_page() -> str:
-    incidents = search_incidents(300)
-    status = request.args.get("status", "").strip().upper()
-    query = request.args.get("q", "").strip().lower()
-
-    if status:
-        incidents = [i for i in incidents if i.get("status", "").upper() == status]
-    if query:
-        incidents = [
-            i
-            for i in incidents
-            if query
-            in " ".join(
-                [
-                    str(i.get("incident_id", "")),
-                    str(i.get("entity", "")),
-                    str(i.get("service", "")),
-                    str(i.get("takeover_reason", "")),
-                    str(i.get("diagnosis", {}).get("summary", "")),
-                    str(i.get("remediation", {}).get("summary", "")),
-                ]
-            ).lower()
-        ]
-
+    status = request.args.get("status", "").strip().upper() or None
+    query = request.args.get("q", "").strip() or None
+    incidents = search_incidents(300, status=status, query=query)
     return render_template(
         "incidents.html",
         app_name=APP_NAME,
         incidents=incidents,
-        selected_status=status,
+        selected_status=status or "",
         query=request.args.get("q", ""),
     )
 
@@ -613,12 +375,25 @@ def incidents_page() -> str:
 def incident_detail(incident_id: str):
     incident = get_incident(incident_id)
     if incident is None:
-        return render_template(
-            "not_found.html", app_name=APP_NAME, incident_id=incident_id
-        ), 404
-    return render_template(
-        "incident_detail.html", app_name=APP_NAME, incident=incident
-    )
+        return render_template("not_found.html", app_name=APP_NAME, incident_id=incident_id), 404
+    return render_template("incident_detail.html", app_name=APP_NAME, incident=incident)
+
+
+@app.get("/incidents/<incident_id>/report.pdf")
+def incident_report(incident_id: str):
+    try:
+        response = backend_request("GET", f"/api/v1/incidents/{incident_id}/report")
+        if response.status_code == 404:
+            return render_template("not_found.html", app_name=APP_NAME, incident_id=incident_id), 404
+        response.raise_for_status()
+        return send_file(
+            BytesIO(response.content),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"{incident_id}-incident-report.pdf",
+        )
+    except requests.RequestException:
+        return jsonify({"error": "Incident report is temporarily unavailable"}), 503
 
 
 @app.route("/system")
@@ -630,10 +405,9 @@ def system_page() -> str:
         app_name=APP_NAME,
         services=health,
         team=build_agent_team(incidents),
-        overall_online=all(
-            s["status"] == "ONLINE" for s in health if s["critical"]
-        ),
+        overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
         now=utc_now(),
+        backend_docs_url=f"{AGENTIC_BACKEND_PUBLIC_URL}/docs",
     )
 
 
@@ -656,145 +430,64 @@ def api_system_health():
     return jsonify(
         {
             "generated_at": utc_now(),
-            "overall_online": all(
-                s["status"] == "ONLINE" for s in services if s["critical"]
-            ),
+            "overall_online": all(s["status"] == "ONLINE" for s in services if s["critical"]),
             "services": services,
         }
     )
 
 
-@app.route("/api/incidents", methods=["GET", "POST"])
+@app.get("/api/incidents")
 def api_incidents():
-    if request.method == "GET":
-        return jsonify(
-            {"incidents": search_incidents(int(request.args.get("limit", "100")))}
-        )
-
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict):
-        return jsonify({"error": "A JSON object is required"}), 400
-
-    incident = normalize_incident(payload)
-    try:
-        saved = save_incident(incident)
-        events_saved = persist_embedded_agent_events(saved)
-        response_payload = deepcopy(saved)
-        response_payload["_observability_events_saved"] = events_saved
-        return jsonify(response_payload), 201
-    except requests.RequestException as exc:
-        app.logger.exception("Incident could not be persisted")
-        return jsonify(
-            {"error": "OpenSearch persistence failed", "detail": str(exc)}
-        ), 503
+    status = request.args.get("status", "").strip() or None
+    query = request.args.get("q", "").strip() or None
+    limit = int(request.args.get("limit", "100"))
+    return jsonify({"incidents": search_incidents(limit, status=status, query=query)})
 
 
-@app.route("/api/incidents/<incident_id>", methods=["GET", "PATCH"])
+@app.get("/api/incidents/<incident_id>")
 def api_incident(incident_id: str):
     incident = get_incident(incident_id)
     if incident is None:
         return jsonify({"error": "Incident not found"}), 404
-
-    if request.method == "GET":
-        return jsonify(incident)
-
-    patch = request.get_json(silent=True)
-    if not isinstance(patch, dict):
-        return jsonify({"error": "A JSON object is required"}), 400
-
-    merged = deep_merge(incident, patch)
-    merged["incident_id"] = incident_id
-    merged["created_at"] = incident.get("created_at", merged.get("created_at"))
-    merged["updated_at"] = utc_now()
-    merged["status"] = str(merged.get("status", "NEW")).upper()
-    merged["severity"] = str(merged.get("severity", "MEDIUM")).upper()
-
-    try:
-        saved = save_incident(merged)
-        if "agent_events" in patch:
-            persist_embedded_agent_events(saved)
-        return jsonify(saved)
-    except requests.RequestException as exc:
-        app.logger.exception("Incident could not be updated")
-        return jsonify(
-            {"error": "OpenSearch persistence failed", "detail": str(exc)}
-        ), 503
+    return jsonify(incident)
 
 
-@app.route("/api/agent-events", methods=["GET", "POST"])
+@app.get("/api/agent-events")
 def api_agent_events():
-    if request.method == "GET":
-        agent_jid = request.args.get("agent_jid", "").strip().lower() or None
-        limit = int(request.args.get("limit", "100"))
-        return jsonify({"events": search_agent_events(agent_jid, limit)})
-
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict):
-        return jsonify({"error": "A JSON object is required"}), 400
-
-    try:
-        event = normalize_agent_event(payload)
-        saved = save_agent_event(event)
-        return jsonify(saved), 201
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except requests.RequestException as exc:
-        app.logger.exception("Agent event could not be persisted")
-        return jsonify(
-            {"error": "OpenSearch persistence failed", "detail": str(exc)}
-        ), 503
+    identity = request.args.get("agent_jid", "").strip() or request.args.get("agent_role", "").strip() or None
+    limit = int(request.args.get("limit", "100"))
+    return jsonify({"events": search_agent_events(identity, limit)})
 
 
 @app.get("/api/agents/<path:agent_jid>/activity")
 def api_agent_activity(agent_jid: str):
     identity = agent_jid.strip().lower()
     definition = agent_definition(identity)
-    canonical_jid = definition["jid"] if definition else identity
+    canonical = definition or {
+        "key": identity.split("@", 1)[0],
+        "name": identity.split("@", 1)[0].replace("-", " ").title(),
+        "jid": identity,
+        "backend_role": identity.split("@", 1)[0].replace("-", "_"),
+        "role": "Specialised agent",
+    }
 
     incidents = search_incidents(300)
     team = build_agent_team(incidents)
     member = next(
-        (
-            item
-            for item in team["members"]
-            if item["jid"].lower() == canonical_jid.lower()
-        ),
-        None,
+        (item for item in team["members"] if item["jid"].lower() == canonical["jid"].lower()),
+        {**canonical, "activity": "IDLE"},
     )
-
-    if member is None:
-        member = {
-            "key": canonical_jid.split("@", 1)[0],
-            "name": canonical_jid.split("@", 1)[0].replace("-", " ").title(),
-            "jid": canonical_jid,
-            "role": "Specialised agent",
-            "activity": "IDLE",
-        }
-
     limit = int(request.args.get("limit", "100"))
-    events = search_agent_events(canonical_jid, limit)
-    return jsonify(
-        {
-            "generated_at": utc_now(),
-            "agent": member,
-            "events": events,
-        }
-    )
+    events = search_agent_events(canonical["backend_role"], limit)
+    return jsonify({"generated_at": utc_now(), "agent": member, "events": events})
 
 
 @app.get("/health")
 def health():
-    try:
-        response = opensearch_request("GET", "/_cluster/health")
-        if response.ok:
-            return jsonify({"status": "ok", "opensearch": "reachable"})
-    except requests.RequestException:
-        pass
-    return jsonify({"status": "degraded", "opensearch": "unreachable"}), 503
-
-
-ensure_incident_template()
-ensure_agent_event_template()
+    ok, detail, data = http_check(f"{AGENTIC_BACKEND_URL}/health")
+    if ok:
+        return jsonify({"status": "ok", "backend": "reachable", "backend_health": data})
+    return jsonify({"status": "degraded", "backend": detail}), 503
 
 
 if __name__ == "__main__":
