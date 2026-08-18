@@ -15,6 +15,7 @@ from ..communication import AgentMessage, Performative, build_spade_message
 
 
 LOGGER = logging.getLogger("agentic_system.agents")
+AGENT_ACTIVITY_STATES = {"IDLE", "WORKING", "WAITING"}
 
 
 def _utc_now() -> str:
@@ -97,6 +98,10 @@ class BaseAgent(LLMAgent):
         self.display_name = display_name
         self.health_port = health_port
         self.lifecycle_state = "created"
+        self.activity_state = "IDLE"
+        self.activity_incident_id: str | None = None
+        self.activity_detail: str | None = None
+        self.activity_updated_at = _utc_now()
         self.started_at: str | None = None
         self.last_heartbeat_at: str | None = None
         self.messages_sent = 0
@@ -199,6 +204,21 @@ class BaseAgent(LLMAgent):
         if isinstance(exit_code, BaseException):
             raise exit_code
 
+    def set_activity(
+        self,
+        state: str,
+        *,
+        incident_id: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        normalized = state.strip().upper()
+        if normalized not in AGENT_ACTIVITY_STATES:
+            raise ValueError(f"Unsupported agent activity state: {state!r}")
+        self.activity_state = normalized
+        self.activity_incident_id = incident_id
+        self.activity_detail = detail
+        self.activity_updated_at = _utc_now()
+
     def mark_message_sent(self) -> None:
         self.messages_sent += 1
         self.last_message_at = _utc_now()
@@ -223,6 +243,7 @@ class BaseAgent(LLMAgent):
         self.lifecycle_state = "stopped"
         self.xmpp_connected = False
         self.communication_ok = False
+        self.set_activity("IDLE")
 
     def health_snapshot(self) -> dict[str, Any]:
         spade_alive = self.is_alive()
@@ -239,6 +260,10 @@ class BaseAgent(LLMAgent):
             "display_name": self.display_name,
             "jid": str(self.jid),
             "status": status,
+            "activity": self.activity_state,
+            "activity_incident_id": self.activity_incident_id,
+            "activity_detail": self.activity_detail,
+            "activity_updated_at": self.activity_updated_at,
             "spade_alive": spade_alive,
             "xmpp_connected": self.xmpp_connected,
             "communication_ok": self.communication_ok,
@@ -268,6 +293,10 @@ class BaseAgent(LLMAgent):
             "display_name": self.display_name,
             "jid": str(self.jid),
             "state": self.lifecycle_state,
+            "activity": self.activity_state,
+            "activity_incident_id": self.activity_incident_id,
+            "activity_detail": self.activity_detail,
+            "activity_updated_at": self.activity_updated_at,
             "framework": "SPADE-LLM",
             "llm_agent": True,
             "provider_model": self.provider.model,
