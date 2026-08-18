@@ -10,7 +10,7 @@ from spade.template import Template
 from spade_llm.mcp import MCPServerConfig
 from spade_llm.providers import LLMProvider
 
-from ...bdi import JasonBDIGateway
+from ...bdi import AgentSpeakBDIRuntime, BDITriageAssessment
 from ...communication import (
     AGENTIC_PROTOCOL,
     AgentMessage,
@@ -105,7 +105,7 @@ class TechnicalLeadAgent(BaseAgent):
                 self.agent._incident_inbox.task_done()
 
     class TriageBehaviour(CyclicBehaviour):
-        """Use BDI to start triage, Gemma to assess, then BDI to select a primary."""
+        """Run one BDI-led triage cycle without diagnosing or delegating yet."""
 
         async def run(self) -> None:
             try:
@@ -123,35 +123,35 @@ class TechnicalLeadAgent(BaseAgent):
                         "Technical Lead triage requires an incident in TAKEN_IN_CHARGE state"
                     )
 
-                triage_commitment = await self.agent._bdi_gateway.begin_triage(
-                    incident_id=assignment.incident_id,
-                    available_agents=pending.available_agents,
-                )
-                assessment = await self.agent._triage_reasoner.assess(
-                    assignment,
-                    detector_context=pending.detector_context,
-                    available_agents=pending.available_agents,
-                )
-                selection_commitment = (
-                    await self.agent._bdi_gateway.select_primary_investigator(
-                        incident_id=assignment.incident_id,
-                        probable_domain=assessment.probable_domain,
-                        recommended_agent=assessment.recommended_agent,
+                async def reason_for_triage() -> BDITriageAssessment:
+                    assessment = await self.agent._triage_reasoner.assess(
+                        assignment,
+                        detector_context=pending.detector_context,
                         available_agents=pending.available_agents,
                     )
+                    return BDITriageAssessment(
+                        probable_domain=assessment.probable_domain,
+                        recommended_agent=assessment.recommended_agent,
+                        confidence=assessment.confidence,
+                        rationale=assessment.rationale,
+                    )
+
+                deliberation = await self.agent._bdi_runtime.triage_incident(
+                    incident_id=assignment.incident_id,
+                    anomaly=assignment.anomaly,
+                    available_agents=pending.available_agents,
+                    triage_callback=reason_for_triage,
                 )
-                if selection_commitment.primary_investigator is None:
-                    raise RuntimeError("Jason BDI did not select a primary investigator")
 
                 decision = TechnicalLeadTriageDecision(
                     incident_id=assignment.incident_id,
-                    probable_domain=assessment.probable_domain,
-                    primary_investigator=selection_commitment.primary_investigator,
-                    confidence=assessment.confidence,
-                    rationale=assessment.rationale,
-                    bdi_goal=selection_commitment.goal,
-                    bdi_triage_intention=triage_commitment.intention,
-                    bdi_intention=selection_commitment.intention,
+                    probable_domain=deliberation.probable_domain,
+                    primary_investigator=deliberation.primary_investigator,
+                    confidence=deliberation.confidence,
+                    rationale=deliberation.rationale,
+                    bdi_goal=deliberation.goal,
+                    bdi_triage_intention=deliberation.triage_intention,
+                    bdi_intention=deliberation.selection_intention,
                 )
                 self.agent.triages_completed += 1
                 self.agent.last_triage_decision = decision
@@ -161,8 +161,9 @@ class TechnicalLeadAgent(BaseAgent):
                     pending.completed.set_result(decision)
 
                 LOGGER.warning(
-                    "Technical Lead BDI triage completed incident=%s goal=%s triage_intention=%s "
-                    "domain=%s primary=%s selection_intention=%s confidence=%.3f",
+                    "Technical Lead AgentSpeak triage completed incident=%s goal=%s "
+                    "triage_intention=%s domain=%s primary=%s selection_intention=%s "
+                    "confidence=%.3f",
                     decision.incident_id,
                     decision.bdi_goal,
                     decision.bdi_triage_intention,
@@ -189,10 +190,9 @@ class TechnicalLeadAgent(BaseAgent):
         provider: LLMProvider,
         mcp_servers: list[MCPServerConfig],
         interaction_memory_path: str,
-        jason_bdi_command: str,
-        jason_technical_lead_asl: str,
-        jason_bdi_timeout_seconds: float,
-        jason_bdi_max_concurrency: int,
+        agentspeak_technical_lead_asl: str,
+        agentspeak_action_timeout_seconds: float,
+        agentspeak_bdi_max_concurrency: int,
     ) -> None:
         super().__init__(
             jid,
@@ -214,11 +214,10 @@ class TechnicalLeadAgent(BaseAgent):
             maxsize=TRIAGE_INBOX_MAXSIZE
         )
         self._triage_reasoner = TechnicalLeadTriageReasoner(provider)
-        self._bdi_gateway = JasonBDIGateway(
-            command=jason_bdi_command,
-            technical_lead_asl=jason_technical_lead_asl,
-            timeout_seconds=jason_bdi_timeout_seconds,
-            max_concurrency=jason_bdi_max_concurrency,
+        self._bdi_runtime = AgentSpeakBDIRuntime(
+            technical_lead_asl=agentspeak_technical_lead_asl,
+            action_timeout_seconds=agentspeak_action_timeout_seconds,
+            max_concurrency=agentspeak_bdi_max_concurrency,
         )
         self.incidents_received = 0
         self.triages_completed = 0
