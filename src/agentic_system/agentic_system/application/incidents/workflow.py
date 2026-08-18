@@ -18,6 +18,10 @@ def _epoch_ms_to_iso(value: int | None) -> str | None:
     return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc).isoformat(timespec="seconds")
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 class IncidentWorkflow:
     """Create or correlate incidents from normalized anomaly observations."""
 
@@ -78,7 +82,7 @@ class IncidentWorkflow:
             )
             return updated
 
-        detected_at = _epoch_ms_to_iso(observation.execution_start_time)
+        detected_at = _epoch_ms_to_iso(observation.execution_start_time) or _utc_now_iso()
         incident = await self.repository.create_incident(
             {
                 "status": "NEW",
