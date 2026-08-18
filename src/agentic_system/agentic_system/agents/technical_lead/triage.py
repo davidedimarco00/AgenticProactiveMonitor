@@ -27,6 +27,17 @@ class TriageAssessment:
     rationale: str
 
 
+@dataclass(frozen=True, slots=True)
+class TechnicalLeadTriageDecision:
+    incident_id: str
+    probable_domain: str
+    primary_investigator: str
+    confidence: float
+    rationale: str
+    bdi_goal: str
+    bdi_intention: str
+
+
 class TechnicalLeadTriageReasoner:
     """Gemma-only first analysis for delegation, explicitly excluding diagnosis."""
 
@@ -84,6 +95,8 @@ Never include diagnosis, root_cause, remediation, commands or corrective actions
             conversation_id,
         )
 
+        # HybridLLMProvider routes tool-less requests to Gemma, preserving the
+        # project split: Gemma reasons while Qwen remains the tool-calling model.
         response = await self.provider.get_llm_response(
             context,
             tools=None,
