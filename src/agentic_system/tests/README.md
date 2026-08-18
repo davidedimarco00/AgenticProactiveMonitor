@@ -2,11 +2,11 @@
 
 The backend test suite is split by responsibility:
 
-- `unit/`: isolated project logic, without Docker services.
-- `integration/`: real communication between SPADE agents and the running infrastructure (XMPP, SPADE-LLM and MCP capabilities).
+- `unit/`: isolated project logic, without Docker services;
+- `integration/`: real communication between the backend and the running infrastructure, including XMPP, MCP, MongoDB and the FastAPI incident API;
 - `e2e/`: Gherkin acceptance scenarios executed with `pytest-bdd`.
 
-Install the backend and test dependencies from PowerShell:
+Install the backend and test dependencies from Windows PowerShell:
 
 ```powershell
 cd src\agentic_system
@@ -25,9 +25,31 @@ python -m pytest tests\e2e -m e2e
 
 Integration and end-to-end tests require the Docker infrastructure and the configured Ollama models to be running.
 
+## Incident API and MongoDB integration
+
+`tests/integration/test_incident_api_mongodb.py` verifies the complete persistence path:
+
+```text
+internal backend write -> FastAPI -> MongoDB -> public GET -> PDF report
+```
+
+The test also verifies that raw metric/baseline values are not required by the public incident object and cleans up the temporary incident from MongoDB when it finishes.
+
+Defaults:
+
+```text
+AGENTIC_API_TEST_URL=http://127.0.0.1:8082
+MONGODB_TEST_URI=mongodb://agentic:change-this-local-password@127.0.0.1:27017/agentic_monitor?authSource=admin
+MONGODB_TEST_DATABASE=agentic_monitor
+```
+
+If local `.env` credentials differ, override `MONGODB_TEST_URI` before running the integration suite.
+
+The Gherkin `operator_api.feature` verifies the acceptance constraint that the operator-facing Swagger contract is read-only and that the PDF report endpoint is published.
+
 ## Live Gemma/Qwen/MCP routing test
 
-The normal integration suite verifies the configured model roles and MCP tool discovery without forcing an expensive LLM inference. The live routing test is therefore opt-in. It uses real Ollama inference and real SPADE-LLM MCP tools to verify this path:
+The normal integration suite verifies the configured model roles and MCP tool discovery without forcing an expensive LLM inference. The live routing test is opt-in. It uses real Ollama inference and real SPADE-LLM MCP tools to verify this path:
 
 `Gemma reasoning -> Qwen tool selection -> SPADE-LLM MCP tool execution`.
 
