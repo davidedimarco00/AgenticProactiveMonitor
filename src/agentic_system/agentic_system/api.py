@@ -106,7 +106,11 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         events = await repository.list_events(incident_id=incident_id, limit=500, ascending=True)
         return {"incident_id": incident_id, "events": events}
 
-    @app.get("/api/v1/incidents/{incident_id}/report", tags=["Incidents"])
+    @app.get(
+        "/api/v1/incidents/{incident_id}/report",
+        tags=["Incidents"],
+        responses={200: {"content": {"application/pdf": {}}, "description": "Incident PDF report"}},
+    )
     async def incident_report(incident_id: str) -> StreamingResponse:
         incident = await repository.get_incident(incident_id)
         if incident is None:
@@ -146,7 +150,7 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
     async def update_incident(incident_id: str, payload: IncidentPatch) -> dict[str, Any]:
         updated = await repository.update_incident(
             incident_id,
-            payload.model_dump(exclude_none=True),
+            payload.model_dump(exclude_none=True, exclude_unset=True),
         )
         if updated is None:
             raise HTTPException(status_code=404, detail="Incident not found")
