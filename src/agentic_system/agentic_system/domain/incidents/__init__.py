@@ -1,5 +1,3 @@
-"""Incident domain package.
+from .policies import ACTIVE_INCIDENT_STATUSES, IncidentCorrelationPolicy
 
-Incident lifecycle objects will move here as the autonomous workflow is added.
-MongoDB-specific persistence remains under infrastructure.mongodb.
-"""
+__all__ = ["ACTIVE_INCIDENT_STATUSES", "IncidentCorrelationPolicy"]
