@@ -5,9 +5,10 @@ def test_incident_model_drops_raw_opensearch_metric_fields() -> None:
     incident = IncidentCreate.model_validate(
         {
             "incident_id": "INC-TEST-001",
-            "entity": "processing-service",
+            "entity": "CPU-processing-service",
             "anomaly": {
-                "detector_id": "CPU-processing-service",
+                "detector_id": "detector-id-1",
+                "detector_name": "CPU-processing-service",
                 "anomaly_type": "cpu_anomaly",
                 "grade": 1.0,
                 "confidence": 0.8,
@@ -20,7 +21,8 @@ def test_incident_model_drops_raw_opensearch_metric_fields() -> None:
 
     anomaly = incident.model_dump()["anomaly"]
     assert anomaly == {
-        "detector_id": "CPU-processing-service",
+        "detector_id": "detector-id-1",
+        "detector_name": "CPU-processing-service",
         "anomaly_type": "cpu_anomaly",
         "grade": 1.0,
         "confidence": 0.8,
