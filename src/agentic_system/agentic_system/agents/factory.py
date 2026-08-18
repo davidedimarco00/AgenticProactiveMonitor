@@ -2,16 +2,14 @@ from __future__ import annotations
 
 from spade_llm.mcp import StreamableHttpServerConfig
 
+from ..ai.providers import HybridLLMProvider
 from ..config import RuntimeConfig
-from ..providers import HybridLLMProvider
+from .application_engineer import ApplicationEngineerAgent
 from .base import BaseAgent
-from .roles import (
-    ApplicationEngineerAgent,
-    NetworkEngineerAgent,
-    SoftwareDeveloperAgent,
-    SystemEngineerAgent,
-    TechnicalLeadAgent,
-)
+from .network_engineer import NetworkEngineerAgent
+from .software_developer import SoftwareDeveloperAgent
+from .system_engineer import SystemEngineerAgent
+from .technical_lead import TechnicalLeadAgent
 
 
 ROLE_CONSTRUCTORS: dict[str, type[BaseAgent]] = {

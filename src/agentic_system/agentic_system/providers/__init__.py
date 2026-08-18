@@ -1,3 +1,5 @@
-from .hybrid import HybridLLMProvider
+"""Backward-compatible facade for AI providers."""
 
-__all__ = ["HybridLLMProvider"]
+from ..ai.providers import HybridLLMProvider, OllamaToolCallingProvider
+
+__all__ = ["HybridLLMProvider", "OllamaToolCallingProvider"]
