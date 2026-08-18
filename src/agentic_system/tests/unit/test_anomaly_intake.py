@@ -46,3 +46,30 @@ def test_anomaly_intake_consumes_queue_independently_and_keeps_last_observation(
         assert intake.running is False
 
     asyncio.run(scenario())
+
+
+def test_anomaly_intake_invokes_downstream_handler_before_marking_processed() -> None:
+    async def scenario() -> None:
+        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=2)
+        handled: list[str] = []
+
+        async def handler(observation: AnomalyObservation) -> object:
+            handled.append(observation.result_id)
+            return {"ok": True}
+
+        intake = AnomalyIntake(queue, on_anomaly=handler)
+        task = asyncio.create_task(intake.run())
+
+        await queue.put(_observation("result-handler"))
+        await asyncio.wait_for(queue.join(), timeout=1)
+
+        assert handled == ["result-handler"]
+        assert intake.processed_count == 1
+        assert intake.last_anomaly is not None
+        assert intake.last_anomaly.result_id == "result-handler"
+
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
