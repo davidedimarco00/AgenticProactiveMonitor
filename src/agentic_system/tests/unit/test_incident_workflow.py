@@ -149,6 +149,7 @@ def test_mark_triaged_persists_coordination_state_without_diagnosis() -> None:
                 confidence=0.84,
                 rationale="The detector describes service latency, so network analysis should start first.",
                 bdi_goal="manage_incident",
+                bdi_triage_intention="triage_incident",
                 bdi_intention="select_primary_investigator",
             ),
             agent_role="technical_lead",
@@ -161,6 +162,7 @@ def test_mark_triaged_persists_coordination_state_without_diagnosis() -> None:
     assert triaged["agentic"]["active_agents"] == ["technical_lead"]
     assert triaged["agentic"]["primary_investigator"] == "network_engineer"
     assert triaged["agentic"]["bdi_goal"] == "manage_incident"
+    assert triaged["agentic"]["bdi_triage_intention"] == "triage_incident"
     assert triaged["agentic"]["bdi_intention"] == "select_primary_investigator"
     assert triaged.get("diagnosis", {}) == {}
     assert repository.events[-1]["event_type"] == "INCIDENT_TRIAGED"
