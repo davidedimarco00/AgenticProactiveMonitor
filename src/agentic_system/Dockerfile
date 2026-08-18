@@ -15,7 +15,7 @@ RUN useradd --create-home --uid 10001 agentic
 
 COPY --chown=agentic:agentic config ./config
 
-EXPOSE 8081 8101 8102 8103 8104 8105
+EXPOSE 8081 8082 8101 8102 8103 8104 8105
 
 USER agentic
 
