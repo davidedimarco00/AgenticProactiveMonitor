@@ -47,10 +47,9 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
         if spec.role == "technical_lead":
             common_kwargs.update(
                 {
-                    "jason_bdi_command": config.jason_bdi_command,
-                    "jason_technical_lead_asl": config.jason_technical_lead_asl,
-                    "jason_bdi_timeout_seconds": config.jason_bdi_timeout_seconds,
-                    "jason_bdi_max_concurrency": config.jason_bdi_max_concurrency,
+                    "agentspeak_technical_lead_asl": config.agentspeak_technical_lead_asl,
+                    "agentspeak_action_timeout_seconds": config.agentspeak_action_timeout_seconds,
+                    "agentspeak_bdi_max_concurrency": config.agentspeak_bdi_max_concurrency,
                 }
             )
 
