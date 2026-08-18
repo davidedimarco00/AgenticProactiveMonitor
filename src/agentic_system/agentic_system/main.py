@@ -74,11 +74,10 @@ def _log_runtime(config: RuntimeConfig) -> None:
         config.incident_correlation_window_seconds,
     )
     LOGGER.info(
-        "Jason BDI: command=%s TechnicalLeadASL=%s timeout=%.1fs concurrency=%d",
-        config.jason_bdi_command,
-        config.jason_technical_lead_asl,
-        config.jason_bdi_timeout_seconds,
-        config.jason_bdi_max_concurrency,
+        "AgentSpeak BDI: TechnicalLeadASL=%s action_timeout=%.1fs concurrency=%d",
+        config.agentspeak_technical_lead_asl,
+        config.agentspeak_action_timeout_seconds,
+        config.agentspeak_bdi_max_concurrency,
     )
     LOGGER.info("Ollama endpoint: %s", config.ollama_url)
     LOGGER.info("Reasoning model: ollama/%s", config.reasoning_model)
@@ -173,7 +172,7 @@ async def _run_backend() -> None:
         tool_model=f"ollama/{config.tool_model}",
         embedding_model=f"ollama/{config.embedding_model}",
         interaction_memory_enabled=True,
-        bdi_engine="Jason/AgentSpeak(L)",
+        bdi_engine="Python AgentSpeak(L)",
         mongodb_database=config.mongodb_database,
         mongodb_reachable=False,
         api_port=config.api_port,
