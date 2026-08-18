@@ -5,6 +5,7 @@ import logging
 
 from ...domain.anomalies import AnomalyObservation
 from ...domain.incidents import IncidentCorrelationPolicy
+from ..ports.incident_assignee import IncidentTriageReceipt
 from ..ports.incident_repository import IncidentRepositoryPort
 from .models import IncidentWorkflowResult
 
@@ -180,5 +181,61 @@ class IncidentWorkflow:
             incident_id,
             agent_role,
             agent_jid,
+        )
+        return updated
+
+    async def mark_triaged(
+        self,
+        receipt: IncidentTriageReceipt,
+        *,
+        agent_role: str,
+        agent_jid: str,
+    ) -> dict[str, object]:
+        updated = await self.repository.update_incident(
+            receipt.incident_id,
+            {
+                "status": "TRIAGED",
+                "agentic": {
+                    "current_agent": agent_role,
+                    "active_agents": [agent_role],
+                    "primary_investigator": receipt.primary_investigator,
+                    "triage_domain": receipt.probable_domain,
+                    "triage_confidence": receipt.confidence,
+                    "triage_rationale": receipt.rationale,
+                    "bdi_goal": receipt.bdi_goal,
+                    "bdi_intention": receipt.bdi_intention,
+                },
+            },
+        )
+        if updated is None:
+            raise RuntimeError(
+                f"Incident disappeared before triage could be persisted: {receipt.incident_id}"
+            )
+
+        event = await self.repository.add_event(
+            receipt.incident_id,
+            {
+                "event_type": "INCIDENT_TRIAGED",
+                "agent_role": agent_role,
+                "agent_jid": agent_jid,
+                "action": "select_primary_investigator",
+                "reason": receipt.rationale,
+                "status": "TRIAGED",
+                "outcome": receipt.primary_investigator,
+            },
+        )
+        if event is None:
+            raise RuntimeError(
+                f"Could not persist triage event for incident: {receipt.incident_id}"
+            )
+
+        LOGGER.warning(
+            "Incident=%s triaged: domain=%s primary=%s confidence=%.3f BDI=%s/%s",
+            receipt.incident_id,
+            receipt.probable_domain,
+            receipt.primary_investigator,
+            receipt.confidence,
+            receipt.bdi_goal,
+            receipt.bdi_intention,
         )
         return updated
