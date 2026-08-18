@@ -71,6 +71,8 @@ def normalize_event(payload: dict[str, Any], incident_id: str) -> dict[str, Any]
     doc["event_type"] = str(doc.get("event_type") or "agent_activity").upper()
     if doc.get("status"):
         doc["status"] = str(doc["status"]).upper()
+    if doc.get("description") and not doc.get("reason"):
+        doc["reason"] = doc["description"]
     return doc
 
 
