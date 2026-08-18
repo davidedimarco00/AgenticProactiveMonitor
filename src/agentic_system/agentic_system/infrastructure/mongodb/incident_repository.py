@@ -13,6 +13,7 @@ from pymongo.server_api import ServerApi
 ACTIVE_STATUSES = {
     "NEW",
     "TAKEN_IN_CHARGE",
+    "TRIAGED",
     "UNDER_ANALYSIS",
     "DIAGNOSED",
     "OPERATOR_ACTION_REQUIRED",
@@ -41,7 +42,16 @@ ANOMALY_FIELDS = {"detector_id", "anomaly_type", "grade", "confidence"}
 DIAGNOSIS_FIELDS = {"summary", "root_cause", "confidence", "evidence"}
 REMEDIATION_FIELDS = {"summary", "status", "steps", "verification", "risks"}
 VALIDATION_FIELDS = {"status", "summary"}
-AGENTIC_FIELDS = {"current_agent", "active_agents"}
+AGENTIC_FIELDS = {
+    "current_agent",
+    "active_agents",
+    "primary_investigator",
+    "triage_domain",
+    "triage_confidence",
+    "triage_rationale",
+    "bdi_goal",
+    "bdi_intention",
+}
 EVENT_FIELDS = {
     "event_id",
     "timestamp",
