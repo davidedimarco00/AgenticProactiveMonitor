@@ -28,9 +28,8 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     assert config.anomaly_watch_poll_seconds == 5.0
     assert config.anomaly_watch_lookback_seconds == 300
     assert config.incident_correlation_window_seconds == 600
-    assert config.jason_bdi_command == "/opt/apm-jason-bdi/bin/apm-jason-bdi"
-    assert config.jason_technical_lead_asl.endswith(
-        "/agentic_system/bdi/jason/agents/technical_lead.asl"
+    assert config.agentspeak_technical_lead_asl.endswith(
+        "/agentic_system/bdi/plans/technical_lead.asl"
     )
-    assert config.jason_bdi_timeout_seconds == 10.0
-    assert config.jason_bdi_max_concurrency == 2
+    assert config.agentspeak_action_timeout_seconds == 120.0
+    assert config.agentspeak_bdi_max_concurrency == 2
