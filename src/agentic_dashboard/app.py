@@ -25,11 +25,12 @@ REQUEST_TIMEOUT = float(os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "2.5"))
 ACTIVE_STATUSES = {
     "NEW",
     "TAKEN_IN_CHARGE",
+    "TRIAGED",
     "UNDER_ANALYSIS",
     "DIAGNOSED",
     "OPERATOR_ACTION_REQUIRED",
 }
-WORKING_STATUSES = {"TAKEN_IN_CHARGE", "UNDER_ANALYSIS"}
+AGENT_ACTIVITY_STATES = {"IDLE", "WORKING", "WAITING"}
 
 # The keys are retained for compatibility with the existing dashboard layout.
 AGENT_TEAM = [
@@ -130,6 +131,17 @@ def get_incident(incident_id: str) -> dict[str, Any] | None:
     except (requests.RequestException, ValueError):
         app.logger.warning("Could not load incident %s from the backend API", incident_id)
         return None
+
+
+def search_agents() -> list[dict[str, Any]]:
+    try:
+        response = backend_request("GET", "/api/v1/agents")
+        response.raise_for_status()
+        agents = response.json().get("agents", [])
+        return agents if isinstance(agents, list) else []
+    except (requests.RequestException, ValueError):
+        app.logger.warning("Could not load runtime agent activity from the backend API")
+        return []
 
 
 def agent_definition(identity: str | None) -> dict[str, Any] | None:
@@ -285,39 +297,46 @@ def build_overview(incidents: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_agent_team(incidents: list[dict[str, Any]]) -> dict[str, Any]:
-    working_incidents = [
-        incident
-        for incident in incidents
-        if str(incident.get("status", "")).upper() in WORKING_STATUSES
-    ]
+def build_agent_team(runtime_agents: list[dict[str, Any]]) -> dict[str, Any]:
+    by_role = {
+        str(agent.get("role") or "").strip().lower(): agent
+        for agent in runtime_agents
+        if isinstance(agent, dict)
+    }
 
-    active_agents: set[str] = set()
-    for incident in working_incidents:
-        agentic = incident.get("agentic") or {}
-        current_agent = agentic.get("current_agent")
-        if current_agent:
-            active_agents.add(str(current_agent).lower())
-        for active_agent in agentic.get("active_agents", []) or []:
-            active_agents.add(str(active_agent).lower())
-
-    if working_incidents and not active_agents:
-        active_agents.add("technical_lead")
-
-    members = []
+    members: list[dict[str, Any]] = []
+    incident_ids: set[str] = set()
     for definition in AGENT_TEAM:
-        aliases = {
-            definition["key"].lower(),
-            definition["jid"].lower(),
-            definition["backend_role"].lower(),
-        }
-        working = bool(aliases.intersection(active_agents))
-        members.append({**definition, "activity": "WORKING" if working else "IDLE"})
+        runtime = by_role.get(definition["backend_role"], {})
+        activity = str(runtime.get("activity") or "IDLE").upper()
+        if activity not in AGENT_ACTIVITY_STATES:
+            activity = "IDLE"
+        incident_id = str(runtime.get("activity_incident_id") or "").strip() or None
+        if incident_id and activity != "IDLE":
+            incident_ids.add(incident_id)
+        members.append(
+            {
+                **definition,
+                "activity": activity,
+                "activity_incident_id": incident_id,
+                "activity_detail": runtime.get("activity_detail"),
+                "activity_updated_at": runtime.get("activity_updated_at"),
+            }
+        )
+
+    activities = {member["activity"] for member in members}
+    if "WORKING" in activities:
+        state = "WORKING"
+    elif "WAITING" in activities:
+        state = "WAITING"
+    else:
+        state = "IDLE"
 
     return {
-        "state": "WORKING" if working_incidents else "IDLE",
-        "working": bool(working_incidents),
-        "active_incidents": len(working_incidents),
+        "state": state,
+        "working": state == "WORKING",
+        "waiting": state == "WAITING",
+        "active_incidents": len(incident_ids),
         "members": members,
     }
 
@@ -351,7 +370,7 @@ def dashboard() -> str:
         overview=build_overview(incidents),
         incidents=incidents[:100],
         services=health,
-        team=build_agent_team(incidents),
+        team=build_agent_team(search_agents()),
         overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
         now=utc_now(),
     )
@@ -399,12 +418,11 @@ def incident_report(incident_id: str):
 @app.route("/system")
 def system_page() -> str:
     health = system_health()
-    incidents = search_incidents(300)
     return render_template(
         "system.html",
         app_name=APP_NAME,
         services=health,
-        team=build_agent_team(incidents),
+        team=build_agent_team(search_agents()),
         overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
         now=utc_now(),
         backend_docs_url=f"{AGENTIC_BACKEND_PUBLIC_URL}/docs",
@@ -418,7 +436,7 @@ def api_overview():
         {
             "generated_at": utc_now(),
             "overview": build_overview(incidents),
-            "team": build_agent_team(incidents),
+            "team": build_agent_team(search_agents()),
             "recent_incidents": incidents[:7],
         }
     )
@@ -471,11 +489,10 @@ def api_agent_activity(agent_jid: str):
         "role": "Specialised agent",
     }
 
-    incidents = search_incidents(300)
-    team = build_agent_team(incidents)
+    team = build_agent_team(search_agents())
     member = next(
         (item for item in team["members"] if item["jid"].lower() == canonical["jid"].lower()),
-        {**canonical, "activity": "IDLE"},
+        {**canonical, "activity": "IDLE", "activity_incident_id": None},
     )
     limit = int(request.args.get("limit", "100"))
     events = search_agent_events(canonical["backend_role"], limit)
