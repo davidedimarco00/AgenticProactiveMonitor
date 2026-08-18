@@ -6,7 +6,6 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
-from .api_models import IncidentCreate, IncidentEventCreate, IncidentPatch
 from .incident_repository import ACTIVE_STATUSES, IncidentRepository
 from .reports import build_incident_report
 from .runtime import AgentRuntime
@@ -138,36 +137,5 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
     ) -> dict[str, Any]:
         events = await repository.list_events(agent_role=agent_role, limit=limit, ascending=False)
         return {"events": events}
-
-    # These writes are for the autonomous backend workflow only. They are
-    # deliberately excluded from the public OpenAPI/Swagger contract so the
-    # operator UI remains read-only and cannot start or steer an investigation.
-    @app.post("/internal/v1/incidents", status_code=201, include_in_schema=False)
-    async def create_incident(payload: IncidentCreate) -> dict[str, Any]:
-        return await repository.create_incident(payload.model_dump(exclude_none=True))
-
-    @app.patch("/internal/v1/incidents/{incident_id}", include_in_schema=False)
-    async def update_incident(incident_id: str, payload: IncidentPatch) -> dict[str, Any]:
-        updated = await repository.update_incident(
-            incident_id,
-            payload.model_dump(exclude_none=True, exclude_unset=True),
-        )
-        if updated is None:
-            raise HTTPException(status_code=404, detail="Incident not found")
-        return updated
-
-    @app.post(
-        "/internal/v1/incidents/{incident_id}/events",
-        status_code=201,
-        include_in_schema=False,
-    )
-    async def create_event(incident_id: str, payload: IncidentEventCreate) -> dict[str, Any]:
-        event = await repository.add_event(
-            incident_id,
-            payload.model_dump(exclude_none=True),
-        )
-        if event is None:
-            raise HTTPException(status_code=404, detail="Incident not found")
-        return event
 
     return app
