@@ -66,6 +66,8 @@
     "system": { name: "System" },
   };
 
+  const ACTIVITY_STATES = ["IDLE", "WORKING", "WAITING"];
+
   const updateClock = () => {
     if (!clock) return;
     const now = new Date();
@@ -101,6 +103,29 @@
     const profile = CALLER_DIRECTORY[normalized];
     if (profile?.name) return profile.name;
     return String(value);
+  };
+
+  const normalizeActivity = (activity) => {
+    const normalized = String(activity || "IDLE").trim().toUpperCase();
+    return ACTIVITY_STATES.includes(normalized) ? normalized : "IDLE";
+  };
+
+  const setAgentActivity = (node, activity) => {
+    if (!node) return;
+    const normalized = normalizeActivity(activity);
+    node.dataset.agentActivityState = normalized;
+
+    ACTIVITY_STATES.forEach((state) => {
+      node.classList.toggle(state.toLowerCase(), normalized === state);
+    });
+
+    const pill = node.querySelector("[data-agent-activity]");
+    if (pill) {
+      pill.textContent = normalized;
+      ACTIVITY_STATES.forEach((state) => {
+        pill.classList.toggle(state.toLowerCase(), normalized === state);
+      });
+    }
   };
 
   const bindRows = () => {
@@ -142,37 +167,29 @@
       const team = payload.team;
       if (!team) return;
 
+      const teamState = normalizeActivity(team.state);
       if (stateNode) {
-        stateNode.textContent = team.state;
-        stateNode.classList.toggle("working", Boolean(team.working));
-        stateNode.classList.toggle("idle", !team.working);
+        stateNode.textContent = teamState;
+        ACTIVITY_STATES.forEach((state) => {
+          stateNode.classList.toggle(state.toLowerCase(), teamState === state);
+        });
       }
 
       if (network) {
-        network.classList.toggle("working", Boolean(team.working));
-        network.classList.toggle("idle", !team.working);
+        ACTIVITY_STATES.forEach((state) => {
+          network.classList.toggle(state.toLowerCase(), teamState === state);
+        });
       }
 
       const incidentNode = document.getElementById("team-active-incidents");
       if (incidentNode) {
         const suffix = team.active_incidents === 1 ? "incident" : "incidents";
-        incidentNode.textContent = `${team.active_incidents} ${suffix} under investigation`;
+        incidentNode.textContent = `${team.active_incidents} ${suffix} with active agent context`;
       }
 
       (team.members || []).forEach((member) => {
         const node = document.querySelector(`[data-agent-runtime-jid="${member.jid}"]`);
-        if (!node) return;
-
-        const working = member.activity === "WORKING";
-        node.classList.toggle("working", working);
-        node.classList.toggle("idle", !working);
-
-        const activity = node.querySelector("[data-agent-activity]");
-        if (activity) {
-          activity.textContent = member.activity;
-          activity.classList.toggle("working", working);
-          activity.classList.toggle("idle", !working);
-        }
+        setAgentActivity(node, member.activity);
       });
     } catch (_) {
       // Keep the server-rendered activity state if the lightweight refresh fails.
@@ -214,6 +231,10 @@
     node.classList.toggle("presence-degraded", normalized === "DEGRADED");
     node.classList.toggle("presence-offline", normalized === "OFFLINE");
     node.classList.toggle("presence-unknown", normalized === "UNKNOWN");
+
+    if (payload?.activity) {
+      setAgentActivity(node, payload.activity);
+    }
 
     const dot = node.querySelector(".agent-presence-dot");
     if (!dot) return;
@@ -305,10 +326,11 @@
 
   const setModalState = (activity) => {
     if (!modalState) return;
-    const working = activity === "WORKING";
-    modalState.textContent = working ? "WORKING" : "IDLE";
-    modalState.classList.toggle("working", working);
-    modalState.classList.toggle("idle", !working);
+    const normalized = normalizeActivity(activity);
+    modalState.textContent = normalized;
+    ACTIVITY_STATES.forEach((state) => {
+      modalState.classList.toggle(state.toLowerCase(), normalized === state);
+    });
   };
 
   const renderAgentEvents = (events) => {
@@ -361,17 +383,22 @@
       if (modalName) modalName.textContent = profile.name;
       if (modalJid) modalJid.textContent = profile.displayJid;
       if (modalRole) modalRole.textContent = profile.role;
-      setModalState(agent.activity || (profile.node?.classList.contains("working") ? "WORKING" : "IDLE"));
+      setModalState(agent.activity || profile.node?.dataset.agentActivityState || "IDLE");
       if (eventCount) eventCount.textContent = String(events.length);
       if (lastActivity) lastActivity.textContent = events.length ? formatTimestamp(events[0].timestamp) : "—";
-      if (currentIncident) currentIncident.textContent = events.find((event) => event.incident_id)?.incident_id || "—";
+      if (currentIncident) {
+        currentIncident.textContent =
+          agent.activity_incident_id ||
+          events.find((event) => event.incident_id)?.incident_id ||
+          "—";
+      }
       renderAgentEvents(events);
     } catch (_) {
       if (logBody) logBody.innerHTML = "";
       if (logEmpty) {
         logEmpty.hidden = false;
         logEmpty.querySelector("strong").textContent = "Agent activity could not be loaded.";
-        logEmpty.querySelector("p").textContent = "Check the dashboard API and OpenSearch connectivity.";
+        logEmpty.querySelector("p").textContent = "Check the dashboard API and backend connectivity.";
       }
     } finally {
       if (logLoading) logLoading.hidden = true;
@@ -395,7 +422,7 @@
     if (modalName) modalName.textContent = profile.name;
     if (modalJid) modalJid.textContent = profile.displayJid;
     if (modalRole) modalRole.textContent = profile.role;
-    setModalState(node.classList.contains("working") ? "WORKING" : "IDLE");
+    setModalState(node.dataset.agentActivityState || "IDLE");
     if (eventCount) eventCount.textContent = "—";
     if (lastActivity) lastActivity.textContent = "—";
     if (currentIncident) currentIncident.textContent = "—";
