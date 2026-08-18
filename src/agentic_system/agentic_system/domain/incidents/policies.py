@@ -7,6 +7,7 @@ from typing import Any
 ACTIVE_INCIDENT_STATUSES = {
     "NEW",
     "TAKEN_IN_CHARGE",
+    "TRIAGED",
     "UNDER_ANALYSIS",
     "DIAGNOSED",
     "OPERATOR_ACTION_REQUIRED",
