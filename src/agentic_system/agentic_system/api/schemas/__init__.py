@@ -1,6 +1,4 @@
-"""Backward-compatible facade for operator API schemas."""
-
-from .api.schemas import (
+from .incidents import (
     AnomalyInfo,
     DiagnosisInfo,
     IncidentCreate,

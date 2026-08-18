@@ -6,17 +6,29 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
-from .incident_repository import ACTIVE_STATUSES, IncidentRepository
-from .reports import build_incident_report
-from .runtime import AgentRuntime
+from ..infrastructure.mongodb import ACTIVE_STATUSES, IncidentRepository
+from ..infrastructure.reports import build_incident_report
+from ..runtime import AgentRuntime
 
 
 def _overview(incidents: list[dict[str, Any]]) -> dict[str, int]:
     active = [i for i in incidents if str(i.get("status", "")).upper() in ACTIVE_STATUSES]
-    under_analysis = [i for i in incidents if str(i.get("status", "")).upper() == "UNDER_ANALYSIS"]
-    operator_action = [i for i in incidents if str(i.get("status", "")).upper() == "OPERATOR_ACTION_REQUIRED"]
-    resolved = [i for i in incidents if str(i.get("status", "")).upper() in {"RESOLVED", "CLOSED"}]
-    critical = [i for i in active if str(i.get("severity", "")).upper() == "CRITICAL"]
+    under_analysis = [
+        i for i in incidents if str(i.get("status", "")).upper() == "UNDER_ANALYSIS"
+    ]
+    operator_action = [
+        i
+        for i in incidents
+        if str(i.get("status", "")).upper() == "OPERATOR_ACTION_REQUIRED"
+    ]
+    resolved = [
+        i
+        for i in incidents
+        if str(i.get("status", "")).upper() in {"RESOLVED", "CLOSED"}
+    ]
+    critical = [
+        i for i in active if str(i.get("severity", "")).upper() == "CRITICAL"
+    ]
     return {
         "total": len(incidents),
         "active": len(active),
@@ -95,26 +107,37 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         incident = await repository.get_incident(incident_id)
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
-        incident["timeline"] = await repository.list_events(incident_id=incident_id, limit=500, ascending=True)
+        incident["timeline"] = await repository.list_events(
+            incident_id=incident_id, limit=500, ascending=True
+        )
         return incident
 
     @app.get("/api/v1/incidents/{incident_id}/timeline", tags=["Incidents"])
     async def incident_timeline(incident_id: str) -> dict[str, Any]:
         if await repository.get_incident(incident_id) is None:
             raise HTTPException(status_code=404, detail="Incident not found")
-        events = await repository.list_events(incident_id=incident_id, limit=500, ascending=True)
+        events = await repository.list_events(
+            incident_id=incident_id, limit=500, ascending=True
+        )
         return {"incident_id": incident_id, "events": events}
 
     @app.get(
         "/api/v1/incidents/{incident_id}/report",
         tags=["Incidents"],
-        responses={200: {"content": {"application/pdf": {}}, "description": "Incident PDF report"}},
+        responses={
+            200: {
+                "content": {"application/pdf": {}},
+                "description": "Incident PDF report",
+            }
+        },
     )
     async def incident_report(incident_id: str) -> StreamingResponse:
         incident = await repository.get_incident(incident_id)
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
-        events = await repository.list_events(incident_id=incident_id, limit=500, ascending=True)
+        events = await repository.list_events(
+            incident_id=incident_id, limit=500, ascending=True
+        )
         pdf = build_incident_report(incident, events)
         filename = f"{incident_id}-incident-report.pdf"
         return StreamingResponse(
@@ -135,7 +158,9 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         agent_role: str | None = Query(None),
         limit: int = Query(100, ge=1, le=500),
     ) -> dict[str, Any]:
-        events = await repository.list_events(agent_role=agent_role, limit=limit, ascending=False)
+        events = await repository.list_events(
+            agent_role=agent_role, limit=limit, ascending=False
+        )
         return {"events": events}
 
     return app

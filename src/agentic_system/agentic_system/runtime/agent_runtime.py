@@ -4,12 +4,12 @@ import asyncio
 import logging
 from typing import Any
 
-from .agents.base import BaseAgent
-from .agents.factory import build_agents
-from .agents.roles import SystemEngineerAgent, TechnicalLeadAgent
-from .anomaly_watcher import AnomalyObservation, OpenSearchAnomalyWatcher
-from .communication import Performative
-from .config import RuntimeConfig
+from ..agents.base import BaseAgent
+from ..agents.factory import build_agents
+from ..agents.roles import SystemEngineerAgent, TechnicalLeadAgent
+from ..communication import Performative
+from ..config import RuntimeConfig
+from ..infrastructure.opensearch import AnomalyObservation, OpenSearchAnomalyWatcher
 
 
 LOGGER = logging.getLogger("agentic_system.runtime")
