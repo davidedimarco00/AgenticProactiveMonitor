@@ -33,7 +33,28 @@ class IncidentCoordinator:
         self,
         observation: AnomalyObservation,
     ) -> IncidentWorkflowResult:
-        result = await self.workflow.handle_anomaly(observation)
+        try:
+            detector_context = await self.detector_context.get_detector_context(
+                observation.detector_id
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Could not resolve OpenSearch detector metadata for %s: %s",
+                observation.detector_id,
+                exc,
+            )
+            detector_context = {
+                "detector_id": observation.detector_id,
+                "detector_type": "SINGLE_ENTITY",
+                "name": "unknown",
+                "description": "",
+                "indices": [],
+            }
+
+        result = await self.workflow.handle_anomaly(
+            observation,
+            detector_context=detector_context,
+        )
 
         # Re-observations remain attached to the already active incident and do
         # not enqueue duplicate takeover or triage work.
@@ -49,9 +70,6 @@ class IncidentCoordinator:
         self.assigned_count += 1
         self.last_assigned_incident_id = assignment_receipt.incident_id
 
-        detector_context = await self.detector_context.get_detector_context(
-            observation.detector_id
-        )
         triage_receipt = await self.assignee.triage_incident(
             taken_in_charge,
             detector_context=detector_context,
