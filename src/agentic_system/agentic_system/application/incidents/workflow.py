@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
-from typing import Any
 
 from ...domain.anomalies import AnomalyObservation
 from ...domain.incidents import IncidentCorrelationPolicy
 from ..ports.incident_repository import IncidentRepositoryPort
+from .models import IncidentWorkflowResult
 
 
 LOGGER = logging.getLogger("agentic_system.application.incidents")
@@ -23,7 +23,7 @@ def _utc_now_iso() -> str:
 
 
 class IncidentWorkflow:
-    """Create or correlate incidents from normalized anomaly observations."""
+    """Create, correlate and update the lifecycle of persisted incidents."""
 
     def __init__(
         self,
@@ -36,7 +36,10 @@ class IncidentWorkflow:
         self.correlated_count = 0
         self.last_incident_id: str | None = None
 
-    async def handle_anomaly(self, observation: AnomalyObservation) -> dict[str, Any]:
+    async def handle_anomaly(
+        self,
+        observation: AnomalyObservation,
+    ) -> IncidentWorkflowResult:
         existing = await self.repository.find_active_incident_by_detector(
             observation.detector_id
         )
@@ -58,7 +61,9 @@ class IncidentWorkflow:
                 },
             )
             if updated is None:
-                raise RuntimeError(f"Active incident disappeared during correlation: {incident_id}")
+                raise RuntimeError(
+                    f"Active incident disappeared during correlation: {incident_id}"
+                )
 
             await self.repository.add_event(
                 incident_id,
@@ -80,7 +85,11 @@ class IncidentWorkflow:
                 observation.detector_id,
                 incident_id,
             )
-            return updated
+            return IncidentWorkflowResult(
+                incident=updated,
+                created=False,
+                correlated=True,
+            )
 
         detected_at = _epoch_ms_to_iso(observation.execution_start_time) or _utc_now_iso()
         incident = await self.repository.create_incident(
@@ -122,4 +131,54 @@ class IncidentWorkflow:
             observation.result_id,
             observation.detector_id,
         )
-        return incident
+        return IncidentWorkflowResult(
+            incident=incident,
+            created=True,
+            correlated=False,
+        )
+
+    async def mark_taken_in_charge(
+        self,
+        incident_id: str,
+        *,
+        agent_role: str,
+        agent_jid: str,
+    ) -> dict[str, object]:
+        updated = await self.repository.update_incident(
+            incident_id,
+            {
+                "status": "TAKEN_IN_CHARGE",
+                "agentic": {
+                    "current_agent": agent_role,
+                    "active_agents": [agent_role],
+                },
+            },
+        )
+        if updated is None:
+            raise RuntimeError(
+                f"Incident disappeared before takeover could be persisted: {incident_id}"
+            )
+
+        event = await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": "INCIDENT_TAKEN_IN_CHARGE",
+                "agent_role": agent_role,
+                "agent_jid": agent_jid,
+                "action": "take_incident",
+                "reason": "Technical Lead accepted the persisted incident for investigation.",
+                "status": "TAKEN_IN_CHARGE",
+            },
+        )
+        if event is None:
+            raise RuntimeError(
+                f"Could not persist takeover event for incident: {incident_id}"
+            )
+
+        LOGGER.warning(
+            "Incident=%s taken in charge by %s [%s]",
+            incident_id,
+            agent_role,
+            agent_jid,
+        )
+        return updated
