@@ -23,7 +23,17 @@ COPY pyproject.toml ./pyproject.toml
 COPY agentic_system ./agentic_system
 RUN pip install --no-cache-dir .
 RUN python -c "from mcp.client.streamable_http import streamablehttp_client; assert callable(streamablehttp_client)"
-RUN /opt/apm-jason-bdi/bin/apm-jason-bdi 2>/dev/null || test $? -eq 2
+RUN /opt/apm-jason-bdi/bin/apm-jason-bdi \
+      /app/agentic_system/bdi/jason/agents/technical_lead.asl \
+      INC-BUILD-SMOKE \
+      system \
+      system_engineer \
+      system_engineer,network_engineer,application_engineer,software_developer \
+      > /tmp/jason-smoke.txt \
+    && grep -F "OK" /tmp/jason-smoke.txt \
+    && grep -F "manage_incident" /tmp/jason-smoke.txt \
+    && grep -F "select_primary_investigator" /tmp/jason-smoke.txt \
+    && grep -F "system_engineer" /tmp/jason-smoke.txt
 
 RUN useradd --create-home --uid 10001 agentic
 
