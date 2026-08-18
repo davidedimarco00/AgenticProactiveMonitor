@@ -50,6 +50,8 @@ def test_technical_lead_agentspeak_plan_manages_but_does_not_diagnose() -> None:
     ).lower()
 
     assert "!manage_incident" in executable_source
+    assert "!triage_incident" in executable_source
+    assert "request_triage_analysis" in executable_source
     assert "!select_primary_investigator" in executable_source
     assert "commit_primary_investigator" in executable_source
     assert "diagnose" not in executable_source
