@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
-from pymongo import ASCENDING, DESCENDING, AsyncMongoClient
+from pymongo import ASCENDING, DESCENDING, AsyncMongoClient, ReturnDocument
 from pymongo.server_api import ServerApi
 
 
@@ -38,7 +38,13 @@ INCIDENT_FIELDS = {
     "updated_at",
     "closed_at",
 }
-ANOMALY_FIELDS = {"detector_id", "anomaly_type", "grade", "confidence"}
+ANOMALY_FIELDS = {
+    "detector_id",
+    "detector_name",
+    "anomaly_type",
+    "grade",
+    "confidence",
+}
 DIAGNOSIS_FIELDS = {"summary", "root_cause", "confidence", "evidence"}
 REMEDIATION_FIELDS = {"summary", "status", "steps", "verification", "risks"}
 VALIDATION_FIELDS = {"status", "summary"}
@@ -110,8 +116,23 @@ def sanitize_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: deepcopy(value) for key, value in payload.items() if key in EVENT_FIELDS}
 
 
+def format_incident_id(day: str, sequence: int) -> str:
+    """Build the operator-facing incident identifier from a UTC day and sequence."""
+
+    if not re.fullmatch(r"\d{8}", day):
+        raise ValueError("day must use YYYYMMDD format")
+    if sequence <= 0:
+        raise ValueError("sequence must be greater than zero")
+    return f"INC-{day}-{sequence:03d}"
+
+
 def new_incident_id() -> str:
-    return f"INC-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6].upper()}"
+    """Compatibility fallback for callers outside the Mongo repository.
+
+    Persisted incidents use the repository's atomic daily counter instead.
+    """
+
+    return f"INC-{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex[:6].upper()}"
 
 
 def new_event_id() -> str:
@@ -169,6 +190,7 @@ class IncidentRepository:
         self.database = self.client[database_name]
         self.incidents = self.database["incidents"]
         self.events = self.database["incident_events"]
+        self.counters = self.database["counters"]
 
     async def connect(self) -> None:
         await self.client.admin.command({"ping": 1})
@@ -196,6 +218,21 @@ class IncidentRepository:
     async def close(self) -> None:
         await self.client.close()
 
+    async def _next_incident_id(self) -> str:
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        counter = await self.counters.find_one_and_update(
+            {"_id": f"incident:{day}"},
+            {
+                "$inc": {"sequence": 1},
+                "$setOnInsert": {"day": day},
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        if counter is None:
+            raise RuntimeError("MongoDB did not return the daily incident counter")
+        return format_incident_id(day, int(counter["sequence"]))
+
     async def list_incidents(
         self,
         *,
@@ -213,6 +250,7 @@ class IncidentRepository:
                 {"incident_id": regex},
                 {"entity": regex},
                 {"service": regex},
+                {"anomaly.detector_name": regex},
                 {"takeover_reason": regex},
                 {"diagnosis.summary": regex},
                 {"diagnosis.root_cause": regex},
@@ -244,7 +282,9 @@ class IncidentRepository:
         return public_document(document)
 
     async def create_incident(self, payload: dict[str, Any]) -> dict[str, Any]:
-        incident = normalize_incident(payload)
+        requested_id = str(payload.get("incident_id") or "").strip() or None
+        incident_id = requested_id or await self._next_incident_id()
+        incident = normalize_incident(payload, incident_id=incident_id)
         incident["_id"] = incident["incident_id"]
         await self.incidents.insert_one(incident)
         return public_document(incident) or {}
