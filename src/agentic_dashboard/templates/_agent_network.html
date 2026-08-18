@@ -7,8 +7,8 @@
     </div>
     <div class="network-state-block">
       <span class="label">Team state</span>
-      <strong id="team-activity-state" class="activity-state {{ 'working' if team.working else 'idle' }}">{{ team.state }}</strong>
-      <small id="team-active-incidents">{{ team.active_incidents }} incident{{ '' if team.active_incidents == 1 else 's' }} under investigation</small>
+      <strong id="team-activity-state" class="activity-state {{ team.state|lower }}">{{ team.state }}</strong>
+      <small id="team-active-incidents">{{ team.active_incidents }} incident{{ '' if team.active_incidents == 1 else 's' }} with active agent context</small>
     </div>
   </div>
 
@@ -53,7 +53,7 @@
     'remediation': 'bottom-right'
   } %}
 
-  <div class="agent-network {{ 'working' if team.working else 'idle' }}" id="agent-network" aria-label="Virtual technical team network">
+  <div class="agent-network {{ team.state|lower }}" id="agent-network" aria-label="Virtual technical team network">
     <svg class="agent-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <line x1="50" y1="50" x2="19" y2="24"></line>
       <line x1="50" y1="50" x2="81" y2="24"></line>
@@ -77,6 +77,7 @@
       data-agent-key="{{ agent.key }}"
       data-agent-health-port="{{ profile.health_port }}"
       data-agent-presence="UNKNOWN"
+      data-agent-activity-state="{{ agent.activity }}"
       aria-label="Open observability log for {{ profile.name }}"
     >
       <span class="agent-avatar" aria-hidden="true">
@@ -97,8 +98,9 @@
     <span><i class="legend-dot presence-degraded"></i> Degraded</span>
     <span><i class="legend-dot presence-offline"></i> Offline</span>
     <span><i class="legend-dot working"></i> Working</span>
+    <span><i class="legend-dot waiting"></i> Waiting</span>
     <span><i class="legend-dot idle"></i> Idle</span>
-    <span class="network-help">Presence is live from each SPADE agent; Working/Idle describes incident activity.</span>
+    <span class="network-help">Presence is live from SPADE/XMPP; activity is reported directly by each agent runtime.</span>
   </div>
 </section>
 
