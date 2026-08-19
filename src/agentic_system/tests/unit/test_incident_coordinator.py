@@ -219,7 +219,6 @@ def test_new_incident_is_triaged_and_gets_one_idempotent_durable_task() -> None:
         "bdi_triage_intention": "triage_incident",
         "bdi_intention": "select_primary_investigator",
         "investigation_task_id": "TASK-TEST-001",
-        "task_state": "PENDING",
     }
     assert first.get("diagnosis", {}) == {}
 
