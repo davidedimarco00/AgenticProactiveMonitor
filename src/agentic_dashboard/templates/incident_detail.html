@@ -47,6 +47,80 @@
   </article>
 </section>
 
+<section class="panel task-observability-section">
+  <div class="section-header compact">
+    <div>
+      <span class="eyebrow">FAULT-TOLERANT AGENT WORK</span>
+      <h2>Investigation task state</h2>
+      <p class="section-description">Task failures are isolated from agent health. An agent can remain ONLINE while its current work is retried or marked failed.</p>
+    </div>
+  </div>
+
+  {% if incident.tasks %}
+    {% for task in incident.tasks %}
+      {% set state = (task.state or 'PENDING')|upper %}
+      <article class="task-card">
+        <div class="task-card-header">
+          <div>
+            <span class="label">{{ task.task_type|replace('_', ' ') }}</span>
+            <strong>{{ task.task_id }}</strong>
+          </div>
+          <span class="task-state-badge state-{{ state|lower }}">{{ state }}</span>
+        </div>
+
+        <div class="task-state-machine" aria-label="Agent task state machine">
+          <div class="task-state-node {{ 'current' if state == 'PENDING' else 'done' if state in ['DISPATCHED','RUNNING','RETRYING','COMPLETED'] else '' }}">
+            <span>1</span><strong>PENDING</strong><small>Persisted</small>
+          </div>
+          <i>→</i>
+          <div class="task-state-node {{ 'current' if state == 'DISPATCHED' else 'done' if state in ['RUNNING','RETRYING','COMPLETED'] else '' }}">
+            <span>2</span><strong>DISPATCHED</strong><small>Sent to specialist</small>
+          </div>
+          <i>→</i>
+          <div class="task-state-node {{ 'current' if state == 'RUNNING' else 'retry' if state == 'RETRYING' else 'done' if state == 'COMPLETED' else '' }}">
+            <span>3</span><strong>{{ 'RETRYING' if state == 'RETRYING' else 'RUNNING' }}</strong><small>{{ 'Retry eligible' if state == 'RETRYING' else 'Agent execution' }}</small>
+          </div>
+          <i>→</i>
+          <div class="task-state-node {{ 'current done' if state == 'COMPLETED' else 'failed' if state == 'FAILED' else '' }}">
+            <span>4</span><strong>{{ 'FAILED' if state == 'FAILED' else 'COMPLETED' }}</strong><small>Terminal state</small>
+          </div>
+        </div>
+
+        <div class="task-facts">
+          <div><span>Assigned role</span><strong>{{ task.assigned_to|replace('_', ' ')|title }}</strong></div>
+          <div><span>Created by</span><strong>{{ task.created_by|replace('_', ' ')|title }}</strong></div>
+          <div><span>Attempt</span><strong>{{ task.attempt }} / {{ task.max_attempts }}</strong></div>
+          <div><span>Updated</span><strong>{{ task.updated_at|human_time }}</strong></div>
+        </div>
+
+        {% if task.last_error %}
+        <div class="task-error-callout">
+          <div>
+            <span class="label">Last task error</span>
+            <strong>{{ task.last_error.type|replace('_', ' ') }}</strong>
+          </div>
+          <p>{{ task.last_error.message }}</p>
+          <small>{{ 'Retry allowed' if task.last_error.retryable else 'No more automatic retries' }}</small>
+        </div>
+        {% endif %}
+
+        {% if task.outcome %}
+        <div class="task-outcome-callout">
+          <span class="label">Task outcome</span>
+          <strong>{{ task.outcome.status or 'COMPLETED' }}</strong>
+          <p>{{ task.outcome.summary or 'The assigned agent task completed successfully.' }}</p>
+        </div>
+        {% endif %}
+      </article>
+    {% endfor %}
+  {% else %}
+    <div class="empty-state">
+      <strong>No durable agent task has been created yet.</strong>
+      <p>The Technical Lead creates the investigation task after BDI triage selects the primary investigator.</p>
+    </div>
+  {% endif %}
+</section>
+
 <section class="panel diagnosis-section">
   <div class="section-header compact">
     <div>
