@@ -10,3 +10,8 @@ Feature: Agentic backend
     Given the agentic backend is ready
     Then the communication probe is successful
     And request and response use the same correlation id
+
+  Scenario: Recovery subsystem is initialized
+    Given the agentic backend is ready
+    Then durable task recovery is exposed
+    And incomplete incident recovery is exposed
