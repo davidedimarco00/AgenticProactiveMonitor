@@ -9,7 +9,7 @@
     <div>
       <span class="label">Agentic system</span>
       <strong id="system-overall-state">{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</strong>
-      <small>Core monitoring, reasoning and diagnostic services</small>
+      <small>Infrastructure and agent health</small>
     </div>
   </div>
 
@@ -20,6 +20,94 @@
       <span>{{ service.name }}</span>
     </div>
     {% endfor %}
+  </div>
+</section>
+
+<section class="workflow-panel panel" id="workflow-panel" data-workflow-state="{{ workflow.state }}">
+  <div class="workflow-header">
+    <div>
+      <span class="eyebrow">EXCLUSIVE AGENTIC WORKFLOW</span>
+      <h2>Current anomaly processing</h2>
+      <p class="section-description">The complete multi-agent team processes one OpenSearch anomaly at a time. Additional anomalies wait in FIFO order.</p>
+    </div>
+    <div class="workflow-mode">
+      <span class="label">Processing policy</span>
+      <strong>{{ workflow.mode|replace('_', ' ') }}</strong>
+      <small>Concurrency {{ workflow.max_concurrent_anomalies }}</small>
+    </div>
+  </div>
+
+  <div class="workflow-grid">
+    <article class="workflow-primary">
+      <div class="workflow-state-line">
+        <span class="workflow-state-dot state-{{ workflow.state|lower }}"></span>
+        <div>
+          <span class="label">Workflow state</span>
+          <strong id="workflow-state">{{ workflow.state }}</strong>
+          <small id="workflow-phase">{{ workflow.phase }}</small>
+        </div>
+      </div>
+
+      <div class="workflow-facts">
+        <div>
+          <span>Active incident</span>
+          {% if workflow.active_incident_id %}
+          <a id="workflow-incident" href="/incidents/{{ workflow.active_incident_id }}"><strong>{{ workflow.active_incident_id }}</strong></a>
+          {% else %}
+          <strong id="workflow-incident">—</strong>
+          {% endif %}
+        </div>
+        <div>
+          <span>Active anomaly</span>
+          <strong id="workflow-anomaly">
+            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.detector_id }}{% else %}—{% endif %}
+          </strong>
+          <small id="workflow-result-id">
+            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.result_id }}{% else %}No anomaly currently owned by the team{% endif %}
+          </small>
+        </div>
+        <div>
+          <span>Assigned role</span>
+          <strong id="workflow-assignee">{{ workflow.assigned_to|replace('_', ' ')|title if workflow.assigned_to else '—' }}</strong>
+        </div>
+        <div>
+          <span>Agent task</span>
+          <strong id="workflow-task-state">{{ workflow.task.state if workflow.task else '—' }}</strong>
+          <small id="workflow-task-attempt">
+            {% if workflow.task %}Attempt {{ workflow.task.attempt }} / {{ workflow.task.max_attempts }}{% else %}Created after Technical Lead triage{% endif %}
+          </small>
+        </div>
+      </div>
+
+      <div class="workflow-error" id="workflow-error" {% if not workflow.last_error %}hidden{% endif %}>
+        <strong>Last workflow error</strong>
+        <span id="workflow-error-message">{{ workflow.last_error or '' }}</span>
+        <small>The failed work item can be retried without taking the agent team offline.</small>
+      </div>
+    </article>
+
+    <aside class="queue-card">
+      <span class="label">Global anomaly FIFO</span>
+      <div class="queue-count">
+        <strong id="workflow-queue-depth">{{ workflow.queue_depth }}</strong>
+        <span>waiting</span>
+      </div>
+      <div class="queue-capacity">
+        <span>Active slots</span>
+        <strong>1 / 1</strong>
+      </div>
+      <div class="queue-capacity">
+        <span>Queue capacity</span>
+        <strong id="workflow-queue-capacity">{{ workflow.queue_depth }} / {{ workflow.queue_maxsize }}</strong>
+      </div>
+      <p id="workflow-queue-message">
+        {% if workflow.queue_depth %}
+          {{ workflow.queue_depth }} anomal{{ 'y is' if workflow.queue_depth == 1 else 'ies are' }} waiting for the current collaborative workflow to finish.
+        {% else %}
+          No additional anomalies are waiting.
+        {% endif %}
+      </p>
+    </aside>
   </div>
 </section>
 
