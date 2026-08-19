@@ -83,8 +83,8 @@ class TechnicalLeadAgent(BaseAgent):
             except TimeoutError:
                 return
 
+            assignment = pending.assignment
             try:
-                assignment = pending.assignment
                 self.agent.set_activity(
                     "WORKING",
                     incident_id=assignment.incident_id,
@@ -93,9 +93,17 @@ class TechnicalLeadAgent(BaseAgent):
                 self.agent.incidents_received += 1
                 self.agent.last_incident_id = assignment.incident_id
                 self.agent.last_incident_assignment = assignment
+                self.agent.last_assignment_error = None
                 if not pending.accepted.done():
                     pending.accepted.set_result(None)
 
+                # Acceptance is complete. The agent remains healthy and waits for
+                # the persisted workflow to request the next stage.
+                self.agent.set_activity(
+                    "WAITING",
+                    incident_id=assignment.incident_id,
+                    detail="incident_accepted",
+                )
                 LOGGER.warning(
                     "Technical Lead accepted incident=%s severity=%s entity=%s",
                     assignment.incident_id,
@@ -103,9 +111,18 @@ class TechnicalLeadAgent(BaseAgent):
                     assignment.entity,
                 )
             except Exception as exc:
+                self.agent.last_assignment_error = str(exc)
+                self.agent.set_activity(
+                    "IDLE",
+                    incident_id=assignment.incident_id,
+                    detail="incident_assignment_failed",
+                )
                 if not pending.accepted.done():
                     pending.accepted.set_exception(exc)
-                raise
+                # A bad work item must not terminate the long-lived SPADE
+                # behaviour. The failure belongs to the task/workflow, not to
+                # the Technical Lead process.
+                LOGGER.exception("Technical Lead incident assignment failed: %s", exc)
             finally:
                 self.agent._incident_inbox.task_done()
 
@@ -191,7 +208,7 @@ class TechnicalLeadAgent(BaseAgent):
             except Exception as exc:
                 self.agent.last_triage_error = str(exc)
                 self.agent.set_activity(
-                    "WAITING",
+                    "IDLE",
                     incident_id=incident_id,
                     detail="triage_failed",
                 )
@@ -244,6 +261,7 @@ class TechnicalLeadAgent(BaseAgent):
         self.triages_completed = 0
         self.last_incident_id: str | None = None
         self.last_incident_assignment: IncidentAssignment | None = None
+        self.last_assignment_error: str | None = None
         self.last_triage_decision: TechnicalLeadTriageDecision | None = None
         self.last_triage_error: str | None = None
 
@@ -270,11 +288,14 @@ class TechnicalLeadAgent(BaseAgent):
         assignment = IncidentAssignment.from_incident(incident)
         loop = asyncio.get_running_loop()
         accepted: asyncio.Future[None] = loop.create_future()
-        await self._incident_inbox.put(
-            _PendingIncidentAssignment(
-                assignment=assignment,
-                accepted=accepted,
-            )
+        await asyncio.wait_for(
+            self._incident_inbox.put(
+                _PendingIncidentAssignment(
+                    assignment=assignment,
+                    accepted=accepted,
+                )
+            ),
+            timeout=timeout,
         )
         await asyncio.wait_for(accepted, timeout=timeout)
         return assignment
@@ -294,13 +315,16 @@ class TechnicalLeadAgent(BaseAgent):
 
         loop = asyncio.get_running_loop()
         completed: asyncio.Future[TechnicalLeadTriageDecision] = loop.create_future()
-        await self._triage_inbox.put(
-            _PendingTriage(
-                incident=dict(incident),
-                detector_context=dict(detector_context),
-                available_agents=list(available_agents),
-                completed=completed,
-            )
+        await asyncio.wait_for(
+            self._triage_inbox.put(
+                _PendingTriage(
+                    incident=dict(incident),
+                    detector_context=dict(detector_context),
+                    available_agents=list(available_agents),
+                    completed=completed,
+                )
+            ),
+            timeout=timeout,
         )
         return await asyncio.wait_for(completed, timeout=timeout)
 
@@ -354,6 +378,7 @@ class TechnicalLeadAgent(BaseAgent):
                 "incidents_received": self.incidents_received,
                 "triages_completed": self.triages_completed,
                 "last_incident_id": self.last_incident_id,
+                "last_assignment_error": self.last_assignment_error,
                 "last_triage": last_triage,
                 "last_triage_error": self.last_triage_error,
             }
