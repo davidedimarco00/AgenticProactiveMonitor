@@ -67,6 +67,9 @@ class IncidentRepositoryPort(Protocol):
     ) -> list[dict[str, Any]]:
         ...
 
+    async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
+        ...
+
     async def create_incident(self, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
@@ -82,6 +85,11 @@ class IncidentRepositoryPort(Protocol):
         incident_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        ...
+
+    # The coordinator must observe the durable task linked by an incident while
+    # it keeps exclusive ownership of the global anomaly FIFO slot.
+    async def get_task(self, task_id: str) -> dict[str, Any] | None:
         ...
 
 
