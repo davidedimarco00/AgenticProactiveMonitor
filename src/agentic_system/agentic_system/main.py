@@ -155,7 +155,11 @@ async def _run_backend() -> None:
         task_workflow,
         repository,
     )
-    runtime.configure_anomaly_handler(incident_coordinator.handle_anomaly)
+
+    # The anomaly queue must own its current item for the complete collaborative
+    # workflow. A successful triage or a PENDING specialist task is therefore not
+    # an acknowledgement boundary anymore.
+    runtime.configure_anomaly_handler(incident_coordinator.handle_anomaly_exclusively)
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
