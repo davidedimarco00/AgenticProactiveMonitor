@@ -201,13 +201,18 @@ async def _run_backend() -> None:
         task_recovery = (await task_workflow.recover_incomplete_tasks()).to_dict()
         _set_health(task_recovery=task_recovery, phase="starting-agents")
 
-        await runtime.start()
+        # Start the agents and their communication supervisor, but deliberately
+        # keep new OpenSearch work paused until persistent recovery is complete.
+        await runtime.start(start_observation_pipeline=False)
 
         # Agents are now available, therefore durable incidents that previously
         # stopped in NEW/TAKEN_IN_CHARGE/TRIAGED can continue from their last
         # persisted state without replaying already completed stages.
         _set_health(phase="recovering-incidents")
         incident_recovery = await incident_coordinator.recover_incomplete_incidents()
+
+        # Only after recovery has converged do we accept fresh anomaly work.
+        runtime.start_observation_pipeline()
         _set_health(incident_recovery=incident_recovery, phase="starting-api")
 
         api = create_api_app(runtime, repository)
