@@ -64,10 +64,16 @@ class IncidentCoordinator:
         scanned = 0
         resumed = 0
         failed = 0
+        seen_incident_ids: set[str] = set()
         for status in RECOVERABLE_INCIDENT_STATUSES:
             incidents = await self.repository.list_incidents(status=status, limit=500)
             for incident in incidents:
+                incident_id = str(incident.get("incident_id") or "")
+                if not incident_id or incident_id in seen_incident_ids:
+                    continue
+                seen_incident_ids.add(incident_id)
                 scanned += 1
+
                 detector_id = str((incident.get("anomaly") or {}).get("detector_id") or "")
                 detector_context = await self._resolve_detector_context(detector_id)
                 before = self._progress_marker(incident)
@@ -77,7 +83,7 @@ class IncidentCoordinator:
                     failed += 1
                     LOGGER.exception(
                         "Could not recover persisted incident=%s from state=%s: %s",
-                        incident.get("incident_id"),
+                        incident_id,
                         incident.get("status"),
                         exc,
                     )
@@ -100,12 +106,14 @@ class IncidentCoordinator:
         detector_context: dict[str, Any],
     ) -> dict[str, Any]:
         current = dict(incident)
+        technical_lead_jid = "technical-lead@xmpp"
 
         # Each transition is persisted before the next external interaction.
         # Re-entering this method therefore continues from the latest durable
         # state and does not repeat already completed workflow stages.
         if str(current.get("status") or "").upper() == "NEW":
             assignment_receipt = await self.assignee.assign_incident(current)
+            technical_lead_jid = assignment_receipt.agent_jid
             current = dict(
                 await self.workflow.mark_taken_in_charge(
                     assignment_receipt.incident_id,
@@ -125,10 +133,7 @@ class IncidentCoordinator:
                 await self.workflow.mark_triaged(
                     triage_receipt,
                     agent_role="technical_lead",
-                    agent_jid=str(
-                        (current.get("agentic") or {}).get("current_agent")
-                        or "technical-lead@xmpp"
-                    ),
+                    agent_jid=technical_lead_jid,
                 )
             )
             self.triaged_count += 1
