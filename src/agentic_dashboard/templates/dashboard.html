@@ -3,6 +3,7 @@
 {% block page_title %}Operations{% endblock %}
 
 {% block content %}
+{% set effective_workflow_state = 'RECOVERY' if workflow.state == 'IDLE' and workflow.active_incident_id and workflow.task and not workflow.active_anomaly else workflow.state %}
 <section class="status-panel panel">
   <div class="status-summary">
     <span class="status-dot {{ 'online' if overall_online else 'offline' }}"></span>
@@ -23,7 +24,7 @@
   </div>
 </section>
 
-<section class="workflow-panel panel" id="workflow-panel" data-workflow-state="{{ workflow.state }}">
+<section class="workflow-panel panel" id="workflow-panel" data-workflow-state="{{ effective_workflow_state }}">
   <div class="workflow-header">
     <div>
       <span class="eyebrow">EXCLUSIVE AGENTIC WORKFLOW</span>
@@ -40,10 +41,10 @@
   <div class="workflow-grid">
     <article class="workflow-primary">
       <div class="workflow-state-line">
-        <span class="workflow-state-dot state-{{ workflow.state|lower }}"></span>
+        <span class="workflow-state-dot state-{{ 'queued' if effective_workflow_state == 'RECOVERY' else effective_workflow_state|lower }}"></span>
         <div>
           <span class="label">Workflow state</span>
-          <strong id="workflow-state">{{ workflow.state }}</strong>
+          <strong id="workflow-state">{{ effective_workflow_state }}</strong>
           <small id="workflow-phase">{{ workflow.phase }}</small>
         </div>
       </div>
@@ -63,7 +64,7 @@
             {% if workflow.active_anomaly %}{{ workflow.active_anomaly.detector_id }}{% else %}—{% endif %}
           </strong>
           <small id="workflow-result-id">
-            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.result_id }}{% else %}No anomaly currently owned by the team{% endif %}
+            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.result_id }}{% elif effective_workflow_state == 'RECOVERY' %}Persisted workflow from an earlier runtime{% else %}No anomaly currently owned by the team{% endif %}
           </small>
         </div>
         <div>
@@ -78,6 +79,14 @@
           </small>
         </div>
       </div>
+
+      {% if effective_workflow_state == 'RECOVERY' %}
+      <div class="workflow-error">
+        <strong>Persisted workflow awaiting recovery ownership</strong>
+        <span>This incident has non-terminal durable work but no current in-memory anomaly owner.</span>
+        <small>This state can exist for records created by an earlier backend runtime; it must not be confused with an IDLE workflow.</small>
+      </div>
+      {% endif %}
 
       <div class="workflow-error" id="workflow-error" {% if not workflow.last_error %}hidden{% endif %}>
         <strong>Last workflow error</strong>
@@ -94,7 +103,7 @@
       </div>
       <div class="queue-capacity">
         <span>Active slots</span>
-        <strong>1 / 1</strong>
+        <strong id="workflow-active-slots">{{ 1 if workflow.active_anomaly else 0 }} / {{ workflow.max_concurrent_anomalies }}</strong>
       </div>
       <div class="queue-capacity">
         <span>Queue capacity</span>
@@ -103,8 +112,10 @@
       <p id="workflow-queue-message">
         {% if workflow.queue_depth %}
           {{ workflow.queue_depth }} anomal{{ 'y is' if workflow.queue_depth == 1 else 'ies are' }} waiting for the current collaborative workflow to finish.
+        {% elif workflow.active_anomaly %}
+          The team owns one anomaly and no additional anomalies are waiting.
         {% else %}
-          No additional anomalies are waiting.
+          No anomalies are currently queued.
         {% endif %}
       </p>
     </aside>
