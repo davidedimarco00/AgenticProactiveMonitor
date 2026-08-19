@@ -40,3 +40,17 @@ def communication_probe_is_successful(health: dict) -> None:
 def communication_is_correlated(health: dict) -> None:
     probe = health["communication_probe"]
     assert probe["request_correlation_id"] == probe["response_correlation_id"]
+
+
+@then("durable task recovery is exposed")
+def durable_task_recovery_is_exposed(health: dict) -> None:
+    recovery = health["task_recovery"]
+    assert set(recovery) == {"scanned", "retrying", "failed"}
+    assert all(isinstance(recovery[key], int) for key in recovery)
+
+
+@then("incomplete incident recovery is exposed")
+def incomplete_incident_recovery_is_exposed(health: dict) -> None:
+    recovery = health["incident_recovery"]
+    assert set(recovery) == {"scanned", "resumed", "failed"}
+    assert all(isinstance(recovery[key], int) for key in recovery)
