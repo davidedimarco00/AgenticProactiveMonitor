@@ -41,10 +41,23 @@
     }
   };
 
+  const effectiveState = (workflow) => {
+    const state = String(workflow?.state || "IDLE").toUpperCase();
+    if (
+      state === "IDLE" &&
+      workflow?.active_incident_id &&
+      workflow?.task &&
+      !workflow?.active_anomaly
+    ) {
+      return "RECOVERY";
+    }
+    return state;
+  };
+
   const renderWorkflow = (workflow) => {
     if (!workflow) return;
 
-    const state = String(workflow.state || "IDLE").toUpperCase();
+    const state = effectiveState(workflow);
     panel.dataset.workflowState = state;
 
     const stateNode = byId("workflow-state");
@@ -53,7 +66,7 @@
     const dot = panel.querySelector(".workflow-state-dot");
     if (dot) {
       dot.classList.remove("state-idle", "state-processing", "state-queued");
-      dot.classList.add(`state-${state.toLowerCase()}`);
+      dot.classList.add(state === "RECOVERY" ? "state-queued" : `state-${state.toLowerCase()}`);
     }
 
     const phase = byId("workflow-phase");
@@ -66,7 +79,11 @@
     const resultNode = byId("workflow-result-id");
     if (anomalyNode) anomalyNode.textContent = anomaly?.detector_id || "—";
     if (resultNode) {
-      resultNode.textContent = anomaly?.result_id || "No anomaly currently owned by the team";
+      resultNode.textContent = anomaly?.result_id || (
+        state === "RECOVERY"
+          ? "Persisted workflow from an earlier runtime"
+          : "No anomaly currently owned by the team"
+      );
     }
 
     const assignee = byId("workflow-assignee");
@@ -84,15 +101,21 @@
 
     const depth = Number(workflow.queue_depth || 0);
     const maxSize = Number(workflow.queue_maxsize || 0);
+    const maxConcurrent = Number(workflow.max_concurrent_anomalies || 1);
+    const activeSlots = anomaly ? 1 : 0;
     const depthNode = byId("workflow-queue-depth");
+    const activeSlotsNode = byId("workflow-active-slots");
     const capacityNode = byId("workflow-queue-capacity");
     const queueMessage = byId("workflow-queue-message");
     if (depthNode) depthNode.textContent = String(depth);
+    if (activeSlotsNode) activeSlotsNode.textContent = `${activeSlots} / ${maxConcurrent}`;
     if (capacityNode) capacityNode.textContent = `${depth} / ${maxSize}`;
     if (queueMessage) {
       queueMessage.textContent = depth
         ? `${depth} ${depth === 1 ? "anomaly is" : "anomalies are"} waiting for the current collaborative workflow to finish.`
-        : "No additional anomalies are waiting.";
+        : anomaly
+          ? "The team owns one anomaly and no additional anomalies are waiting."
+          : "No anomalies are currently queued.";
     }
 
     const error = byId("workflow-error");
