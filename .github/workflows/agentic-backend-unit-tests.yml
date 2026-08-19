@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/agentic-system-backend
+      - feature/agentic-system-backend-fault-tolerance
     paths:
       - "src/agentic_system/**"
       - ".github/workflows/agentic-backend-unit-tests.yml"
