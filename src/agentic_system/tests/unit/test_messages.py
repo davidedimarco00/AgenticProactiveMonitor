@@ -1,4 +1,4 @@
-from agentic_system.communication.messages import Performative
+from agentic_system.agents.messages import Performative
 
 
 def test_performative_values_are_stable() -> None:

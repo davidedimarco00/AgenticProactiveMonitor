@@ -1,4 +1,4 @@
-from agentic_system.incident_repository import (
+from agentic_system.integrations import (
     deep_merge,
     format_incident_id,
     normalize_event,

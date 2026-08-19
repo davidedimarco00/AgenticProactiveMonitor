@@ -7,10 +7,12 @@ import uuid
 import pytest
 from pymongo import MongoClient
 
-from agentic_system.application.incidents import IncidentWorkflow
-from agentic_system.domain.anomalies import AnomalyObservation
-from agentic_system.domain.incidents import IncidentCorrelationPolicy
-from agentic_system.infrastructure.mongodb import IncidentRepository
+from agentic_system.incidents import (
+    AnomalyObservation,
+    IncidentCorrelationPolicy,
+    IncidentWorkflow,
+)
+from agentic_system.integrations import IncidentRepository
 
 
 MONGODB_URI = os.getenv(

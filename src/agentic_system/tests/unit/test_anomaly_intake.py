@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 
-from agentic_system.application.anomaly_ingestion import AnomalyIntake
-from agentic_system.domain.anomalies import AnomalyObservation
+from agentic_system.incidents import AnomalyIntake, AnomalyObservation
 
 
 def _observation(result_id: str) -> AnomalyObservation:

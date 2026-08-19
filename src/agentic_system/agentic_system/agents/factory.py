@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from spade_llm.mcp import StreamableHttpServerConfig
 
-from ..ai.providers import HybridLLMProvider
-from ..config import RuntimeConfig
+from ..reasoning import HybridLLMProvider
+from ..settings import RuntimeConfig
 from .application_engineer import ApplicationEngineerAgent
 from .base import BaseAgent
 from .network_engineer import NetworkEngineerAgent

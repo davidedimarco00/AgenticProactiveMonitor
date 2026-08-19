@@ -3,10 +3,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
-from agentic_system.application.incidents import IncidentWorkflow
-from agentic_system.application.ports.incident_assignee import IncidentTriageReceipt
-from agentic_system.domain.anomalies import AnomalyObservation
-from agentic_system.domain.incidents import IncidentCorrelationPolicy
+from agentic_system.incidents import (
+    AnomalyObservation,
+    IncidentCorrelationPolicy,
+    IncidentTriageReceipt,
+    IncidentWorkflow,
+)
 
 
 class FakeIncidentRepository:

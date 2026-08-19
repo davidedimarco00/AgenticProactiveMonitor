@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_system.agents.technical_lead.triage import TechnicalLeadTriageReasoner
+from agentic_system.agents.triage import TechnicalLeadTriageReasoner
 
 
 def test_triage_parser_accepts_only_coordination_decision() -> None:
@@ -38,7 +38,7 @@ def test_technical_lead_agentspeak_plan_manages_but_does_not_diagnose() -> None:
     asl_path = (
         Path(__file__).parents[2]
         / "agentic_system"
-        / "bdi"
+        / "reasoning"
         / "plans"
         / "technical_lead.asl"
     )

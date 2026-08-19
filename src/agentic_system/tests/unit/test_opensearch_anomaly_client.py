@@ -1,7 +1,4 @@
-from agentic_system.infrastructure.opensearch.client import (
-    ANOMALY_RESULTS_PATH,
-    OpenSearchAnomalyClient,
-)
+from agentic_system.integrations import ANOMALY_RESULTS_PATH, OpenSearchAnomalyClient
 
 
 def test_anomaly_client_preserves_single_result_polling_contract() -> None:

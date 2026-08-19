@@ -12,12 +12,10 @@ import spade
 import uvicorn
 
 from .api import create_api_app
-from .application.incidents import IncidentCoordinator, IncidentWorkflow
-from .config import RuntimeConfig, load_runtime_config
-from .domain.incidents import IncidentCorrelationPolicy
-from .infrastructure.mongodb import IncidentRepository
-from .infrastructure.opensearch import OpenSearchDetectorCatalog
+from .incidents import IncidentCoordinator, IncidentCorrelationPolicy, IncidentWorkflow
+from .integrations import IncidentRepository, OpenSearchDetectorCatalog
 from .runtime import AgentRuntime
+from .settings import RuntimeConfig, load_runtime_config
 
 
 LOGGER = logging.getLogger("agentic_system")

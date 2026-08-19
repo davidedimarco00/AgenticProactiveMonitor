@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from agentic_system.anomaly_watcher import (
+from agentic_system.integrations import (
     OpenSearchAnomalyWatcher,
     anomaly_observation_from_hit,
 )

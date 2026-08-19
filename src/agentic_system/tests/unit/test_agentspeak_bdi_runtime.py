@@ -1,14 +1,14 @@
 import asyncio
 from pathlib import Path
 
-from agentic_system.bdi import AgentSpeakBDIRuntime, BDITriageAssessment
+from agentic_system.reasoning import AgentSpeakBDIRuntime, BDITriageAssessment
 
 
 def _plan_path() -> Path:
     return (
         Path(__file__).parents[2]
         / "agentic_system"
-        / "bdi"
+        / "reasoning"
         / "plans"
         / "technical_lead.asl"
     )

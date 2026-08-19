@@ -7,7 +7,7 @@ import sys
 from copy import deepcopy
 from typing import Any
 
-from .incident_repository import IncidentRepository
+from .integrations import IncidentRepository
 
 
 ROLE_BY_LEGACY_JID = {

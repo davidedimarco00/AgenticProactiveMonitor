@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from agentic_system.communication.messages import (
+from agentic_system.agents.messages import (
     AGENTIC_PROTOCOL,
     AgentMessage,
     Performative,

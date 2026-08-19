@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from agentic_system.domain.incidents import IncidentCorrelationPolicy
+from agentic_system.incidents import IncidentCorrelationPolicy
 
 
 def _incident(*, detector_id: str = "detector-1", status: str = "NEW", updated_at: str) -> dict:

@@ -11,7 +11,7 @@ from spade_llm import LLMAgent
 from spade_llm.mcp import MCPServerConfig
 from spade_llm.providers import LLMProvider
 
-from ..communication import AgentMessage, Performative, build_spade_message
+from .messages import AgentMessage, Performative, build_spade_message
 
 
 LOGGER = logging.getLogger("agentic_system.agents")

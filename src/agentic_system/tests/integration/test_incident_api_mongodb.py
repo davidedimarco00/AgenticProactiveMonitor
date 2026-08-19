@@ -9,7 +9,7 @@ from urllib.request import urlopen
 import pytest
 from pymongo import MongoClient
 
-from agentic_system.incident_repository import IncidentRepository
+from agentic_system.integrations import IncidentRepository
 
 
 API_URL = os.getenv("AGENTIC_API_TEST_URL", "http://127.0.0.1:8082").rstrip("/")

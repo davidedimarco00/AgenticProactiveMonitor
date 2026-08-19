@@ -1,4 +1,4 @@
-from agentic_system.reports import build_incident_report
+from agentic_system.incidents import build_incident_report
 
 
 def test_incident_report_is_a_pdf_and_contains_only_agentic_summary_data() -> None:

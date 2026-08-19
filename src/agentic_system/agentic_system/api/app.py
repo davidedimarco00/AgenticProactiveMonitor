@@ -6,8 +6,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
-from ..infrastructure.mongodb import ACTIVE_STATUSES, IncidentRepository
-from ..infrastructure.reports import build_incident_report
+from ..incidents import build_incident_report
+from ..integrations import ACTIVE_STATUSES, IncidentRepository
 from ..runtime import AgentRuntime
 
 

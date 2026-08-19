@@ -1,4 +1,4 @@
-"""Backward-compatible facade for role-specific agent packages."""
+"""Role-specific SPADE-LLM agent exports."""
 
 from .application_engineer import ApplicationEngineerAgent
 from .network_engineer import NetworkEngineerAgent

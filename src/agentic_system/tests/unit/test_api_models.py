@@ -1,4 +1,4 @@
-from agentic_system.api_models import IncidentCreate, IncidentPatch
+from agentic_system.api import IncidentCreate, IncidentPatch
 
 
 def test_incident_model_drops_raw_opensearch_metric_fields() -> None:

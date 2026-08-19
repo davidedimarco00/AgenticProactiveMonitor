@@ -6,8 +6,7 @@ from spade_llm.context import ContextManager
 from spade_llm.tools import LLMTool
 
 from agentic_system.agents.factory import MCP_SERVER_NAME
-from agentic_system.providers import HybridLLMProvider
-from agentic_system.providers.hybrid import OllamaToolCallingProvider
+from agentic_system.reasoning import HybridLLMProvider, OllamaToolCallingProvider
 
 
 class FakeProvider:

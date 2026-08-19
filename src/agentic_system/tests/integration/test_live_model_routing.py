@@ -9,7 +9,7 @@ from spade_llm.context import ContextManager
 from spade_llm.mcp import StreamableHttpServerConfig, get_all_mcp_tools
 
 from agentic_system.agents.factory import MCP_SERVER_NAME
-from agentic_system.providers import HybridLLMProvider
+from agentic_system.reasoning import HybridLLMProvider
 
 
 RUN_LIVE_MODEL_ROUTING = os.getenv("RUN_LIVE_MODEL_ROUTING", "0") == "1"

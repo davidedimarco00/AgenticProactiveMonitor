@@ -32,7 +32,7 @@ where = ["."]
 include = ["agentic_system*"]
 
 [tool.setuptools.package-data]
-agentic_system = ["bdi/plans/*.asl"]
+agentic_system = ["reasoning/plans/*.asl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_system.config import EXPECTED_ROLES, load_runtime_config
+from agentic_system.settings import EXPECTED_ROLES, load_runtime_config
 
 
 def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -29,7 +29,7 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     assert config.anomaly_watch_lookback_seconds == 300
     assert config.incident_correlation_window_seconds == 600
     assert config.agentspeak_technical_lead_asl.endswith(
-        "/agentic_system/bdi/plans/technical_lead.asl"
+        "/agentic_system/reasoning/plans/technical_lead.asl"
     )
     assert config.agentspeak_action_timeout_seconds == 120.0
     assert config.agentspeak_bdi_max_concurrency == 2
