@@ -31,6 +31,7 @@ ACTIVE_STATUSES = {
     "OPERATOR_ACTION_REQUIRED",
 }
 AGENT_ACTIVITY_STATES = {"IDLE", "WORKING", "WAITING"}
+TERMINAL_TASK_STATES = {"COMPLETED", "FAILED"}
 
 # The keys are retained for compatibility with the existing dashboard layout.
 AGENT_TEAM = [
@@ -142,6 +143,17 @@ def search_agents() -> list[dict[str, Any]]:
     except (requests.RequestException, ValueError):
         app.logger.warning("Could not load runtime agent activity from the backend API")
         return []
+
+
+def get_system_status() -> dict[str, Any]:
+    try:
+        response = backend_request("GET", "/api/v1/system/status")
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+    except (requests.RequestException, ValueError):
+        app.logger.warning("Could not load global agentic workflow state")
+        return {}
 
 
 def agent_definition(identity: str | None) -> dict[str, Any] | None:
@@ -337,7 +349,105 @@ def build_agent_team(runtime_agents: list[dict[str, Any]]) -> dict[str, Any]:
         "working": state == "WORKING",
         "waiting": state == "WAITING",
         "active_incidents": len(incident_ids),
+        "active_incident_ids": sorted(incident_ids),
         "members": members,
+    }
+
+
+def _find_active_incident_id(
+    incidents: list[dict[str, Any]],
+    workflow: dict[str, Any],
+    team: dict[str, Any],
+) -> str | None:
+    team_ids = team.get("active_incident_ids") or []
+    if len(team_ids) == 1:
+        return str(team_ids[0])
+
+    active_anomaly = workflow.get("active_anomaly") or {}
+    detector_id = str(active_anomaly.get("detector_id") or "").strip()
+    if not detector_id:
+        return None
+
+    for incident in incidents:
+        if str(incident.get("status") or "").upper() not in ACTIVE_STATUSES:
+            continue
+        anomaly = incident.get("anomaly") or {}
+        if str(anomaly.get("detector_id") or "").strip() == detector_id:
+            return str(incident.get("incident_id") or "") or None
+    return None
+
+
+def _workflow_phase(incident: dict[str, Any] | None, task: dict[str, Any] | None) -> str:
+    if task:
+        task_state = str(task.get("state") or "PENDING").upper()
+        return {
+            "PENDING": "TASK PENDING",
+            "DISPATCHED": "TASK DISPATCHED",
+            "RUNNING": "SPECIALIST INVESTIGATION",
+            "RETRYING": "TASK RETRYING",
+            "COMPLETED": "SPECIALIST COMPLETED",
+            "FAILED": "TASK FAILED",
+        }.get(task_state, task_state)
+
+    incident_status = str((incident or {}).get("status") or "").upper()
+    return {
+        "NEW": "INCIDENT CREATED",
+        "TAKEN_IN_CHARGE": "TECHNICAL LEAD TAKEOVER",
+        "TRIAGED": "BDI TRIAGE COMPLETED",
+        "UNDER_ANALYSIS": "AGENT INVESTIGATION",
+        "DIAGNOSED": "DIAGNOSIS COMPLETED",
+        "OPERATOR_ACTION_REQUIRED": "OPERATOR ACTION REQUIRED",
+        "RESOLVED": "RESOLVED",
+        "CLOSED": "CLOSED",
+    }.get(incident_status, "ANOMALY INTAKE")
+
+
+def build_workflow_view(
+    system_status: dict[str, Any],
+    incidents: list[dict[str, Any]],
+    team: dict[str, Any],
+) -> dict[str, Any]:
+    runtime_workflow = system_status.get("workflow") or {}
+    queue_depth = int(runtime_workflow.get("queue_depth") or 0)
+    active_anomaly = runtime_workflow.get("active_anomaly") or None
+    active_incident_id = _find_active_incident_id(incidents, runtime_workflow, team)
+    incident = get_incident(active_incident_id) if active_incident_id else None
+
+    tasks = list((incident or {}).get("tasks") or [])
+    active_tasks = [
+        task
+        for task in tasks
+        if str(task.get("state") or "").upper() not in TERMINAL_TASK_STATES
+    ]
+    task = (active_tasks or tasks[-1:])[0] if active_tasks or tasks else None
+
+    if active_anomaly is not None:
+        state = "PROCESSING"
+    elif queue_depth > 0:
+        state = "QUEUED"
+    else:
+        state = "IDLE"
+
+    assigned_to = None
+    if task:
+        assigned_to = task.get("assigned_to")
+    if not assigned_to and incident:
+        assigned_to = (incident.get("agentic") or {}).get("primary_investigator")
+
+    return {
+        "state": state,
+        "mode": runtime_workflow.get("processing_mode", "FIFO_SINGLE_ACTIVE"),
+        "max_concurrent_anomalies": int(runtime_workflow.get("max_concurrent_anomalies") or 1),
+        "queue_depth": queue_depth,
+        "queue_maxsize": int(runtime_workflow.get("queue_maxsize") or 0),
+        "active_anomaly": active_anomaly,
+        "active_incident_id": active_incident_id,
+        "active_incident": incident,
+        "phase": _workflow_phase(incident, task),
+        "task": task,
+        "assigned_to": assigned_to,
+        "failed_deliveries": int(runtime_workflow.get("failed_deliveries") or 0),
+        "last_error": runtime_workflow.get("intake_last_error") or runtime_workflow.get("last_error"),
     }
 
 
@@ -364,13 +474,18 @@ def confidence(value: Any) -> str:
 def dashboard() -> str:
     incidents = search_incidents(300)
     health = system_health()
+    system_status = get_system_status()
+    runtime_agents = system_status.get("agents") or search_agents()
+    team = build_agent_team(runtime_agents)
+    workflow = build_workflow_view(system_status, incidents, team)
     return render_template(
         "dashboard.html",
         app_name=APP_NAME,
         overview=build_overview(incidents),
         incidents=incidents[:100],
         services=health,
-        team=build_agent_team(search_agents()),
+        team=team,
+        workflow=workflow,
         overall_online=all(s["status"] == "ONLINE" for s in health if s["critical"]),
         now=utc_now(),
     )
@@ -432,11 +547,15 @@ def system_page() -> str:
 @app.get("/api/overview")
 def api_overview():
     incidents = search_incidents(200)
+    system_status = get_system_status()
+    runtime_agents = system_status.get("agents") or search_agents()
+    team = build_agent_team(runtime_agents)
     return jsonify(
         {
             "generated_at": utc_now(),
             "overview": build_overview(incidents),
-            "team": build_agent_team(search_agents()),
+            "team": team,
+            "workflow": build_workflow_view(system_status, incidents, team),
             "recent_incidents": incidents[:7],
         }
     )
