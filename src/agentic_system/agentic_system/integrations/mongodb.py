@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, AsyncMongoClient, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 from pymongo.server_api import ServerApi
 
 
@@ -58,6 +59,8 @@ AGENTIC_FIELDS = {
     "bdi_goal",
     "bdi_triage_intention",
     "bdi_intention",
+    "investigation_task_id",
+    "task_state",
 }
 EVENT_FIELDS = {
     "event_id",
@@ -72,7 +75,27 @@ EVENT_FIELDS = {
     "tool",
     "status",
     "outcome",
+    "task_id",
 }
+TASK_FIELDS = {
+    "task_id",
+    "incident_id",
+    "task_type",
+    "created_by",
+    "assigned_to",
+    "state",
+    "attempt",
+    "max_attempts",
+    "idempotency_key",
+    "last_error",
+    "outcome",
+    "created_at",
+    "updated_at",
+    "finished_at",
+}
+TASK_ERROR_FIELDS = {"type", "message", "retryable", "at"}
+TASK_OUTCOME_FIELDS = {"status", "summary", "result_ref"}
+TERMINAL_TASK_STATES = {"COMPLETED", "FAILED"}
 
 
 def utc_now() -> str:
@@ -116,6 +139,15 @@ def sanitize_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: deepcopy(value) for key, value in payload.items() if key in EVENT_FIELDS}
 
 
+def sanitize_task_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    doc = {key: deepcopy(value) for key, value in payload.items() if key in TASK_FIELDS}
+    if "last_error" in doc and doc["last_error"] is not None:
+        doc["last_error"] = _keep_fields(doc["last_error"], TASK_ERROR_FIELDS)
+    if "outcome" in doc and doc["outcome"] is not None:
+        doc["outcome"] = _keep_fields(doc["outcome"], TASK_OUTCOME_FIELDS)
+    return doc
+
+
 def format_incident_id(day: str, sequence: int) -> str:
     """Build the operator-facing incident identifier from a UTC day and sequence."""
 
@@ -137,6 +169,10 @@ def new_incident_id() -> str:
 
 def new_event_id() -> str:
     return f"AEV-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def new_task_id() -> str:
+    return f"TASK-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8].upper()}"
 
 
 def normalize_incident(payload: dict[str, Any], incident_id: str | None = None) -> dict[str, Any]:
@@ -174,6 +210,38 @@ def normalize_event(payload: dict[str, Any], incident_id: str) -> dict[str, Any]
     return doc
 
 
+def normalize_task(payload: dict[str, Any], task_id: str | None = None) -> dict[str, Any]:
+    now = utc_now()
+    doc = sanitize_task_payload(payload)
+    doc["task_id"] = task_id or doc.get("task_id") or new_task_id()
+    doc["incident_id"] = str(doc.get("incident_id") or "").strip()
+    doc["task_type"] = str(doc.get("task_type") or "").strip().upper()
+    doc["created_by"] = str(doc.get("created_by") or "technical_lead").strip().lower()
+    doc["assigned_to"] = str(doc.get("assigned_to") or "").strip().lower()
+    doc["state"] = str(doc.get("state") or "PENDING").strip().upper()
+    doc["attempt"] = max(int(doc.get("attempt") or 0), 0)
+    doc["max_attempts"] = max(int(doc.get("max_attempts") or 3), 1)
+    doc["idempotency_key"] = str(doc.get("idempotency_key") or "").strip()
+    doc.setdefault("last_error", None)
+    doc.setdefault("outcome", None)
+    doc.setdefault("created_at", now)
+    doc["updated_at"] = now
+    if doc["state"] in TERMINAL_TASK_STATES:
+        doc.setdefault("finished_at", now)
+    else:
+        doc.setdefault("finished_at", None)
+
+    if not doc["incident_id"]:
+        raise ValueError("Agent task incident_id is required")
+    if not doc["task_type"]:
+        raise ValueError("Agent task task_type is required")
+    if not doc["assigned_to"]:
+        raise ValueError("Agent task assigned_to is required")
+    if not doc["idempotency_key"]:
+        raise ValueError("Agent task idempotency_key is required")
+    return doc
+
+
 def public_document(document: dict[str, Any] | None) -> dict[str, Any] | None:
     if document is None:
         return None
@@ -183,13 +251,14 @@ def public_document(document: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 class IncidentRepository:
-    """MongoDB persistence for agentic incidents and their append-only event history."""
+    """MongoDB persistence for incidents, events and durable agent tasks."""
 
     def __init__(self, uri: str, database_name: str) -> None:
         self.client = AsyncMongoClient(uri, server_api=ServerApi("1"))
         self.database = self.client[database_name]
         self.incidents = self.database["incidents"]
         self.events = self.database["incident_events"]
+        self.tasks = self.database["agent_tasks"]
         self.counters = self.database["counters"]
 
     async def connect(self) -> None:
@@ -207,6 +276,11 @@ class IncidentRepository:
         await self.events.create_index("event_id", unique=True)
         await self.events.create_index([("incident_id", ASCENDING), ("timestamp", ASCENDING)])
         await self.events.create_index([("agent_role", ASCENDING), ("timestamp", DESCENDING)])
+        await self.tasks.create_index("task_id", unique=True)
+        await self.tasks.create_index("idempotency_key", unique=True)
+        await self.tasks.create_index([("incident_id", ASCENDING), ("created_at", ASCENDING)])
+        await self.tasks.create_index([("state", ASCENDING), ("updated_at", ASCENDING)])
+        await self.tasks.create_index([("assigned_to", ASCENDING), ("state", ASCENDING)])
 
     async def ping(self) -> bool:
         try:
@@ -335,3 +409,102 @@ class IncidentRepository:
         async for document in cursor:
             documents.append(public_document(document) or {})
         return documents
+
+    async def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a durable task once for a stable idempotency key."""
+
+        task = normalize_task(payload)
+        existing = await self.tasks.find_one(
+            {"idempotency_key": task["idempotency_key"]}
+        )
+        if existing is not None:
+            return public_document(existing) or {}
+
+        task["_id"] = task["task_id"]
+        try:
+            await self.tasks.insert_one(task)
+        except DuplicateKeyError:
+            # A concurrent retry may have inserted the same idempotent work item.
+            existing = await self.tasks.find_one(
+                {"idempotency_key": task["idempotency_key"]}
+            )
+            if existing is None:
+                raise
+            return public_document(existing) or {}
+        return public_document(task) or {}
+
+    async def get_task(self, task_id: str) -> dict[str, Any] | None:
+        document = await self.tasks.find_one({"task_id": task_id})
+        return public_document(document)
+
+    async def list_tasks(
+        self,
+        *,
+        states: list[str] | None = None,
+        incident_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {}
+        if states:
+            query["state"] = {"$in": [str(state).upper() for state in states]}
+        if incident_id:
+            query["incident_id"] = incident_id
+        bounded_limit = min(max(limit, 1), 500)
+        cursor = self.tasks.find(query).sort("updated_at", ASCENDING).limit(bounded_limit)
+        documents: list[dict[str, Any]] = []
+        async for document in cursor:
+            documents.append(public_document(document) or {})
+        return documents
+
+    async def transition_task(
+        self,
+        task_id: str,
+        *,
+        expected_states: list[str],
+        new_state: str,
+        patch: dict[str, Any] | None = None,
+        increment_attempt: bool = False,
+    ) -> dict[str, Any] | None:
+        """Compare-and-set a task state so concurrent workers cannot double-advance it."""
+
+        normalized_expected = [str(state).upper() for state in expected_states]
+        if not normalized_expected:
+            raise ValueError("expected_states cannot be empty")
+        target = str(new_state).upper()
+        now = utc_now()
+
+        changes = sanitize_task_payload(patch or {})
+        for immutable in {
+            "task_id",
+            "incident_id",
+            "task_type",
+            "created_by",
+            "assigned_to",
+            "idempotency_key",
+            "created_at",
+            "attempt",
+            "max_attempts",
+        }:
+            changes.pop(immutable, None)
+        changes["state"] = target
+        changes["updated_at"] = now
+        if isinstance(changes.get("last_error"), dict):
+            changes["last_error"].setdefault("at", now)
+        if target in TERMINAL_TASK_STATES:
+            changes["finished_at"] = now
+        else:
+            changes["finished_at"] = None
+
+        update: dict[str, Any] = {"$set": changes}
+        if increment_attempt:
+            update["$inc"] = {"attempt": 1}
+
+        document = await self.tasks.find_one_and_update(
+            {
+                "task_id": task_id,
+                "state": {"$in": normalized_expected},
+            },
+            update,
+            return_document=ReturnDocument.AFTER,
+        )
+        return public_document(document)
