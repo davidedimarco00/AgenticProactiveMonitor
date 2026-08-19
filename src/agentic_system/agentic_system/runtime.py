@@ -63,7 +63,7 @@ class AgentRuntime:
         )
 
     def configure_anomaly_handler(self, handler: AnomalyHandler) -> None:
-        """Attach the application workflow before the runtime is started."""
+        """Attach the application workflow before runtime start."""
 
         if self.started:
             raise RuntimeError("Anomaly handler must be configured before runtime start")
@@ -113,7 +113,7 @@ class AgentRuntime:
             bdi_intention=decision.bdi_intention,
         )
 
-    async def start(self) -> None:
+    async def start(self, *, start_observation_pipeline: bool = True) -> None:
         LOGGER.info("Starting %d SPADE-LLM agents", len(self.agents))
 
         results = await asyncio.gather(
@@ -149,15 +149,25 @@ class AgentRuntime:
             self._health_probe_loop(),
             name="agent-xmpp-health-probe",
         )
-        self._anomaly_intake_task = asyncio.create_task(
-            self.anomaly_intake.run(),
-            name="anomaly-intake-worker",
-        )
-        self._anomaly_watcher_task = asyncio.create_task(
-            self.anomaly_watcher.run(),
-            name="opensearch-anomaly-watcher",
-        )
+        if start_observation_pipeline:
+            self.start_observation_pipeline()
         LOGGER.info("Inter-agent XMPP communication probe passed for all five agents")
+
+    def start_observation_pipeline(self) -> None:
+        """Start anomaly intake only after persistent recovery is complete."""
+
+        if not self.started:
+            raise RuntimeError("Agent runtime must be started before anomaly intake")
+        if self._anomaly_intake_task is None:
+            self._anomaly_intake_task = asyncio.create_task(
+                self.anomaly_intake.run(),
+                name="anomaly-intake-worker",
+            )
+        if self._anomaly_watcher_task is None:
+            self._anomaly_watcher_task = asyncio.create_task(
+                self.anomaly_watcher.run(),
+                name="opensearch-anomaly-watcher",
+            )
         LOGGER.info("Acknowledged OpenSearch anomaly intake attached to the agentic runtime")
 
     @property
