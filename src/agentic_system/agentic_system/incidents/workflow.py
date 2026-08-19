@@ -308,3 +308,50 @@ class IncidentWorkflow:
                 f"Could not persist task creation event for incident: {incident_id}"
             )
         return updated
+
+    async def mark_operator_action_required(
+        self,
+        incident_id: str,
+        *,
+        task_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Close autonomous ownership after a terminal task failure.
+
+        The incident remains open for the human operator, while the global
+        anomaly FIFO is allowed to continue with the next work item. Agent health
+        is intentionally unchanged because the failure belongs to the task.
+        """
+
+        updated = await self.repository.update_incident(
+            incident_id,
+            {
+                "status": "OPERATOR_ACTION_REQUIRED",
+                "agentic": {
+                    "current_agent": "technical_lead",
+                    "active_agents": [],
+                },
+            },
+        )
+        if updated is None:
+            raise RuntimeError(
+                f"Incident disappeared before operator escalation: {incident_id}"
+            )
+
+        event = await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": "AGENT_TASK_FAILED",
+                "agent_role": "technical_lead",
+                "action": "escalate_to_operator",
+                "reason": reason,
+                "status": "OPERATOR_ACTION_REQUIRED",
+                "task_id": task_id,
+                "outcome": "Autonomous investigation stopped after terminal task failure.",
+            },
+        )
+        if event is None:
+            raise RuntimeError(
+                f"Could not persist operator escalation event for incident: {incident_id}"
+            )
+        return updated
