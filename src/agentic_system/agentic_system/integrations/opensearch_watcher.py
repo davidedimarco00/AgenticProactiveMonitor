@@ -14,7 +14,12 @@ LOGGER = logging.getLogger("agentic_system.integrations.opensearch_watcher")
 
 
 class OpenSearchAnomalyWatcher:
-    """Poll anomaly results and deliver each OpenSearch result once per runtime."""
+    """Poll anomaly results and deliver each OpenSearch result once per runtime.
+
+    Downstream delivery failures are isolated per observation: a failing
+    incident workflow is left unacknowledged and therefore retryable, while
+    other anomaly results from the same poll can still progress.
+    """
 
     def __init__(
         self,
@@ -49,6 +54,7 @@ class OpenSearchAnomalyWatcher:
         self.running = False
         self.poll_count = 0
         self.delivered_count = 0
+        self.failed_delivery_count = 0
         self.last_error: str | None = None
         self._stop_event = asyncio.Event()
         self._seen_keys: set[str] = set()
@@ -71,6 +77,7 @@ class OpenSearchAnomalyWatcher:
         hits = await self._fetch_hits()
         self.poll_count += 1
         delivered = 0
+        delivery_error: str | None = None
 
         for hit in hits:
             observation = anomaly_observation_from_hit(hit)
@@ -81,13 +88,28 @@ class OpenSearchAnomalyWatcher:
             if key in self._seen_keys:
                 continue
 
-            # A failed downstream handoff must be retried on the next poll.
-            await self.on_anomaly(observation)
+            try:
+                # Only a successful downstream acknowledgement makes this
+                # OpenSearch result delivered for the current runtime.
+                await self.on_anomaly(observation)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.failed_delivery_count += 1
+                delivery_error = str(exc)
+                LOGGER.warning(
+                    "Anomaly delivery failed result=%s detector=%s; it remains retryable: %s",
+                    observation.result_id,
+                    observation.detector_id,
+                    exc,
+                )
+                continue
+
             self._remember(key)
             delivered += 1
             self.delivered_count += 1
 
-        self.last_error = None
+        self.last_error = delivery_error
         return delivered
 
     async def run(self) -> None:
@@ -105,6 +127,8 @@ class OpenSearchAnomalyWatcher:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    # Fetch/parsing failures affect this polling cycle, not the
+                    # long-lived watcher process.
                     self.last_error = str(exc)
                     LOGGER.warning("OpenSearch anomaly watcher poll failed: %s", exc)
 
