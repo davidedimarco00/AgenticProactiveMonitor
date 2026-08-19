@@ -45,6 +45,8 @@ class AgentRuntime:
         self._anomaly_watcher_task: asyncio.Task[None] | None = None
         self._anomaly_intake_task: asyncio.Task[None] | None = None
 
+        # This is the global agentic-system work queue. One consumer owns one
+        # anomaly until the complete collaborative handler returns.
         self.anomaly_queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(
             maxsize=ANOMALY_QUEUE_MAXSIZE
         )
@@ -54,10 +56,7 @@ class AgentRuntime:
         )
         self.anomaly_watcher = OpenSearchAnomalyWatcher(
             opensearch_url=config.opensearch_url,
-            # The watcher receives an acknowledgement only after the complete
-            # downstream incident workflow succeeds. A failed workflow is not
-            # added to the watcher's deduplication set and is retried later.
-            on_anomaly=self.anomaly_intake.submit,
+            on_anomaly=self.anomaly_intake.enqueue,
             poll_interval_seconds=config.anomaly_watch_poll_seconds,
             lookback_seconds=config.anomaly_watch_lookback_seconds,
         )
@@ -168,7 +167,7 @@ class AgentRuntime:
                 self.anomaly_watcher.run(),
                 name="opensearch-anomaly-watcher",
             )
-        LOGGER.info("Acknowledged OpenSearch anomaly intake attached to the agentic runtime")
+        LOGGER.info("Global FIFO anomaly pipeline started with concurrency=1")
 
     @property
     def anomalies_received(self) -> int:
@@ -181,6 +180,8 @@ class AgentRuntime:
     def anomaly_watch_snapshot(self) -> dict[str, Any]:
         return {
             "running": self.anomaly_watcher.running,
+            "processing_mode": "FIFO_SINGLE_ACTIVE",
+            "max_concurrent_anomalies": 1,
             "opensearch_url": self.config.opensearch_url,
             "poll_interval_seconds": self.config.anomaly_watch_poll_seconds,
             "lookback_seconds": self.config.anomaly_watch_lookback_seconds,
@@ -188,8 +189,15 @@ class AgentRuntime:
             "intake_running": self.anomaly_intake.running,
             "queue_depth": self.anomaly_queue.qsize(),
             "queue_maxsize": self.anomaly_queue.maxsize,
+            "enqueued_count": self.anomaly_intake.enqueued_count,
+            "duplicate_count": self.anomaly_intake.duplicate_count,
             "anomalies_received": self.anomalies_received,
             "failed_deliveries": self.anomaly_intake.failed_count,
+            "active_anomaly": (
+                self.anomaly_intake.active_anomaly.to_dict()
+                if self.anomaly_intake.active_anomaly is not None
+                else None
+            ),
             "last_error": self.anomaly_watcher.last_error,
             "intake_last_error": self.anomaly_intake.last_error,
             "last_anomaly": (
