@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_observability.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/activity_states.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/workflow_observability.css') }}">
 </head>
 <body>
   <header class="app-header">
@@ -43,6 +44,7 @@
   </main>
 
   <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/workflow_observability.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
