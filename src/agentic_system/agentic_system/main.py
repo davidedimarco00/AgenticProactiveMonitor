@@ -12,7 +12,12 @@ import spade
 import uvicorn
 
 from .api import create_api_app
-from .incidents import IncidentCoordinator, IncidentCorrelationPolicy, IncidentWorkflow
+from .incidents import (
+    AgentTaskWorkflow,
+    IncidentCoordinator,
+    IncidentCorrelationPolicy,
+    IncidentWorkflow,
+)
 from .integrations import IncidentRepository, OpenSearchDetectorCatalog
 from .runtime import AgentRuntime
 from .settings import RuntimeConfig, load_runtime_config
@@ -141,11 +146,14 @@ async def _run_backend() -> None:
         window_seconds=config.incident_correlation_window_seconds
     )
     incident_workflow = IncidentWorkflow(repository, correlation_policy)
+    task_workflow = AgentTaskWorkflow(repository)
     runtime = AgentRuntime(config)
     incident_coordinator = IncidentCoordinator(
         incident_workflow,
         runtime,
         detector_context,
+        task_workflow,
+        repository,
     )
     runtime.configure_anomaly_handler(incident_coordinator.handle_anomaly)
 
@@ -154,6 +162,8 @@ async def _run_backend() -> None:
 
     api_server: uvicorn.Server | None = None
     api_task: asyncio.Task[None] | None = None
+    task_recovery: dict[str, int] = {"scanned": 0, "retrying": 0, "failed": 0}
+    incident_recovery: dict[str, int] = {"scanned": 0, "resumed": 0, "failed": 0}
 
     _set_health(
         status="starting",
@@ -177,12 +187,28 @@ async def _run_backend() -> None:
         team_communication_ok=False,
         unreachable_specialists=[],
         anomaly_watcher=runtime.anomaly_watch_snapshot(),
+        task_recovery=task_recovery,
+        incident_recovery=incident_recovery,
     )
 
     try:
         await repository.connect()
-        _set_health(mongodb_reachable=True, phase="starting-agents")
+        _set_health(mongodb_reachable=True, phase="recovering-agent-tasks")
+
+        # Volatile DISPATCHED/RUNNING executions cannot survive a backend
+        # restart. Persistently reclassify them before the agents start so the
+        # next dispatcher can safely retry rather than duplicate work.
+        task_recovery = (await task_workflow.recover_incomplete_tasks()).to_dict()
+        _set_health(task_recovery=task_recovery, phase="starting-agents")
+
         await runtime.start()
+
+        # Agents are now available, therefore durable incidents that previously
+        # stopped in NEW/TAKEN_IN_CHARGE/TRIAGED can continue from their last
+        # persisted state without replaying already completed stages.
+        _set_health(phase="recovering-incidents")
+        incident_recovery = await incident_coordinator.recover_incomplete_incidents()
+        _set_health(incident_recovery=incident_recovery, phase="starting-api")
 
         api = create_api_app(runtime, repository)
         api_server = uvicorn.Server(
@@ -207,6 +233,8 @@ async def _run_backend() -> None:
             team_communication_ok=runtime.team_communication_ok,
             unreachable_specialists=runtime.unreachable_specialists,
             anomaly_watcher=runtime.anomaly_watch_snapshot(),
+            task_recovery=task_recovery,
+            incident_recovery=incident_recovery,
             api_docs=f"http://{config.api_host}:{config.api_port}/docs",
         )
         LOGGER.info("Agentic backend is ready with five active SPADE-LLM agents")
@@ -219,6 +247,8 @@ async def _run_backend() -> None:
                 team_communication_ok=runtime.team_communication_ok,
                 unreachable_specialists=runtime.unreachable_specialists,
                 anomaly_watcher=runtime.anomaly_watch_snapshot(),
+                task_recovery=task_recovery,
+                incident_recovery=incident_recovery,
             )
             if api_task.done():
                 exc = api_task.exception()
