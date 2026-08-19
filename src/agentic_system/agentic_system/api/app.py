@@ -46,8 +46,8 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         description=(
             "The operator-facing API is read-only: the autonomous multi-agent core starts from "
             "OpenSearch anomaly events, not from operator commands. MongoDB stores incidents, "
-            "diagnoses, remediations and structured incident history. Raw metrics and logs remain "
-            "in OpenSearch."
+            "durable agent tasks, diagnoses, remediations and structured incident history. "
+            "Raw metrics and logs remain in OpenSearch."
         ),
         version="0.1.0",
         docs_url="/docs",
@@ -56,6 +56,10 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         openapi_tags=[
             {"name": "Health", "description": "Backend API and persistence health."},
             {"name": "Incidents", "description": "Read-only incident information for operators."},
+            {
+                "name": "Tasks",
+                "description": "Read-only durable agent task state for fault-tolerance observability.",
+            },
             {"name": "Agents", "description": "Structured runtime and agent activity information."},
         ],
     )
@@ -110,6 +114,10 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         incident["timeline"] = await repository.list_events(
             incident_id=incident_id, limit=500, ascending=True
         )
+        incident["tasks"] = await repository.list_tasks(
+            incident_id=incident_id,
+            limit=200,
+        )
         return incident
 
     @app.get("/api/v1/incidents/{incident_id}/timeline", tags=["Incidents"])
@@ -145,6 +153,27 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    @app.get("/api/v1/tasks", tags=["Tasks"])
+    async def list_tasks(
+        limit: int = Query(100, ge=1, le=500),
+        state: str | None = Query(None),
+        incident_id: str | None = Query(None),
+    ) -> dict[str, Any]:
+        states = [state.upper()] if state else None
+        tasks = await repository.list_tasks(
+            states=states,
+            incident_id=incident_id,
+            limit=limit,
+        )
+        return {"tasks": tasks}
+
+    @app.get("/api/v1/tasks/{task_id}", tags=["Tasks"])
+    async def task_detail(task_id: str) -> dict[str, Any]:
+        task = await repository.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Agent task not found")
+        return task
 
     @app.get("/api/v1/agents", tags=["Agents"])
     async def agents() -> dict[str, Any]:
