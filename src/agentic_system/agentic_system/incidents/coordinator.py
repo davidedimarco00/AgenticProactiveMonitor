@@ -160,7 +160,6 @@ class IncidentCoordinator:
                 await self.workflow.mark_investigation_task_created(
                     str(current["incident_id"]),
                     task_id=str(task["task_id"]),
-                    task_state=str(task["state"]),
                     primary_investigator=primary_investigator,
                 )
             )
