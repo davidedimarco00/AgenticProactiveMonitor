@@ -32,6 +32,7 @@ class SpecialistAgent(BaseAgent):
             try:
                 request = parse_spade_message(message)
             except (ValueError, TypeError) as exc:
+                self.agent.last_request_error = str(exc)
                 LOGGER.warning(
                     "%s received invalid health REQUEST: %s",
                     self.agent.display_name,
@@ -39,31 +40,43 @@ class SpecialistAgent(BaseAgent):
                 )
                 return
 
-            self.agent.mark_message_received()
-            self.agent.last_received_request = request
+            try:
+                self.agent.mark_message_received()
+                self.agent.last_received_request = request
 
-            acknowledgement = AgentMessage.create(
-                type="request_acknowledged",
-                sender=str(self.agent.jid),
-                receiver=request.sender,
-                correlation_id=request.correlation_id,
-                payload={
-                    "accepted_by": self.agent.role,
-                    "request_type": request.type,
-                    "health": True,
-                },
-            )
-            await self.agent.send_agent_message(
-                acknowledgement,
-                performative=Performative.AGREE,
-            )
+                acknowledgement = AgentMessage.create(
+                    type="request_acknowledged",
+                    sender=str(self.agent.jid),
+                    receiver=request.sender,
+                    correlation_id=request.correlation_id,
+                    payload={
+                        "accepted_by": self.agent.role,
+                        "request_type": request.type,
+                        "health": True,
+                    },
+                )
+                await self.agent.send_agent_message(
+                    acknowledgement,
+                    performative=Performative.AGREE,
+                )
+                self.agent.last_request_error = None
 
-            LOGGER.info(
-                "%s acknowledged health REQUEST from %s correlation_id=%s",
-                self.agent.display_name,
-                request.sender,
-                request.correlation_id,
-            )
+                LOGGER.info(
+                    "%s acknowledged health REQUEST from %s correlation_id=%s",
+                    self.agent.display_name,
+                    request.sender,
+                    request.correlation_id,
+                )
+            except Exception as exc:
+                # A failed request/ack exchange degrades communication health,
+                # but must not terminate the specialist's cyclic behaviour.
+                self.agent.last_request_error = str(exc)
+                self.agent.mark_communication_failed()
+                LOGGER.exception(
+                    "%s failed to process REQUEST but remains operational: %s",
+                    self.agent.display_name,
+                    exc,
+                )
 
     def __init__(
         self,
@@ -90,6 +103,7 @@ class SpecialistAgent(BaseAgent):
             interaction_memory_path=interaction_memory_path,
         )
         self.last_received_request: AgentMessage | None = None
+        self.last_request_error: str | None = None
 
     async def setup(self) -> None:
         await super().setup()
@@ -98,3 +112,8 @@ class SpecialistAgent(BaseAgent):
         template.set_metadata("performative", Performative.REQUEST.value)
         template.set_metadata("message_type", HEALTH_PROBE_MESSAGE_TYPE)
         self.add_behaviour(self.HealthProbeRequestBehaviour(), template)
+
+    def health_snapshot(self) -> dict[str, object]:
+        snapshot = super().health_snapshot()
+        snapshot["last_request_error"] = self.last_request_error
+        return snapshot
