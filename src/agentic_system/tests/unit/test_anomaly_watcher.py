@@ -41,11 +41,17 @@ def test_non_anomalous_result_is_ignored() -> None:
     assert anomaly_observation_from_hit(_anomaly_hit(grade=0.0)) is None
 
 
-def test_same_opensearch_result_is_delivered_only_once_per_runtime() -> None:
-    delivered = []
+def test_queue_acceptance_owns_deduplication_across_repeated_polls() -> None:
+    accepted_keys: set[str] = set()
+    delivered: list[str] = []
 
-    async def on_anomaly(observation) -> None:
-        delivered.append(observation)
+    async def on_anomaly(observation) -> bool:
+        key = observation.deduplication_key
+        if key in accepted_keys:
+            return False
+        accepted_keys.add(key)
+        delivered.append(observation.result_id)
+        return True
 
     watcher = OpenSearchAnomalyWatcher(
         opensearch_url="http://opensearch:9200",
@@ -61,19 +67,21 @@ def test_same_opensearch_result_is_delivered_only_once_per_runtime() -> None:
 
     assert asyncio.run(watcher.poll_once()) == 1
     assert asyncio.run(watcher.poll_once()) == 0
-    assert len(delivered) == 1
+    assert delivered == ["result-1"]
     assert watcher.delivered_count == 1
+    assert watcher.duplicate_count == 1
 
 
-def test_failed_delivery_does_not_block_other_results_and_is_retried() -> None:
+def test_failed_enqueue_does_not_block_other_results() -> None:
     attempts: dict[str, int] = {}
     delivered: list[str] = []
 
-    async def on_anomaly(observation) -> None:
+    async def on_anomaly(observation) -> bool:
         attempts[observation.result_id] = attempts.get(observation.result_id, 0) + 1
         if observation.result_id == "result-failing" and attempts[observation.result_id] == 1:
-            raise RuntimeError("temporary downstream failure")
+            raise RuntimeError("temporary queue failure")
         delivered.append(observation.result_id)
+        return True
 
     watcher = OpenSearchAnomalyWatcher(
         opensearch_url="http://opensearch:9200",
@@ -93,11 +101,11 @@ def test_failed_delivery_does_not_block_other_results_and_is_retried() -> None:
     assert asyncio.run(watcher.poll_once()) == 1
     assert delivered == ["result-healthy"]
     assert watcher.failed_delivery_count == 1
-    assert watcher.last_error == "temporary downstream failure"
+    assert watcher.last_error == "temporary queue failure"
 
-    assert asyncio.run(watcher.poll_once()) == 1
-    assert delivered == ["result-healthy", "result-failing"]
+    # The watcher remains alive and retries producer delivery on a later poll.
+    assert asyncio.run(watcher.poll_once()) == 2
+    assert delivered == ["result-healthy", "result-failing", "result-healthy"]
     assert attempts["result-failing"] == 2
-    assert attempts["result-healthy"] == 1
-    assert watcher.delivered_count == 2
+    assert watcher.delivered_count == 3
     assert watcher.last_error is None
