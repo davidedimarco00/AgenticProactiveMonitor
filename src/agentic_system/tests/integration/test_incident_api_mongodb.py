@@ -9,6 +9,7 @@ from urllib.request import urlopen
 import pytest
 from pymongo import MongoClient
 
+from agentic_system.incidents import AgentTaskWorkflow
 from agentic_system.integrations import IncidentRepository
 
 
@@ -25,7 +26,7 @@ def _get_json(path: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-async def _seed_incident(incident_id: str) -> None:
+async def _seed_incident(incident_id: str) -> str:
     repository = IncidentRepository(MONGODB_URI, MONGODB_DATABASE)
     await repository.connect()
     try:
@@ -70,6 +71,12 @@ async def _seed_incident(incident_id: str) -> None:
         )
         assert event is not None
         assert event["incident_id"] == incident_id
+
+        task = await AgentTaskWorkflow(repository).create_investigation_task(
+            created,
+            primary_investigator="system_engineer",
+        )
+        return str(task["task_id"])
     finally:
         await repository.close()
 
@@ -82,23 +89,32 @@ def test_repository_mongodb_public_api_and_pdf_work_together(backend_health: dic
     database = client[MONGODB_DATABASE]
 
     try:
-        asyncio.run(_seed_incident(incident_id))
+        task_id = asyncio.run(_seed_incident(incident_id))
 
         stored = database["incidents"].find_one({"incident_id": incident_id})
         stored_event = database["incident_events"].find_one({"incident_id": incident_id})
+        stored_task = database["agent_tasks"].find_one({"task_id": task_id})
         assert stored is not None
         assert stored_event is not None
+        assert stored_task is not None
         assert stored["diagnosis"]["root_cause"] == "CPU-bound processing workload"
         assert "observed_value" not in stored["anomaly"]
         assert "baseline_value" not in stored["anomaly"]
         assert "raw_log" not in stored["anomaly"]
         assert "raw_tool_output" not in stored_event
+        assert stored_task["state"] == "PENDING"
 
         public_incident = _get_json(f"/api/v1/incidents/{incident_id}")
         assert public_incident["incident_id"] == incident_id
         assert public_incident["timeline"][0]["event_type"] == "DIAGNOSIS_PRODUCED"
+        assert public_incident["tasks"][0]["task_id"] == task_id
         assert "observed_value" not in public_incident["anomaly"]
         assert "baseline_value" not in public_incident["anomaly"]
+
+        public_task = _get_json(f"/api/v1/tasks/{task_id}")
+        assert public_task["incident_id"] == incident_id
+        assert public_task["assigned_to"] == "system_engineer"
+        assert public_task["state"] == "PENDING"
 
         with urlopen(  # noqa: S310 - local integration endpoint
             f"{API_URL}/api/v1/incidents/{incident_id}/report",
@@ -111,7 +127,10 @@ def test_repository_mongodb_public_api_and_pdf_work_together(backend_health: dic
         assert not any(path.startswith("/internal/") for path in openapi["paths"])
         assert "get" in openapi["paths"]["/api/v1/incidents"]
         assert "post" not in openapi["paths"]["/api/v1/incidents"]
+        assert "get" in openapi["paths"]["/api/v1/tasks"]
+        assert "post" not in openapi["paths"]["/api/v1/tasks"]
     finally:
+        database["agent_tasks"].delete_many({"incident_id": incident_id})
         database["incident_events"].delete_many({"incident_id": incident_id})
         database["incidents"].delete_many({"incident_id": incident_id})
         client.close()
