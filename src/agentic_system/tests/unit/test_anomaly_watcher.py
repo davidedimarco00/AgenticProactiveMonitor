@@ -63,3 +63,41 @@ def test_same_opensearch_result_is_delivered_only_once_per_runtime() -> None:
     assert asyncio.run(watcher.poll_once()) == 0
     assert len(delivered) == 1
     assert watcher.delivered_count == 1
+
+
+def test_failed_delivery_does_not_block_other_results_and_is_retried() -> None:
+    attempts: dict[str, int] = {}
+    delivered: list[str] = []
+
+    async def on_anomaly(observation) -> None:
+        attempts[observation.result_id] = attempts.get(observation.result_id, 0) + 1
+        if observation.result_id == "result-failing" and attempts[observation.result_id] == 1:
+            raise RuntimeError("temporary downstream failure")
+        delivered.append(observation.result_id)
+
+    watcher = OpenSearchAnomalyWatcher(
+        opensearch_url="http://opensearch:9200",
+        on_anomaly=on_anomaly,
+        poll_interval_seconds=5,
+        lookback_seconds=300,
+    )
+
+    async def fake_fetch_hits() -> list[dict[str, object]]:
+        return [
+            _anomaly_hit(result_id="result-failing"),
+            _anomaly_hit(result_id="result-healthy"),
+        ]
+
+    watcher._fetch_hits = fake_fetch_hits  # type: ignore[method-assign]
+
+    assert asyncio.run(watcher.poll_once()) == 1
+    assert delivered == ["result-healthy"]
+    assert watcher.failed_delivery_count == 1
+    assert watcher.last_error == "temporary downstream failure"
+
+    assert asyncio.run(watcher.poll_once()) == 1
+    assert delivered == ["result-healthy", "result-failing"]
+    assert attempts["result-failing"] == 2
+    assert attempts["result-healthy"] == 1
+    assert watcher.delivered_count == 2
+    assert watcher.last_error is None
