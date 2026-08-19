@@ -44,7 +44,7 @@ def test_agent_task_is_idempotent_and_recovers_from_interrupted_running_state(
             )
             dispatched = await workflow.mark_dispatched(first["task_id"])
             running = await workflow.mark_running(dispatched["task_id"])
-            summary = await workflow.recover_incomplete_tasks()
+            summary = await workflow.recover_incomplete_tasks(incident_id=incident_id)
             recovered = await repository.get_task(running["task_id"])
             assert recovered is not None
             return duplicate, summary.to_dict(), recovered
