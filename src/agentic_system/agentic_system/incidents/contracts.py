@@ -58,6 +58,15 @@ class IncidentRepositoryPort(Protocol):
     ) -> dict[str, Any] | None:
         ...
 
+    async def list_incidents(
+        self,
+        *,
+        limit: int = 100,
+        status: str | None = None,
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
+        ...
+
     async def create_incident(self, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
@@ -72,5 +81,35 @@ class IncidentRepositoryPort(Protocol):
         self,
         incident_id: str,
         payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        ...
+
+
+class AgentTaskRepositoryPort(Protocol):
+    """Atomic persistence contract for durable agent work items."""
+
+    async def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    async def get_task(self, task_id: str) -> dict[str, Any] | None:
+        ...
+
+    async def list_tasks(
+        self,
+        *,
+        states: list[str] | None = None,
+        incident_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        ...
+
+    async def transition_task(
+        self,
+        task_id: str,
+        *,
+        expected_states: list[str],
+        new_state: str,
+        patch: dict[str, Any] | None = None,
+        increment_attempt: bool = False,
     ) -> dict[str, Any] | None:
         ...
