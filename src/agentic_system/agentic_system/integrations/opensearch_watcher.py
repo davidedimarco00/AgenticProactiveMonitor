@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 import logging
 from typing import Awaitable, Callable
 
@@ -11,21 +10,23 @@ from .opensearch_mapper import anomaly_observation_from_hit
 
 
 LOGGER = logging.getLogger("agentic_system.integrations.opensearch_watcher")
+QueueAnomaly = Callable[[AnomalyObservation], Awaitable[bool]]
 
 
 class OpenSearchAnomalyWatcher:
-    """Poll anomaly results and deliver each OpenSearch result once per runtime.
+    """Poll OpenSearch and feed the global anomaly queue.
 
-    Downstream delivery failures are isolated per observation: a failing
-    incident workflow is left unacknowledged and therefore retryable, while
-    other anomaly results from the same poll can still progress.
+    Deduplication belongs to the queue because only that component knows whether
+    an observation is queued, currently active, completed or released after a
+    failure. The watcher therefore remains a producer and never starts parallel
+    incident workflows by itself.
     """
 
     def __init__(
         self,
         *,
         opensearch_url: str,
-        on_anomaly: Callable[[AnomalyObservation], Awaitable[None]],
+        on_anomaly: QueueAnomaly,
         poll_interval_seconds: float = 5.0,
         lookback_seconds: int = 300,
         request_timeout_seconds: float = 10.0,
@@ -43,6 +44,8 @@ class OpenSearchAnomalyWatcher:
         self.poll_interval_seconds = poll_interval_seconds
         self.lookback_seconds = lookback_seconds
         self.request_timeout_seconds = request_timeout_seconds
+        # Kept for configuration compatibility; deduplication is now owned by
+        # the single-consumer anomaly queue.
         self.deduplication_capacity = deduplication_capacity
         self.client = OpenSearchAnomalyClient(
             opensearch_url=self.opensearch_url,
@@ -54,29 +57,18 @@ class OpenSearchAnomalyWatcher:
         self.running = False
         self.poll_count = 0
         self.delivered_count = 0
+        self.duplicate_count = 0
         self.failed_delivery_count = 0
         self.last_error: str | None = None
         self._stop_event = asyncio.Event()
-        self._seen_keys: set[str] = set()
-        self._seen_order: deque[str] = deque()
 
     async def _fetch_hits(self) -> list[dict[str, object]]:
-        # Kept as a narrow seam so the watcher can be unit-tested without HTTP.
         return await self.client.fetch_hits()
-
-    def _remember(self, key: str) -> None:
-        if key in self._seen_keys:
-            return
-        if len(self._seen_order) >= self.deduplication_capacity:
-            oldest = self._seen_order.popleft()
-            self._seen_keys.discard(oldest)
-        self._seen_order.append(key)
-        self._seen_keys.add(key)
 
     async def poll_once(self) -> int:
         hits = await self._fetch_hits()
         self.poll_count += 1
-        delivered = 0
+        queued = 0
         delivery_error: str | None = None
 
         for hit in hits:
@@ -84,33 +76,30 @@ class OpenSearchAnomalyWatcher:
             if observation is None:
                 continue
 
-            key = observation.deduplication_key
-            if key in self._seen_keys:
-                continue
-
             try:
-                # Only a successful downstream acknowledgement makes this
-                # OpenSearch result delivered for the current runtime.
-                await self.on_anomaly(observation)
+                accepted = await self.on_anomaly(observation)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.failed_delivery_count += 1
                 delivery_error = str(exc)
                 LOGGER.warning(
-                    "Anomaly delivery failed result=%s detector=%s; it remains retryable: %s",
+                    "Could not enqueue anomaly result=%s detector=%s: %s",
                     observation.result_id,
                     observation.detector_id,
                     exc,
                 )
                 continue
 
-            self._remember(key)
-            delivered += 1
+            if not accepted:
+                self.duplicate_count += 1
+                continue
+
+            queued += 1
             self.delivered_count += 1
 
         self.last_error = delivery_error
-        return delivered
+        return queued
 
     async def run(self) -> None:
         self.running = True
@@ -127,8 +116,6 @@ class OpenSearchAnomalyWatcher:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    # Fetch/parsing failures affect this polling cycle, not the
-                    # long-lived watcher process.
                     self.last_error = str(exc)
                     LOGGER.warning("OpenSearch anomaly watcher poll failed: %s", exc)
 
