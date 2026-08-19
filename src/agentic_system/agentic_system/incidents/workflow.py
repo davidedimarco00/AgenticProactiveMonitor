@@ -259,3 +259,49 @@ class IncidentWorkflow:
             receipt.bdi_intention,
         )
         return updated
+
+    async def mark_investigation_task_created(
+        self,
+        incident_id: str,
+        *,
+        task_id: str,
+        task_state: str,
+        primary_investigator: str,
+    ) -> dict[str, object]:
+        """Atomically expose the durable task reference in the incident document."""
+
+        updated = await self.repository.update_incident(
+            incident_id,
+            {
+                "agentic": {
+                    "investigation_task_id": task_id,
+                    "task_state": task_state,
+                    "primary_investigator": primary_investigator,
+                }
+            },
+        )
+        if updated is None:
+            raise RuntimeError(
+                f"Incident disappeared before its task could be linked: {incident_id}"
+            )
+
+        event = await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": "INVESTIGATION_TASK_CREATED",
+                "agent_role": "technical_lead",
+                "action": "create_durable_agent_task",
+                "reason": (
+                    "A persistent investigation task was created for the selected "
+                    "primary investigator."
+                ),
+                "status": updated.get("status", "TRIAGED"),
+                "outcome": primary_investigator,
+                "task_id": task_id,
+            },
+        )
+        if event is None:
+            raise RuntimeError(
+                f"Could not persist task creation event for incident: {incident_id}"
+            )
+        return updated
