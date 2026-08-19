@@ -106,8 +106,6 @@ services:
     build:
       context: ./knowledge_base/ingest
     container_name: agentic-knowledge-base-ingest
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       QDRANT_URL: http://qdrant:6333
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
@@ -308,22 +306,28 @@ services:
       AGENT_API_PORT: 8082
       AGENT_LLM_CONTEXT: ${AGENT_LLM_CONTEXT:-8192}
       AGENT_MAX_LLM_CONCURRENCY: ${AGENT_MAX_LLM_CONCURRENCY:-2}
+
       XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
       XMPP_HOST: xmpp
       XMPP_PORT: 5222
       XMPP_AUTO_REGISTER: ${XMPP_AUTO_REGISTER:-false}
+
       XMPP_TECHNICAL_LEAD_PASSWORD: ${XMPP_TECHNICAL_LEAD_PASSWORD:-change-this-local-password}
       XMPP_SYSTEM_ENGINEER_PASSWORD: ${XMPP_SYSTEM_ENGINEER_PASSWORD:-change-this-local-password}
       XMPP_NETWORK_ENGINEER_PASSWORD: ${XMPP_NETWORK_ENGINEER_PASSWORD:-change-this-local-password}
       XMPP_APPLICATION_ENGINEER_PASSWORD: ${XMPP_APPLICATION_ENGINEER_PASSWORD:-change-this-local-password}
       XMPP_SOFTWARE_DEVELOPER_PASSWORD: ${XMPP_SOFTWARE_DEVELOPER_PASSWORD:-change-this-local-password}
+
       MCP_URL: http://mcp-server:8000/mcp
+
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
       OLLAMA_REASONING_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e2b}
       OLLAMA_TOOL_MODEL: ${OLLAMA_TOOL_MODEL:-qwen3.5:4b}
       OLLAMA_FALLBACK_TOOL_MODEL: ${OLLAMA_FALLBACK_TOOL_MODEL:-qwen2.5:latest}
+
       MONGODB_URI: "mongodb://${MONGODB_ROOT_USERNAME:-agentic}:${MONGODB_ROOT_PASSWORD:-change-this-local-password}@mongodb:27017/${MONGODB_DATABASE:-agentic_monitor}?authSource=admin"
       MONGODB_DATABASE: ${MONGODB_DATABASE:-agentic_monitor}
+
     ports:
       - "127.0.0.1:${AGENTIC_BACKEND_HEALTH_PORT:-8081}:8081"
       - "127.0.0.1:${AGENTIC_BACKEND_API_PORT:-8082}:8082"
@@ -332,6 +336,7 @@ services:
       - "127.0.0.1:${NETWORK_ENGINEER_HEALTH_PORT:-8103}:8103"
       - "127.0.0.1:${APPLICATION_ENGINEER_HEALTH_PORT:-8104}:8104"
       - "127.0.0.1:${SOFTWARE_DEVELOPER_HEALTH_PORT:-8105}:8105"
+
     depends_on:
       xmpp:
         condition: service_healthy
@@ -339,8 +344,10 @@ services:
         condition: service_started
       mongodb:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     healthcheck:
       test:
         [
@@ -351,6 +358,7 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
+
     stop_grace_period: 15s
     restart: unless-stopped
 
@@ -370,8 +378,10 @@ services:
       XMPP_HOST: xmpp
       XMPP_PORT: 5222
       DASHBOARD_REQUEST_TIMEOUT_SECONDS: ${DASHBOARD_REQUEST_TIMEOUT_SECONDS:-2.5}
+
     ports:
       - "127.0.0.1:${AGENTIC_DASHBOARD_PORT:-5050}:5050"
+
     depends_on:
       opensearch:
         condition: service_healthy
@@ -383,8 +393,10 @@ services:
         condition: service_healthy
       agentic-backend:
         condition: service_healthy
+
     networks:
       - monitoring-net
+
     healthcheck:
       test:
         [
@@ -395,6 +407,7 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
+
     restart: unless-stopped
 
   opensearch-dashboards-init:
