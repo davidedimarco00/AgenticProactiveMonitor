@@ -21,91 +21,143 @@ def _observation(result_id: str) -> AnomalyObservation:
     )
 
 
-def test_anomaly_intake_consumes_queue_independently_and_keeps_last_observation() -> None:
+async def _wait_until(predicate, *, timeout: float = 1.0) -> None:
+    async def wait_loop() -> None:
+        while not predicate():
+            await asyncio.sleep(0.005)
+
+    await asyncio.wait_for(wait_loop(), timeout=timeout)
+
+
+def test_global_fifo_allows_only_one_active_anomaly_until_workflow_finishes() -> None:
     async def scenario() -> None:
-        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=4)
-        intake = AnomalyIntake(queue)
-        task = asyncio.create_task(intake.run())
-
-        await queue.put(_observation("result-1"))
-        await queue.put(_observation("result-2"))
-        await asyncio.wait_for(queue.join(), timeout=1)
-
-        assert intake.running is True
-        assert intake.processed_count == 2
-        assert intake.last_anomaly is not None
-        assert intake.last_anomaly.result_id == "result-2"
-        assert intake.last_error is None
-        assert queue.empty()
-
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        assert intake.running is False
-
-    asyncio.run(scenario())
-
-
-def test_anomaly_intake_invokes_downstream_handler_before_marking_processed() -> None:
-    async def scenario() -> None:
-        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=2)
-        handled: list[str] = []
+        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=8)
+        gates = {
+            "result-1": asyncio.Event(),
+            "result-2": asyncio.Event(),
+            "result-3": asyncio.Event(),
+        }
+        trace: list[str] = []
+        active = 0
+        max_active = 0
 
         async def handler(observation: AnomalyObservation) -> object:
-            handled.append(observation.result_id)
-            return {"ok": True}
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            trace.append(f"start:{observation.result_id}")
+            await gates[observation.result_id].wait()
+            trace.append(f"end:{observation.result_id}")
+            active -= 1
+            return {"incident_id": observation.result_id}
 
         intake = AnomalyIntake(queue, on_anomaly=handler)
-        task = asyncio.create_task(intake.run())
+        assert await intake.enqueue(_observation("result-1")) is True
+        assert await intake.enqueue(_observation("result-2")) is True
+        assert await intake.enqueue(_observation("result-3")) is True
 
-        await queue.put(_observation("result-handler"))
+        worker = asyncio.create_task(intake.run())
+        await _wait_until(lambda: trace == ["start:result-1"])
+        assert intake.active_anomaly is not None
+        assert intake.active_anomaly.result_id == "result-1"
+        assert queue.qsize() == 2
+        assert max_active == 1
+
+        gates["result-1"].set()
+        await _wait_until(lambda: "start:result-2" in trace)
+        assert trace[:3] == ["start:result-1", "end:result-1", "start:result-2"]
+        assert max_active == 1
+
+        gates["result-2"].set()
+        await _wait_until(lambda: "start:result-3" in trace)
+        assert max_active == 1
+
+        gates["result-3"].set()
         await asyncio.wait_for(queue.join(), timeout=1)
 
-        assert handled == ["result-handler"]
-        assert intake.processed_count == 1
-        assert intake.last_anomaly is not None
-        assert intake.last_anomaly.result_id == "result-handler"
+        assert trace == [
+            "start:result-1",
+            "end:result-1",
+            "start:result-2",
+            "end:result-2",
+            "start:result-3",
+            "end:result-3",
+        ]
+        assert intake.processed_count == 3
+        assert intake.active_anomaly is None
+        assert max_active == 1
 
-        task.cancel()
+        worker.cancel()
         with suppress(asyncio.CancelledError):
-            await task
+            await worker
 
     asyncio.run(scenario())
 
 
-def test_submit_propagates_failed_workflow_and_worker_remains_operational() -> None:
+def test_duplicate_result_is_not_queued_while_owned_or_after_completion() -> None:
     async def scenario() -> None:
-        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=2)
-        calls = 0
+        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=4)
+        release = asyncio.Event()
+
+        async def handler(observation: AnomalyObservation) -> object:
+            await release.wait()
+            return {"ok": observation.result_id}
+
+        intake = AnomalyIntake(queue, on_anomaly=handler)
+        observation = _observation("result-duplicate")
+        assert await intake.enqueue(observation) is True
+        assert await intake.enqueue(observation) is False
+
+        worker = asyncio.create_task(intake.run())
+        await _wait_until(lambda: intake.active_anomaly is not None)
+        assert await intake.enqueue(observation) is False
+
+        release.set()
+        await asyncio.wait_for(queue.join(), timeout=1)
+        assert await intake.enqueue(observation) is False
+        assert intake.duplicate_count == 3
+
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+
+    asyncio.run(scenario())
+
+
+def test_failed_anomaly_releases_ownership_and_does_not_block_next_queue_item() -> None:
+    async def scenario() -> None:
+        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=4)
+        attempts: dict[str, int] = {}
+        completed: list[str] = []
 
         async def flaky_handler(observation: AnomalyObservation) -> object:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
+            attempts[observation.result_id] = attempts.get(observation.result_id, 0) + 1
+            if observation.result_id == "result-failing" and attempts[observation.result_id] == 1:
                 raise RuntimeError("temporary mongodb outage")
+            completed.append(observation.result_id)
             return {"incident_id": observation.result_id}
 
         intake = AnomalyIntake(queue, on_anomaly=flaky_handler)
         worker = asyncio.create_task(intake.run())
-        observation = _observation("result-retry")
 
-        try:
-            await intake.submit(observation)
-            raise AssertionError("first delivery should fail")
-        except RuntimeError as exc:
-            assert "temporary mongodb outage" in str(exc)
+        failing = _observation("result-failing")
+        healthy = _observation("result-healthy")
+        assert await intake.enqueue(failing) is True
+        assert await intake.enqueue(healthy) is True
+        await asyncio.wait_for(queue.join(), timeout=1)
 
-        assert intake.running is True
-        assert intake.failed_count == 1
-        assert intake.processed_count == 0
-
-        # The same observation remains safe to submit again because a failed
-        # workflow does not poison or terminate the intake worker.
-        await intake.submit(observation)
         assert intake.running is True
         assert intake.failed_count == 1
         assert intake.processed_count == 1
+        assert completed == ["result-healthy"]
+
+        # The failed result is no longer owned, so a later OpenSearch poll can
+        # enqueue it again without restarting the agent team.
+        assert await intake.enqueue(failing) is True
+        await asyncio.wait_for(queue.join(), timeout=1)
+        assert completed == ["result-healthy", "result-failing"]
+        assert attempts["result-failing"] == 2
+        assert intake.processed_count == 2
         assert intake.last_error is None
 
         worker.cancel()
