@@ -116,6 +116,12 @@ def test_repository_mongodb_public_api_and_pdf_work_together(backend_health: dic
         assert public_task["assigned_to"] == "system_engineer"
         assert public_task["state"] == "PENDING"
 
+        system_status = _get_json("/api/v1/system/status")
+        assert system_status["workflow"]["processing_mode"] == "FIFO_SINGLE_ACTIVE"
+        assert system_status["workflow"]["max_concurrent_anomalies"] == 1
+        assert isinstance(system_status["workflow"]["queue_depth"], int)
+        assert "active_anomaly" in system_status["workflow"]
+
         with urlopen(  # noqa: S310 - local integration endpoint
             f"{API_URL}/api/v1/incidents/{incident_id}/report",
             timeout=5,
