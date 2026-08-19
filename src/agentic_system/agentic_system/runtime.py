@@ -22,7 +22,9 @@ LOGGER = logging.getLogger("agentic_system.runtime")
 HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
 HEALTH_PROBE_INTERVAL_SECONDS = 30.0
 HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
-ANOMALY_QUEUE_MAXSIZE = 256
+# Recovery scans are bounded to 500 incidents. Keep enough queue capacity to
+# seed all durable recovery work before fresh OpenSearch polling starts.
+ANOMALY_QUEUE_MAXSIZE = 4096
 AnomalyHandler = Callable[[AnomalyObservation], Awaitable[object]]
 
 
@@ -67,6 +69,23 @@ class AgentRuntime:
         if self.started:
             raise RuntimeError("Anomaly handler must be configured before runtime start")
         self.anomaly_intake.on_anomaly = handler
+
+    async def enqueue_recovery_observations(
+        self,
+        observations: list[AnomalyObservation],
+    ) -> int:
+        """Seed durable recovery work before fresh OpenSearch polling begins."""
+
+        accepted = 0
+        for observation in observations:
+            if await self.anomaly_intake.enqueue(observation):
+                accepted += 1
+        if accepted:
+            LOGGER.warning(
+                "Seeded %d durable incident recovery item(s) into the exclusive FIFO",
+                accepted,
+            )
+        return accepted
 
     async def assign_incident(
         self,
@@ -153,7 +172,7 @@ class AgentRuntime:
         LOGGER.info("Inter-agent XMPP communication probe passed for all five agents")
 
     def start_observation_pipeline(self) -> None:
-        """Start anomaly intake only after persistent recovery is complete."""
+        """Start exclusive anomaly intake and fresh OpenSearch polling."""
 
         if not self.started:
             raise RuntimeError("Agent runtime must be started before anomaly intake")
