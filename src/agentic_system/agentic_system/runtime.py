@@ -54,7 +54,10 @@ class AgentRuntime:
         )
         self.anomaly_watcher = OpenSearchAnomalyWatcher(
             opensearch_url=config.opensearch_url,
-            on_anomaly=self.anomaly_queue.put,
+            # The watcher receives an acknowledgement only after the complete
+            # downstream incident workflow succeeds. A failed workflow is not
+            # added to the watcher's deduplication set and is retried later.
+            on_anomaly=self.anomaly_intake.submit,
             poll_interval_seconds=config.anomaly_watch_poll_seconds,
             lookback_seconds=config.anomaly_watch_lookback_seconds,
         )
@@ -155,7 +158,7 @@ class AgentRuntime:
             name="opensearch-anomaly-watcher",
         )
         LOGGER.info("Inter-agent XMPP communication probe passed for all five agents")
-        LOGGER.info("Queued OpenSearch anomaly intake attached to the agentic runtime")
+        LOGGER.info("Acknowledged OpenSearch anomaly intake attached to the agentic runtime")
 
     @property
     def anomalies_received(self) -> int:
@@ -176,6 +179,7 @@ class AgentRuntime:
             "queue_depth": self.anomaly_queue.qsize(),
             "queue_maxsize": self.anomaly_queue.maxsize,
             "anomalies_received": self.anomalies_received,
+            "failed_deliveries": self.anomaly_intake.failed_count,
             "last_error": self.anomaly_watcher.last_error,
             "intake_last_error": self.anomaly_intake.last_error,
             "last_anomaly": (
