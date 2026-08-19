@@ -1,0 +1,17 @@
+name: data-service-down
+target: data-service
+type: availability
+root_cause: data-service container stopped
+
+description: >
+  Simulates complete unavailability of the persistence service while the
+  Notes Platform continues to receive user traffic.
+
+expected_symptoms:
+  - processing-service cannot contact data-service
+  - processing-service emits data_service_unavailable errors
+  - api-gateway returns HTTP 503 responses
+  - traffic-generator records failed synthetic user actions
+  - data-service telemetry and heartbeats disappear while the container is stopped
+
+recovery: start the data-service container

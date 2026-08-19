@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Operations · {{ app_name }}{% endblock %}
+{% block page_title %}Operations{% endblock %}
+
+{% block content %}
+{% set effective_workflow_state = 'RECOVERY' if workflow.state == 'IDLE' and workflow.active_incident_id and workflow.task and not workflow.active_anomaly else workflow.state %}
+<section class="status-panel panel">
+  <div class="status-summary">
+    <span class="status-dot {{ 'online' if overall_online else 'offline' }}"></span>
+    <div>
+      <span class="label">Agentic system</span>
+      <strong id="system-overall-state">{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</strong>
+      <small>Infrastructure and agent health</small>
+    </div>
+  </div>
+
+  <div class="service-strip" id="service-strip">
+    {% for service in services %}
+    <div class="service-state" data-service-name="{{ service.name }}" title="{{ service.role }}">
+      <span class="status-dot small {{ service.status|lower }}"></span>
+      <span>{{ service.name }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="workflow-panel panel" id="workflow-panel" data-workflow-state="{{ effective_workflow_state }}">
+  <div class="workflow-header">
+    <div>
+      <span class="eyebrow">EXCLUSIVE AGENTIC WORKFLOW</span>
+      <h2>Current anomaly processing</h2>
+      <p class="section-description">The complete multi-agent team processes one OpenSearch anomaly at a time. Additional anomalies wait in FIFO order.</p>
+    </div>
+    <div class="workflow-mode">
+      <span class="label">Processing policy</span>
+      <strong>{{ workflow.mode|replace('_', ' ') }}</strong>
+      <small>Concurrency {{ workflow.max_concurrent_anomalies }}</small>
+    </div>
+  </div>
+
+  <div class="workflow-grid">
+    <article class="workflow-primary">
+      <div class="workflow-state-line">
+        <span class="workflow-state-dot state-{{ 'queued' if effective_workflow_state == 'RECOVERY' else effective_workflow_state|lower }}"></span>
+        <div>
+          <span class="label">Workflow state</span>
+          <strong id="workflow-state">{{ effective_workflow_state }}</strong>
+          <small id="workflow-phase">{{ workflow.phase }}</small>
+        </div>
+      </div>
+
+      <div class="workflow-facts">
+        <div>
+          <span>Active incident</span>
+          {% if workflow.active_incident_id %}
+          <a id="workflow-incident" href="/incidents/{{ workflow.active_incident_id }}"><strong>{{ workflow.active_incident_id }}</strong></a>
+          {% else %}
+          <strong id="workflow-incident">—</strong>
+          {% endif %}
+        </div>
+        <div>
+          <span>Active anomaly</span>
+          <strong id="workflow-anomaly">
+            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.detector_id }}{% else %}—{% endif %}
+          </strong>
+          <small id="workflow-result-id">
+            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.result_id }}{% elif effective_workflow_state == 'RECOVERY' %}Persisted workflow from an earlier runtime{% else %}No anomaly currently owned by the team{% endif %}
+          </small>
+        </div>
+        <div>
+          <span>Assigned role</span>
+          <strong id="workflow-assignee">{{ workflow.assigned_to|replace('_', ' ')|title if workflow.assigned_to else '—' }}</strong>
+        </div>
+        <div>
+          <span>Agent task</span>
+          <strong id="workflow-task-state">{{ workflow.task.state if workflow.task else '—' }}</strong>
+          <small id="workflow-task-attempt">
+            {% if workflow.task %}Attempt {{ workflow.task.attempt }} / {{ workflow.task.max_attempts }}{% else %}Created after Technical Lead triage{% endif %}
+          </small>
+        </div>
+      </div>
+
+      {% if effective_workflow_state == 'RECOVERY' %}
+      <div class="workflow-error">
+        <strong>Persisted workflow awaiting recovery ownership</strong>
+        <span>This incident has non-terminal durable work but no current in-memory anomaly owner.</span>
+        <small>This state can exist for records created by an earlier backend runtime; it must not be confused with an IDLE workflow.</small>
+      </div>
+      {% endif %}
+
+      <div class="workflow-error" id="workflow-error" {% if not workflow.last_error %}hidden{% endif %}>
+        <strong>Last workflow error</strong>
+        <span id="workflow-error-message">{{ workflow.last_error or '' }}</span>
+        <small>The failed work item can be retried without taking the agent team offline.</small>
+      </div>
+    </article>
+
+    <aside class="queue-card">
+      <span class="label">Global anomaly FIFO</span>
+      <div class="queue-count">
+        <strong id="workflow-queue-depth">{{ workflow.queue_depth }}</strong>
+        <span>waiting</span>
+      </div>
+      <div class="queue-capacity">
+        <span>Active slots</span>
+        <strong id="workflow-active-slots">{{ 1 if workflow.active_anomaly else 0 }} / {{ workflow.max_concurrent_anomalies }}</strong>
+      </div>
+      <div class="queue-capacity">
+        <span>Queue capacity</span>
+        <strong id="workflow-queue-capacity">{{ workflow.queue_depth }} / {{ workflow.queue_maxsize }}</strong>
+      </div>
+      <p id="workflow-queue-message">
+        {% if workflow.queue_depth %}
+          {{ workflow.queue_depth }} anomal{{ 'y is' if workflow.queue_depth == 1 else 'ies are' }} waiting for the current collaborative workflow to finish.
+        {% elif workflow.active_anomaly %}
+          The team owns one anomaly and no additional anomalies are waiting.
+        {% else %}
+          No anomalies are currently queued.
+        {% endif %}
+      </p>
+    </aside>
+  </div>
+</section>
+
+{% include "_agent_network.html" %}
+
+<section class="panel incidents-panel">
+  <div class="section-header">
+    <div>
+      <span class="eyebrow">INCIDENT HISTORY</span>
+      <h2>Incidents</h2>
+      <p class="section-description">
+        {{ overview.active }} active · {{ overview.operator_action }} awaiting operator action · {{ overview.resolved }} resolved
+      </p>
+    </div>
+    <div class="table-tools">
+      <input id="incident-search" class="search-input" type="search" placeholder="Search incident, target or diagnosis" aria-label="Search incidents">
+      <a class="secondary-button" href="/incidents">Advanced filters</a>
+    </div>
+  </div>
+
+  {% if incidents %}
+  <div class="incident-table-wrap">
+    <table class="incident-table" id="incident-table">
+      <thead>
+        <tr>
+          <th>Incident</th>
+          <th>Target</th>
+          <th>Why taken in charge</th>
+          <th>Diagnosis</th>
+          <th>Recommended action</th>
+          <th>Status</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for incident in incidents %}
+        <tr class="click-row" data-href="/incidents/{{ incident.incident_id }}">
+          <td>
+            <strong>{{ incident.incident_id }}</strong>
+            <small>
+              <span class="severity {{ (incident.severity or 'medium')|lower }}">{{ incident.severity or 'MEDIUM' }}</span>
+              {{ incident.anomaly.anomaly_type or 'Anomaly' }}
+            </small>
+          </td>
+          <td><strong>{{ incident.entity or incident.service }}</strong></td>
+          <td class="text-cell">{{ incident.takeover_reason or 'Pending triage rationale' }}</td>
+          <td class="text-cell">
+            {{ incident.diagnosis.summary or 'Diagnosis in progress' }}
+            {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
+            <small>Confidence {{ incident.diagnosis.confidence|confidence }}</small>
+            {% endif %}
+          </td>
+          <td class="text-cell">{{ incident.remediation.summary or 'No operator action proposed yet' }}</td>
+          <td>
+            <span class="status-pill status-{{ (incident.status or 'new')|lower|replace('_','-') }}">
+              {{ (incident.status or 'NEW')|replace('_',' ') }}
+            </span>
+          </td>
+          <td class="muted nowrap">{{ incident.updated_at|human_time }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <strong>No incidents recorded</strong>
+    <p>New incidents will appear here when the agentic system takes an anomaly in charge.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

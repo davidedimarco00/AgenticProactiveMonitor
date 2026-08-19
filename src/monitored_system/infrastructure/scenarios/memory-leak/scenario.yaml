@@ -1,0 +1,24 @@
+name: memory-leak
+target: worker-service
+type: resource-exhaustion
+root_cause: controlled progressive memory allocation retained by an injected process
+
+description: >
+  Allocates memory progressively inside the worker-service container and retains
+  the allocated blocks until the scenario is stopped. The growth is bounded by
+  a configurable maximum to avoid uncontrolled host exhaustion.
+
+default_total_mb: 512
+default_step_mb: 32
+default_step_seconds: 2
+max_total_mb: 2048
+
+expected_metric_effects:
+  - docker_container_mem.usage_percent increases relative to the normal baseline
+  - container memory usage remains elevated after the configured allocation is reached
+
+expected_detector:
+  - RAM-worker-service
+
+detection_scope: metric-based OpenSearch Anomaly Detection
+recovery: terminate the injected allocation process using stop.ps1

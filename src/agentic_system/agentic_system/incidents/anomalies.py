@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class AnomalyObservation:
+    """Normalized anomaly metadata entering the autonomous agentic workflow.
+
+    This object is independent from OpenSearch transport details and intentionally
+    excludes raw metrics, raw logs and raw tool payloads. `recovery_incident_id`
+    is populated only for synthetic startup work items that restore exclusive
+    ownership of an already-persisted incident through the same global FIFO used
+    for fresh OpenSearch anomalies.
+    """
+
+    result_id: str
+    result_index: str
+    detector_id: str
+    anomaly_grade: float
+    confidence: float
+    anomaly_score: float | None
+    data_start_time: int | None
+    data_end_time: int | None
+    execution_start_time: int | None
+    execution_end_time: int | None
+    recovery_incident_id: str | None = None
+
+    @property
+    def deduplication_key(self) -> str:
+        return f"{self.result_index}:{self.result_id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

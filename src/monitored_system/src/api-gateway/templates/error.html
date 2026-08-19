@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Notes Platform{% endblock %}
+
+{% block content %}
+<div class="empty-state error-state">
+    <div class="empty-icon">!</div>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    <a class="button button-primary" href="{{ url_for('dashboard') }}">Return to dashboard</a>
+</div>
+{% endblock %}

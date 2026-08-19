@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f7fb">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_observability.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/activity_states.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/workflow_observability.css') }}">
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="Agentic Monitor home">
+      <span class="brand-mark">APM</span>
+      <span class="brand-copy">
+        <strong>Agentic Monitor</strong>
+        <small>Operator Console</small>
+      </span>
+    </a>
+
+    <nav class="header-nav" aria-label="Primary navigation">
+      <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Operations</a>
+      <a class="nav-link {% if request.path == '/system' %}active{% endif %}" href="/system">System</a>
+    </nav>
+
+    <div class="header-meta">
+      <span class="live-indicator"><i></i> LIVE</span>
+      <span class="clock" id="live-clock">UTC</span>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <div class="page-heading">
+      <div>
+        <span class="eyebrow">HYBRID MULTI-AGENT MONITORING</span>
+        <h1>{% block page_title %}Operator Console{% endblock %}</h1>
+      </div>
+      {% block page_actions %}{% endblock %}
+    </div>
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/workflow_observability.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

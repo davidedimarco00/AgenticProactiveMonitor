@@ -1,0 +1,71 @@
+version: 7
+collection: monitored-system
+domain: monitored_system
+system: notes-platform
+branch: feature/monitored_system
+purpose: system-specific-context-rag
+access: shared
+
+services:
+  - traffic-generator
+  - api-gateway
+  - processing-service
+  - data-service
+  - worker-service
+
+excluded_sources:
+  - src/monitored_system/infrastructure/tests/**
+  - src/monitored_system/infrastructure/scenarios/**
+  - src/monitored_system/knowledge_base/diagnostics/**
+  - src/agentic_system/**
+
+exclusion_reason: >
+  Test-suite files, controlled fault-injection ground truth, pre-written
+  diagnostic guides and agent-runtime implementation details must not be
+  embedded in the monitored-system collection. This collection describes the
+  concrete system and the semantics of its observable data. General technical
+  knowledge comes from the LLM and the agents must produce diagnoses from live
+  observations.
+
+documents:
+  - path: shared/system_architecture.md
+    document_type: architecture
+
+  - path: shared/dependency_and_impact_model.md
+    document_type: architecture
+
+  - path: shared/observability_model.md
+    document_type: observability
+
+  - path: domains/infrastructure_runtime.md
+    document_type: system-reference
+
+  - path: domains/network_connectivity.md
+    document_type: system-reference
+
+  - path: domains/application_operations.md
+    document_type: system-reference
+
+  - path: domains/software_behavior.md
+    document_type: system-reference
+
+  - path: services/traffic_generator.md
+    document_type: service-reference
+
+  - path: services/api_gateway.md
+    document_type: service-reference
+
+  - path: services/processing_service.md
+    document_type: service-reference
+
+  - path: services/data_service.md
+    document_type: service-reference
+
+  - path: services/worker_service.md
+    document_type: service-reference
+
+retrieval_policy:
+  shared_by_all_agents: true
+  role_specific_routing: false
+  diagnosis_labels: forbidden
+  live_evidence_is_source_of_truth: true
