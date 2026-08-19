@@ -9,7 +9,10 @@ class AnomalyObservation:
     """Normalized anomaly metadata entering the autonomous agentic workflow.
 
     This object is independent from OpenSearch transport details and intentionally
-    excludes raw metrics, raw logs and raw tool payloads.
+    excludes raw metrics, raw logs and raw tool payloads. `recovery_incident_id`
+    is populated only for synthetic startup work items that restore exclusive
+    ownership of an already-persisted incident through the same global FIFO used
+    for fresh OpenSearch anomalies.
     """
 
     result_id: str
@@ -22,6 +25,7 @@ class AnomalyObservation:
     data_end_time: int | None
     execution_start_time: int | None
     execution_end_time: int | None
+    recovery_incident_id: str | None = None
 
     @property
     def deduplication_key(self) -> str:
