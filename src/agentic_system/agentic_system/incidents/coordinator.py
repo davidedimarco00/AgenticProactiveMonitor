@@ -19,6 +19,7 @@ AUTONOMOUS_WORKFLOW_TERMINAL_STATUSES = {
     "OPERATOR_ACTION_REQUIRED",
 }
 WORKFLOW_COMPLETION_POLL_SECONDS = 0.5
+RECOVERY_RESULT_INDEX = "agentic-workflow-recovery"
 
 
 class IncidentCoordinator:
@@ -50,11 +51,29 @@ class IncidentCoordinator:
     ) -> IncidentWorkflowResult:
         """Advance one anomaly to the latest durable workflow state.
 
-        This method intentionally does not wait for the complete collaborative
-        workflow. It remains useful for recovery and focused unit tests. The
-        runtime-facing FIFO callback is `handle_anomaly_exclusively`, which keeps
-        ownership of the anomaly until the autonomous workflow is terminal.
+        Recovery observations bypass anomaly correlation and resume the exact
+        persisted incident encoded by `recovery_incident_id`. Fresh OpenSearch
+        observations continue through normal SINGLE_ENTITY correlation.
         """
+
+        if observation.recovery_incident_id:
+            incident = await self.repository.get_incident(observation.recovery_incident_id)
+            if incident is None:
+                raise RuntimeError(
+                    "Persisted incident disappeared before FIFO recovery: "
+                    f"{observation.recovery_incident_id}"
+                )
+            detector_context = await self._resolve_detector_context(observation.detector_id)
+            resumed = await self._resume_incident(incident, detector_context)
+            LOGGER.warning(
+                "Recovered incident=%s through the exclusive anomaly FIFO",
+                observation.recovery_incident_id,
+            )
+            return IncidentWorkflowResult(
+                incident=resumed,
+                created=False,
+                correlated=False,
+            )
 
         detector_context = await self._resolve_detector_context(observation.detector_id)
         result = await self.workflow.handle_anomaly(
@@ -95,6 +114,58 @@ class IncidentCoordinator:
             created=result.created,
             correlated=result.correlated,
         )
+
+    async def build_recovery_observations(self) -> list[AnomalyObservation]:
+        """Translate incomplete durable incidents into FIFO work items.
+
+        Startup recovery must obey the same single-active policy as fresh anomaly
+        processing. Therefore incomplete incidents are not resumed in parallel;
+        they are converted to synthetic observations, ordered oldest first, and
+        seeded into the global queue before the OpenSearch watcher starts.
+        """
+
+        incidents: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for status in RECOVERABLE_INCIDENT_STATUSES:
+            for incident in await self.repository.list_incidents(status=status, limit=500):
+                incident_id = str(incident.get("incident_id") or "").strip()
+                if not incident_id or incident_id in seen:
+                    continue
+                seen.add(incident_id)
+                incidents.append(incident)
+
+        incidents.sort(
+            key=lambda item: str(item.get("created_at") or item.get("updated_at") or "")
+        )
+        observations: list[AnomalyObservation] = []
+        for incident in incidents:
+            incident_id = str(incident["incident_id"])
+            anomaly = dict(incident.get("anomaly") or {})
+            detector_id = str(anomaly.get("detector_id") or "").strip()
+            if not detector_id:
+                LOGGER.warning(
+                    "Skipping durable recovery for incident=%s without detector_id",
+                    incident_id,
+                )
+                continue
+
+            observations.append(
+                AnomalyObservation(
+                    result_id=f"recover:{incident_id}",
+                    result_index=RECOVERY_RESULT_INDEX,
+                    detector_id=detector_id,
+                    anomaly_grade=self._safe_float(anomaly.get("grade"), default=0.0),
+                    confidence=self._safe_float(anomaly.get("confidence"), default=0.0),
+                    anomaly_score=None,
+                    data_start_time=None,
+                    data_end_time=None,
+                    execution_start_time=None,
+                    execution_end_time=None,
+                    recovery_incident_id=incident_id,
+                )
+            )
+
+        return observations
 
     async def wait_until_workflow_terminal(
         self,
@@ -162,7 +233,12 @@ class IncidentCoordinator:
             await asyncio.sleep(poll_interval_seconds)
 
     async def recover_incomplete_incidents(self) -> dict[str, int]:
-        """Resume persisted NEW/TAKEN_IN_CHARGE/TRIAGED incidents after restart."""
+        """Compatibility recovery helper used by isolated tests.
+
+        Runtime startup now uses `build_recovery_observations()` so recovery is
+        serialized through the global FIFO. This direct helper remains useful for
+        unit tests that validate state-driven durable resumption in isolation.
+        """
 
         scanned = 0
         resumed = 0
@@ -310,3 +386,10 @@ class IncidentCoordinator:
             if agentic.get("investigation_task_id")
             else None,
         )
+
+    @staticmethod
+    def _safe_float(value: Any, *, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
