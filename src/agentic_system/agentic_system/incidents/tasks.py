@@ -133,9 +133,7 @@ class AgentTaskWorkflow:
             raise ValueError("primary_investigator is required")
 
         # Stable key makes task creation idempotent across retries and restarts.
-        idempotency_key = (
-            f"{incident_id}:{INVESTIGATION_TASK_TYPE}:{investigator}"
-        )
+        idempotency_key = f"{incident_id}:{INVESTIGATION_TASK_TYPE}:{investigator}"
         return await self.repository.create_task(
             {
                 "incident_id": incident_id,
@@ -159,7 +157,7 @@ class AgentTaskWorkflow:
         attempt = int(task.get("attempt") or 0)
         max_attempts = int(task.get("max_attempts") or self.default_max_attempts)
         if attempt >= max_attempts:
-            failed = await self._transition(
+            return await self._transition(
                 task,
                 AgentTaskState.FAILED,
                 patch={
@@ -170,7 +168,6 @@ class AgentTaskWorkflow:
                     }
                 },
             )
-            return failed
 
         transitioned = await self.repository.transition_task(
             task_id,
@@ -231,17 +228,23 @@ class AgentTaskWorkflow:
             },
         )
 
-    async def recover_incomplete_tasks(self) -> TaskRecoverySummary:
+    async def recover_incomplete_tasks(
+        self,
+        *,
+        incident_id: str | None = None,
+    ) -> TaskRecoverySummary:
         """Move interrupted in-flight work to RETRYING or FAILED after restart.
 
         PENDING and RETRYING are already safe durable states and remain unchanged.
         DISPATCHED/RUNNING imply that volatile execution was interrupted, so they
         are atomically converted into a retry decision without marking the agent
-        itself as failed.
+        itself as failed. `incident_id` is optional and is mainly useful for
+        isolated integration testing and targeted administrative recovery.
         """
 
         tasks = await self.repository.list_tasks(
             states=[state.value for state in sorted(IN_FLIGHT_TASK_STATES, key=str)],
+            incident_id=incident_id,
             limit=500,
         )
         retrying = 0
