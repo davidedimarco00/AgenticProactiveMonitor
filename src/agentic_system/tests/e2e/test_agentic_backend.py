@@ -54,3 +54,10 @@ def incomplete_incident_recovery_is_exposed(health: dict) -> None:
     recovery = health["incident_recovery"]
     assert set(recovery) == {"scanned", "resumed", "failed"}
     assert all(isinstance(recovery[key], int) for key in recovery)
+
+
+@then("the anomaly pipeline allows only one active anomaly")
+def anomaly_pipeline_is_single_active(health: dict) -> None:
+    watcher = health["anomaly_watcher"]
+    assert watcher["processing_mode"] == "FIFO_SINGLE_ACTIVE"
+    assert watcher["max_concurrent_anomalies"] == 1
