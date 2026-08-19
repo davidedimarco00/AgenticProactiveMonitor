@@ -351,7 +351,10 @@ class AgentRuntime:
             self._anomaly_watcher_task = None
 
         if self._anomaly_intake_task is not None:
-            await self.anomaly_queue.join()
+            # Do not wait for queue.join() here. The exclusive FIFO handler may
+            # legitimately be waiting on a PENDING/RUNNING durable task for a
+            # long time. Shutdown must cancel volatile execution immediately;
+            # durable incident/task state remains in MongoDB for recovery.
             self._anomaly_intake_task.cancel()
             try:
                 await self._anomaly_intake_task
