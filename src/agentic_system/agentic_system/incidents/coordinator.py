@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from .anomalies import AnomalyObservation
 from .contracts import DetectorContextPort, IncidentAssigneePort, IncidentRepositoryPort
 from .models import IncidentWorkflowResult
-from .tasks import AgentTaskWorkflow
+from .tasks import AgentTaskState, AgentTaskWorkflow
 from .workflow import IncidentWorkflow
 
 
 LOGGER = logging.getLogger("agentic_system.incidents.coordinator")
 RECOVERABLE_INCIDENT_STATUSES = ("NEW", "TAKEN_IN_CHARGE", "TRIAGED")
+AUTONOMOUS_WORKFLOW_TERMINAL_STATUSES = {
+    "RESOLVED",
+    "CLOSED",
+    "OPERATOR_ACTION_REQUIRED",
+}
+WORKFLOW_COMPLETION_POLL_SECONDS = 0.5
 
 
 class IncidentCoordinator:
@@ -41,6 +48,14 @@ class IncidentCoordinator:
         self,
         observation: AnomalyObservation,
     ) -> IncidentWorkflowResult:
+        """Advance one anomaly to the latest durable workflow state.
+
+        This method intentionally does not wait for the complete collaborative
+        workflow. It remains useful for recovery and focused unit tests. The
+        runtime-facing FIFO callback is `handle_anomaly_exclusively`, which keeps
+        ownership of the anomaly until the autonomous workflow is terminal.
+        """
+
         detector_context = await self._resolve_detector_context(observation.detector_id)
         result = await self.workflow.handle_anomaly(
             observation,
@@ -57,6 +72,94 @@ class IncidentCoordinator:
             created=result.created,
             correlated=result.correlated,
         )
+
+    async def handle_anomaly_exclusively(
+        self,
+        observation: AnomalyObservation,
+    ) -> IncidentWorkflowResult:
+        """Own one anomaly until the complete autonomous workflow can be released.
+
+        `AnomalyIntake` has exactly one consumer and awaits this method. Keeping
+        this coroutine pending therefore keeps the current anomaly ACTIVE and all
+        subsequent OpenSearch anomalies physically queued. Creating a PENDING
+        specialist task is not completion: the FIFO slot is released only after
+        the incident reaches a terminal autonomous status.
+        """
+
+        result = await self.handle_anomaly(observation)
+        terminal_incident = await self.wait_until_workflow_terminal(
+            str(result.incident["incident_id"])
+        )
+        return IncidentWorkflowResult(
+            incident=terminal_incident,
+            created=result.created,
+            correlated=result.correlated,
+        )
+
+    async def wait_until_workflow_terminal(
+        self,
+        incident_id: str,
+        *,
+        poll_interval_seconds: float = WORKFLOW_COMPLETION_POLL_SECONDS,
+    ) -> dict[str, Any]:
+        """Wait without blocking the event loop until one incident can release the FIFO.
+
+        A PENDING/DISPATCHED/RUNNING/RETRYING task keeps exclusive ownership of
+        the anomaly. A terminal task failure is escalated to
+        OPERATOR_ACTION_REQUIRED so the failed work item does not poison the
+        global queue and the agents remain available for the next anomaly.
+        """
+
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be greater than zero")
+
+        while True:
+            incident = await self.repository.get_incident(incident_id)
+            if incident is None:
+                raise RuntimeError(
+                    f"Incident disappeared while waiting for workflow completion: {incident_id}"
+                )
+
+            status = str(incident.get("status") or "").upper()
+            if status in AUTONOMOUS_WORKFLOW_TERMINAL_STATUSES:
+                LOGGER.info(
+                    "Exclusive anomaly workflow released: incident=%s status=%s",
+                    incident_id,
+                    status,
+                )
+                return incident
+
+            task_id = str(
+                (incident.get("agentic") or {}).get("investigation_task_id") or ""
+            ).strip()
+            if task_id:
+                task = await self.repository.get_task(task_id)
+                if task is None:
+                    raise RuntimeError(
+                        f"Incident {incident_id} references missing agent task {task_id}"
+                    )
+                task_state = str(task.get("state") or "").upper()
+                if task_state == AgentTaskState.FAILED.value:
+                    last_error = task.get("last_error") or {}
+                    reason = str(last_error.get("message") or "Agent task failed.")
+                    escalated = await self.workflow.mark_operator_action_required(
+                        incident_id,
+                        task_id=task_id,
+                        reason=reason,
+                    )
+                    LOGGER.warning(
+                        "Terminal task failure released exclusive workflow via operator escalation: "
+                        "incident=%s task=%s",
+                        incident_id,
+                        task_id,
+                    )
+                    return escalated
+
+            # PENDING is intentionally included here. Until specialist dispatch
+            # and the downstream collaborative stages are implemented, this is
+            # the correct visible state: the first anomaly remains ACTIVE and
+            # later anomalies remain in the FIFO instead of being triaged early.
+            await asyncio.sleep(poll_interval_seconds)
 
     async def recover_incomplete_incidents(self) -> dict[str, int]:
         """Resume persisted NEW/TAKEN_IN_CHARGE/TRIAGED incidents after restart."""
