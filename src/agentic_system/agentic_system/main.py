@@ -206,16 +206,22 @@ async def _run_backend() -> None:
         _set_health(task_recovery=task_recovery, phase="starting-agents")
 
         # Start the agents and their communication supervisor, but deliberately
-        # keep new OpenSearch work paused until persistent recovery is complete.
+        # keep fresh OpenSearch polling paused while durable work is seeded.
         await runtime.start(start_observation_pipeline=False)
 
-        # Agents are now available, therefore durable incidents that previously
-        # stopped in NEW/TAKEN_IN_CHARGE/TRIAGED can continue from their last
-        # persisted state without replaying already completed stages.
-        _set_health(phase="recovering-incidents")
-        incident_recovery = await incident_coordinator.recover_incomplete_incidents()
+        # Incomplete persisted incidents must obey the same one-anomaly-at-a-time
+        # invariant after a restart. Seed them oldest-first into the same FIFO
+        # before the watcher is allowed to discover fresh anomaly results.
+        _set_health(phase="seeding-incident-recovery")
+        recovery_observations = await incident_coordinator.build_recovery_observations()
+        seeded_recovery = await runtime.enqueue_recovery_observations(recovery_observations)
+        incident_recovery = {
+            "scanned": len(recovery_observations),
+            "resumed": seeded_recovery,
+            "failed": 0,
+        }
 
-        # Only after recovery has converged do we accept fresh anomaly work.
+        # Recovery items are now physically ahead of fresh work in the FIFO.
         runtime.start_observation_pipeline()
         _set_health(incident_recovery=incident_recovery, phase="starting-api")
 
