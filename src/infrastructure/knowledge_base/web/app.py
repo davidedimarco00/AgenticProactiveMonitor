@@ -12,7 +12,7 @@ from services.qdrant_service import QdrantService
 
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "thesis-knowledge-base")
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "monitored-system")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_EMBEDDING_MODEL = os.getenv(
     "OLLAMA_EMBEDDING_MODEL",

@@ -1,10 +1,77 @@
 # Monitored System Knowledge Base
 
-This directory contains the operational knowledge of the Notes Platform monitored by AgenticProactiveMonitor. The documents are written for later ingestion into Qdrant and retrieval through RAG.
+Qdrant collection: `monitored-system`
 
-The knowledge base is intentionally separated from the source code so that agents can retrieve stable descriptions of the system, its telemetry, known failure modes and safe recovery procedures.
+This directory contains stable technical documentation about the concrete Notes Platform monitored by AgenticProactiveMonitor. Every specialist agent may retrieve from this same collection.
 
-## Knowledge groups
+The purpose of RAG in this project is to provide external knowledge that the LLM cannot reliably know from pretraining: the architecture, configuration, telemetry and implemented behaviour of the monitored system.
+
+General technical knowledge such as Linux commands, TCP/IP concepts, HTTP semantics or common software-engineering concepts is not duplicated in Qdrant. The local LLM is expected to use its pretrained knowledge for those concepts.
+
+## Knowledge model
+
+The agent combines three different sources during incident analysis:
+
+```text
+LLM pretrained knowledge
+    = general Linux, networking, application and software knowledge
+
+monitored-system RAG
+    = knowledge specific to this concrete Notes Platform
+
+live tools
+    = current metrics, logs and runtime observations
+```
+
+The intended result is:
+
+```text
+general technical knowledge
+        +
+monitored-system documentation
+        +
+live evidence
+        -> agent reasoning
+        -> hypotheses
+        -> additional tool calls when needed
+        -> agent-produced diagnosis
+```
+
+## Shared access
+
+The `monitored-system` collection is shared by the complete virtual technical team. There is no role-specific Qdrant collection and no role-specific RAG routing.
+
+Different agents remain specialised because of their role, responsibilities, prompts, BDI state, ReAct reasoning and available tools, not because they receive separate copies of general technical knowledge.
+
+## Knowledge policy: descriptive, not prescriptive
+
+The monitored-system collection contains:
+
+- system architecture and runtime dependencies;
+- service responsibilities, ports, endpoints and persistence;
+- deployment and container characteristics specific to this system;
+- telemetry sources and metric semantics used by this system;
+- network links and configured probe semantics;
+- log fields and event meanings implemented by the application;
+- OpenSearch detector definitions and entity scope;
+- expected application behaviour and implemented error propagation.
+
+The monitored-system collection does not contain:
+
+- generic Linux manuals or command references;
+- generic networking manuals;
+- generic framework or programming documentation already covered by the LLM's general knowledge;
+- incident-specific diagnosis guides;
+- symptom-to-root-cause rules;
+- pre-written hypotheses for evaluation scenarios;
+- test-suite implementation or results;
+- controlled fault-injection scripts or parameters;
+- scenario ground truth or expected detector outcomes;
+- agent-runtime implementation details, confidence thresholds or remediation allowlists.
+
+Files under `src/monitored_system/infrastructure/tests/` and `src/monitored_system/infrastructure/scenarios/` are evaluation/support material and must not be ingested into Qdrant.
+
+## Knowledge structure
 
 ```text
 knowledge_base/
@@ -12,52 +79,49 @@ knowledge_base/
 ├── manifest.yaml
 ├── shared/
 │   ├── system_architecture.md
+│   ├── dependency_and_impact_model.md
 │   └── observability_model.md
-├── agents/
-│   ├── coordinator_context.md
-│   ├── evidence_collection.md
-│   ├── reasoning_diagnosis.md
-│   ├── critic_validation.md
-│   └── remediation_policy.md
-├── services/
-│   └── service_reference.md
-└── runbooks/
-    ├── cpu_spike_processing_service.md
-    ├── memory_leak_worker_service.md
-    ├── network_latency_api_gateway_processing_service.md
-    ├── high_application_latency_processing_service.md
-    └── data_service_down.md
+├── domains/
+│   ├── infrastructure_runtime.md
+│   ├── network_connectivity.md
+│   ├── application_operations.md
+│   └── software_behavior.md
+└── services/
+    ├── traffic_generator.md
+    ├── api_gateway.md
+    ├── processing_service.md
+    ├── data_service.md
+    └── worker_service.md
 ```
 
-## Agent differentiation
+`README.md` and `manifest.yaml` define ingestion policy and structure. Only the technical Markdown documents listed by the manifest are intended for embedding in `monitored-system`.
 
-Each document starts with YAML-style metadata. The `agents` field identifies the roles for which the document is most useful:
+## Knowledge layers inside the collection
 
-- `coordinator`: incident scope, topology and workflow context;
-- `evidence`: telemetry sources, expected signals and evidence collection;
-- `reasoning`: hypotheses, causal relations and fault discrimination;
-- `critic`: validation rules, contradictions and minimum evidence requirements;
-- `remediation`: safe, bounded and reversible recovery knowledge.
+`shared/` contains cross-domain facts about this system: architecture, dependency direction and telemetry relationships.
 
-Shared documents can be retrieved by all roles.
+`domains/` reorganises system-specific information by technical viewpoint. These files remain documentation of the Notes Platform and its concrete observability configuration; they are not generic professional manuals.
 
-## RAG design
+`services/` contains one factual reference per monitored service. Keeping services separate improves chunk quality and allows retrieval of service-specific documentation without mixing unrelated components.
 
-The current knowledge-base uploader accepts Markdown and chunks text by words. Therefore, the metadata below is currently embedded as normal text and remains searchable. A later ingestion step can parse the same fields and copy them into Qdrant payloads without changing the documents.
+## Qdrant payload
 
-Recommended future Qdrant payload fields are:
+For each chunk, preserve factual retrieval metadata such as:
 
-- `kb_id`
-- `domain`
-- `document_type`
-- `agents`
-- `services`
-- `incident_types`
-- `source_files`
-- `version`
+- `kb_id`;
+- `collection`;
+- `domain`;
+- `document_type`;
+- `domains`;
+- `services`;
+- `source_files`;
+- `source_path`;
+- `version`.
 
-This makes it possible to combine semantic similarity with metadata filters, for example retrieving only `reasoning` documents related to `processing-service` and `latency`.
+Role labels and incident diagnosis labels are intentionally not required for retrieval.
 
 ## Retrieval principle
 
-Agents should use this knowledge as contextual guidance, not as live state. Current metrics, logs and container state remain the source of truth for the active incident. Knowledge-base content explains what signals mean, which dependencies exist, which hypotheses are plausible and which remediation actions are expected to be safe.
+Live OpenSearch metrics, logs, runtime state and other tool observations are the source of truth for an active incident. Qdrant provides static knowledge about what the monitored system is and what its observable data means.
+
+The diagnosis is produced by the agent. It is never retrieved as an answer from this collection.

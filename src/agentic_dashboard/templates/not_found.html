@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Incident not found · {{ app_name }}{% endblock %}
+{% block page_title %}Incident Not Found{% endblock %}
+{% block content %}
+<section class="panel empty-state large standalone-empty">
+  <div class="empty-symbol">404</div>
+  <h2>{{ incident_id }}</h2>
+  <p>No incident with this identifier is currently available in the OpenSearch incident history.</p>
+  <a class="primary-button" href="/incidents">Return to incident history</a>
+</section>
+{% endblock %}

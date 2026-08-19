@@ -1,0 +1,23 @@
+version: 2
+embedding_model: ibm/granite-embedding:30m
+vector_size: 384
+distance: Cosine
+
+collections:
+  monitored-system:
+    kind: system-specific-knowledge
+    access: shared
+    source_path: src/monitored_system/knowledge_base
+    purpose: >
+      Stable documentation of the monitored Notes Platform: architecture,
+      services, dependencies, telemetry semantics and implemented behaviour.
+      This is external knowledge that the LLM cannot infer reliably from its
+      general pretrained knowledge. It must not contain scenario ground truth,
+      pre-written diagnoses or agent-specific professional manuals.
+
+principles:
+  - live telemetry and tool observations are the source of truth for incidents
+  - the LLM provides general technical knowledge such as Linux, networking and software concepts
+  - Qdrant provides external knowledge specific to the monitored system
+  - retrieved documents provide context and technical semantics, not diagnosis labels
+  - all specialist agents may retrieve from monitored-system

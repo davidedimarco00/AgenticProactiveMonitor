@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Incidents · {{ app_name }}{% endblock %}
+{% block page_title %}Incident History{% endblock %}
+{% block page_actions %}<a class="secondary-button" href="/">Back to operations</a>{% endblock %}
+
+{% block content %}
+<section class="panel filter-panel">
+  <form class="filter-row" method="get" action="/incidents">
+    <input class="search-input" type="search" name="q" value="{{ query }}" placeholder="Search incident, target, diagnosis or remediation">
+    <select name="status" class="select-input">
+      <option value="">All statuses</option>
+      {% for value, label in [
+        ('NEW','New'),('TAKEN_IN_CHARGE','Taken in charge'),('UNDER_ANALYSIS','Under analysis'),
+        ('DIAGNOSED','Diagnosed'),('OPERATOR_ACTION_REQUIRED','Operator action required'),('RESOLVED','Resolved')
+      ] %}
+        <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button class="primary-button" type="submit">Apply</button>
+    {% if query or selected_status %}<a class="secondary-button" href="/incidents">Clear</a>{% endif %}
+  </form>
+</section>
+
+<section class="panel incidents-panel">
+  <div class="section-header">
+    <div>
+      <span class="eyebrow">{{ incidents|length }} RECORD(S)</span>
+      <h2>Incidents</h2>
+    </div>
+  </div>
+
+  {% if incidents %}
+  <div class="incident-table-wrap">
+    <table class="incident-table">
+      <thead>
+        <tr>
+          <th>Incident</th>
+          <th>Target</th>
+          <th>Why taken in charge</th>
+          <th>Diagnosis</th>
+          <th>Recommended action</th>
+          <th>Status</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for incident in incidents %}
+        <tr class="click-row" data-href="/incidents/{{ incident.incident_id }}">
+          <td>
+            <strong>{{ incident.incident_id }}</strong>
+            <small>
+              <span class="severity {{ (incident.severity or 'medium')|lower }}">{{ incident.severity or 'MEDIUM' }}</span>
+              {{ incident.anomaly.anomaly_type or 'Anomaly' }}
+            </small>
+          </td>
+          <td><strong>{{ incident.entity or incident.service }}</strong></td>
+          <td class="text-cell">{{ incident.takeover_reason or 'Pending triage rationale' }}</td>
+          <td class="text-cell">
+            {{ incident.diagnosis.summary or 'Diagnosis in progress' }}
+            {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
+            <small>Confidence {{ incident.diagnosis.confidence|confidence }}</small>
+            {% endif %}
+          </td>
+          <td class="text-cell">{{ incident.remediation.summary or 'No operator action proposed yet' }}</td>
+          <td>
+            <span class="status-pill status-{{ (incident.status or 'new')|lower|replace('_','-') }}">
+              {{ (incident.status or 'NEW')|replace('_',' ') }}
+            </span>
+          </td>
+          <td class="muted nowrap">{{ incident.updated_at|human_time }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <strong>No matching incidents</strong>
+    <p>Change the filters or wait for a new incident.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

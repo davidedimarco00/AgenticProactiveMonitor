@@ -88,7 +88,7 @@ services:
     container_name: agentic-qdrant-init
     environment:
       QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+      QDRANT_COLLECTIONS: ${QDRANT_COLLECTIONS:-monitored-system}
       QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
       QDRANT_DISTANCE: ${QDRANT_DISTANCE:-Cosine}
       QDRANT_WAIT_SECONDS: ${QDRANT_WAIT_SECONDS:-120}
@@ -102,13 +102,39 @@ services:
       - monitoring-net
     restart: "no"
 
+  knowledge-base-ingest:
+    build:
+      context: ./knowledge_base/ingest
+    container_name: agentic-knowledge-base-ingest
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
+      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
+      KNOWLEDGE_COLLECTIONS_CONFIG: /config/collections.yaml
+      KNOWLEDGE_REPO_ROOT: /repo
+      KNOWLEDGE_BASE_CHUNK_SIZE_WORDS: ${KNOWLEDGE_BASE_CHUNK_SIZE_WORDS:-220}
+      KNOWLEDGE_BASE_CHUNK_OVERLAP_WORDS: ${KNOWLEDGE_BASE_CHUNK_OVERLAP_WORDS:-40}
+      KNOWLEDGE_INGEST_EMBED_BATCH_SIZE: ${KNOWLEDGE_INGEST_EMBED_BATCH_SIZE:-16}
+      KNOWLEDGE_INGEST_UPSERT_BATCH_SIZE: ${KNOWLEDGE_INGEST_UPSERT_BATCH_SIZE:-64}
+      KNOWLEDGE_INGEST_WAIT_SECONDS: ${KNOWLEDGE_INGEST_WAIT_SECONDS:-120}
+    volumes:
+      - ./knowledge_base/collections.yaml:/config/collections.yaml:ro
+      - ../monitored_system/knowledge_base:/repo/src/monitored_system/knowledge_base:ro
+    depends_on:
+      qdrant-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring-net
+    restart: "no"
+
   knowledge-base-web:
     build:
       context: ./knowledge_base/web
     container_name: agentic-knowledge-base-web
     environment:
       QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+      QDRANT_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
       MAX_UPLOAD_MB: ${KNOWLEDGE_BASE_MAX_UPLOAD_MB:-25}
@@ -119,7 +145,7 @@ services:
     ports:
       - "127.0.0.1:${KNOWLEDGE_BASE_UI_PORT:-5000}:5000"
     depends_on:
-      qdrant-init:
+      knowledge-base-ingest:
         condition: service_completed_successfully
     networks:
       - monitoring-net
@@ -161,24 +187,78 @@ services:
       - monitoring-net
     restart: unless-stopped
 
+  mongodb:
+    image: mongo:${MONGODB_VERSION:-7.0}
+    container_name: agentic-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:-agentic}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-change-this-local-password}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-agentic_monitor}
+    ports:
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - monitoring-net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'mongosh --quiet --username "$$MONGO_INITDB_ROOT_USERNAME" --password "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.adminCommand({ ping: 1 }).ok" | grep 1 >/dev/null || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  xmpp-bootstrap:
+    image: prosodyim/prosody:${PROSODY_VERSION:-13.0}
+    container_name: agentic-xmpp-bootstrap
+    user: "0:0"
+    environment:
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
+      XMPP_TECHNICAL_LEAD_PASSWORD: ${XMPP_TECHNICAL_LEAD_PASSWORD:-change-this-local-password}
+      XMPP_SYSTEM_ENGINEER_PASSWORD: ${XMPP_SYSTEM_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_NETWORK_ENGINEER_PASSWORD: ${XMPP_NETWORK_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_APPLICATION_ENGINEER_PASSWORD: ${XMPP_APPLICATION_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_SOFTWARE_DEVELOPER_PASSWORD: ${XMPP_SOFTWARE_DEVELOPER_PASSWORD:-change-this-local-password}
+    volumes:
+      - ./xmpp/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - ./xmpp/bootstrap.sh:/bootstrap.sh:ro
+      - xmpp-data:/var/lib/prosody
+      - xmpp-certs:/etc/prosody/certs
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    networks:
+      - monitoring-net
+    restart: "no"
+
   xmpp:
     image: prosodyim/prosody:${PROSODY_VERSION:-13.0}
     container_name: agentic-xmpp
     hostname: xmpp
     environment:
       XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
-      XMPP_ALLOW_REGISTRATION: ${XMPP_ALLOW_REGISTRATION:-true}
+      XMPP_ALLOW_REGISTRATION: ${XMPP_ALLOW_REGISTRATION:-false}
     ports:
       - "127.0.0.1:${XMPP_CLIENT_PORT:-5222}:5222"
     volumes:
       - ./xmpp/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
       - xmpp-data:/var/lib/prosody
+      - xmpp-certs:/etc/prosody/certs:ro
+    depends_on:
+      xmpp-bootstrap:
+        condition: service_completed_successfully
     networks:
       monitoring-net:
         aliases:
           - ${XMPP_DOMAIN:-xmpp}
     healthcheck:
-      test: ["CMD-SHELL", "prosodyctl shell server uptime >/dev/null 2>&1 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "prosodyctl shell server uptime >/dev/null 2>&1 || exit 1",
+        ]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -196,7 +276,8 @@ services:
       MCP_PATH: /mcp
       OPENSEARCH_URL: http://opensearch:9200
       QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thesis-knowledge-base}
+      QDRANT_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
+      QDRANT_MONITORED_SYSTEM_COLLECTION: ${QDRANT_MONITORED_SYSTEM_COLLECTION:-monitored-system}
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-ibm/granite-embedding:30m}
     ports:
@@ -204,12 +285,129 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
-      qdrant:
-        condition: service_started
+      knowledge-base-ingest:
+        condition: service_completed_successfully
     networks:
       - monitoring-net
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  agentic-backend:
+    build:
+      context: ../agentic_system
+      dockerfile: Dockerfile
+    container_name: agentic-system-backend
+    environment:
+      AGENT_CONFIG_PATH: /app/config/agents.yaml
+      AGENT_HEALTH_HOST: 0.0.0.0
+      AGENT_HEALTH_PORT: 8081
+      AGENT_API_HOST: 0.0.0.0
+      AGENT_API_PORT: 8082
+      AGENT_LLM_CONTEXT: ${AGENT_LLM_CONTEXT:-8192}
+      AGENT_MAX_LLM_CONCURRENCY: ${AGENT_MAX_LLM_CONCURRENCY:-2}
+
+      XMPP_DOMAIN: ${XMPP_DOMAIN:-xmpp}
+      XMPP_HOST: xmpp
+      XMPP_PORT: 5222
+      XMPP_AUTO_REGISTER: ${XMPP_AUTO_REGISTER:-false}
+
+      XMPP_TECHNICAL_LEAD_PASSWORD: ${XMPP_TECHNICAL_LEAD_PASSWORD:-change-this-local-password}
+      XMPP_SYSTEM_ENGINEER_PASSWORD: ${XMPP_SYSTEM_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_NETWORK_ENGINEER_PASSWORD: ${XMPP_NETWORK_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_APPLICATION_ENGINEER_PASSWORD: ${XMPP_APPLICATION_ENGINEER_PASSWORD:-change-this-local-password}
+      XMPP_SOFTWARE_DEVELOPER_PASSWORD: ${XMPP_SOFTWARE_DEVELOPER_PASSWORD:-change-this-local-password}
+
+      MCP_URL: http://mcp-server:8000/mcp
+
+      OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
+      OLLAMA_REASONING_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e2b}
+      OLLAMA_TOOL_MODEL: ${OLLAMA_TOOL_MODEL:-qwen3.5:4b}
+      OLLAMA_FALLBACK_TOOL_MODEL: ${OLLAMA_FALLBACK_TOOL_MODEL:-qwen2.5:latest}
+
+      MONGODB_URI: "mongodb://${MONGODB_ROOT_USERNAME:-agentic}:${MONGODB_ROOT_PASSWORD:-change-this-local-password}@mongodb:27017/${MONGODB_DATABASE:-agentic_monitor}?authSource=admin"
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-agentic_monitor}
+
+    ports:
+      - "127.0.0.1:${AGENTIC_BACKEND_HEALTH_PORT:-8081}:8081"
+      - "127.0.0.1:${AGENTIC_BACKEND_API_PORT:-8082}:8082"
+      - "127.0.0.1:${TECHNICAL_LEAD_HEALTH_PORT:-8101}:8101"
+      - "127.0.0.1:${SYSTEM_ENGINEER_HEALTH_PORT:-8102}:8102"
+      - "127.0.0.1:${NETWORK_ENGINEER_HEALTH_PORT:-8103}:8103"
+      - "127.0.0.1:${APPLICATION_ENGINEER_HEALTH_PORT:-8104}:8104"
+      - "127.0.0.1:${SOFTWARE_DEVELOPER_HEALTH_PORT:-8105}:8105"
+
+    depends_on:
+      xmpp:
+        condition: service_healthy
+      mcp-server:
+        condition: service_started
+      mongodb:
+        condition: service_healthy
+
+    networks:
+      - monitoring-net
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:8081/health'', timeout=5)" || exit 1',
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  agentic-system-dashboard:
+    build:
+      context: ../agentic_dashboard
+      dockerfile: Dockerfile
+    container_name: agentic-system-dashboard
+    environment:
+      AGENTIC_BACKEND_URL: http://agentic-backend:8082
+      AGENTIC_BACKEND_PUBLIC_URL: http://localhost:${AGENTIC_BACKEND_API_PORT:-8082}
+      OPENSEARCH_URL: http://opensearch:9200
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
+      MCP_HOST: mcp-server
+      MCP_PORT: 8000
+      XMPP_HOST: xmpp
+      XMPP_PORT: 5222
+      DASHBOARD_REQUEST_TIMEOUT_SECONDS: ${DASHBOARD_REQUEST_TIMEOUT_SECONDS:-2.5}
+
+    ports:
+      - "127.0.0.1:${AGENTIC_DASHBOARD_PORT:-5050}:5050"
+
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      mcp-server:
+        condition: service_started
+      xmpp:
+        condition: service_healthy
+      agentic-backend:
+        condition: service_healthy
+
+    networks:
+      - monitoring-net
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:5050/health'', timeout=5)" || exit 1',
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
     restart: unless-stopped
 
   opensearch-dashboards-init:
@@ -257,4 +455,6 @@ volumes:
   opensearch-data:
   qdrant-data:
   open-webui-data:
+  mongodb-data:
   xmpp-data:
+  xmpp-certs:
