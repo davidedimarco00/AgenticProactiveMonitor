@@ -15,3 +15,7 @@ Feature: Agentic backend
     Given the agentic backend is ready
     Then durable task recovery is exposed
     And incomplete incident recovery is exposed
+
+  Scenario: Anomaly handling is globally serialized
+    Given the agentic backend is ready
+    Then the anomaly pipeline allows only one active anomaly
