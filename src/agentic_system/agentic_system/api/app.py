@@ -90,6 +90,7 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
             "agents": runtime.snapshot(),
             "team_communication_ok": runtime.team_communication_ok,
             "unreachable_specialists": runtime.unreachable_specialists,
+            "workflow": runtime.anomaly_watch_snapshot(),
         }
 
     @app.get("/api/v1/overview", tags=["Incidents"])
