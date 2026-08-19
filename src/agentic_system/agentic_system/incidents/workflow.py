@@ -265,17 +265,20 @@ class IncidentWorkflow:
         incident_id: str,
         *,
         task_id: str,
-        task_state: str,
         primary_investigator: str,
     ) -> dict[str, object]:
-        """Atomically expose the durable task reference in the incident document."""
+        """Expose only the durable task reference in the incident document.
+
+        Task state is intentionally not duplicated in the incident. The
+        `agent_tasks` collection remains the single source of truth for the
+        mutable task state machine, avoiding stale denormalized state.
+        """
 
         updated = await self.repository.update_incident(
             incident_id,
             {
                 "agentic": {
                     "investigation_task_id": task_id,
-                    "task_state": task_state,
                     "primary_investigator": primary_investigator,
                 }
             },
