@@ -72,3 +72,44 @@ def test_anomaly_intake_invokes_downstream_handler_before_marking_processed() ->
             await task
 
     asyncio.run(scenario())
+
+
+def test_submit_propagates_failed_workflow_and_worker_remains_operational() -> None:
+    async def scenario() -> None:
+        queue: asyncio.Queue[AnomalyObservation] = asyncio.Queue(maxsize=2)
+        calls = 0
+
+        async def flaky_handler(observation: AnomalyObservation) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("temporary mongodb outage")
+            return {"incident_id": observation.result_id}
+
+        intake = AnomalyIntake(queue, on_anomaly=flaky_handler)
+        worker = asyncio.create_task(intake.run())
+        observation = _observation("result-retry")
+
+        try:
+            await intake.submit(observation)
+            raise AssertionError("first delivery should fail")
+        except RuntimeError as exc:
+            assert "temporary mongodb outage" in str(exc)
+
+        assert intake.running is True
+        assert intake.failed_count == 1
+        assert intake.processed_count == 0
+
+        # The same observation remains safe to submit again because a failed
+        # workflow does not poison or terminate the intake worker.
+        await intake.submit(observation)
+        assert intake.running is True
+        assert intake.failed_count == 1
+        assert intake.processed_count == 1
+        assert intake.last_error is None
+
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+
+    asyncio.run(scenario())
