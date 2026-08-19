@@ -5,11 +5,14 @@ from .mongodb import (
     format_incident_id,
     new_event_id,
     new_incident_id,
+    new_task_id,
     normalize_event,
     normalize_incident,
+    normalize_task,
     public_document,
     sanitize_event_payload,
     sanitize_incident_payload,
+    sanitize_task_payload,
     utc_now,
 )
 from .opensearch_catalog import OpenSearchDetectorCatalog
@@ -29,10 +32,13 @@ __all__ = [
     "format_incident_id",
     "new_event_id",
     "new_incident_id",
+    "new_task_id",
     "normalize_event",
     "normalize_incident",
+    "normalize_task",
     "public_document",
     "sanitize_event_payload",
     "sanitize_incident_payload",
+    "sanitize_task_payload",
     "utc_now",
 ]
