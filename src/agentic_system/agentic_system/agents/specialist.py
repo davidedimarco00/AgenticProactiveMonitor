@@ -15,6 +15,16 @@ from ..reasoning import (
     SpecialistReActExecutor,
 )
 from .base import BaseAgent
+from .collaboration import (
+    PEER_COLLABORATION_CONTEXT_ACCEPTED_TYPE,
+    PEER_COLLABORATION_CONTEXT_TYPE,
+    PEER_COLLABORATION_RESULT_TYPE,
+    PeerCollaborationAcknowledgementBehaviour,
+    PeerCollaborationContextBehaviour,
+    PeerCollaborationResultBehaviour,
+    send_peer_result,
+    share_peer_context,
+)
 from .commands import SpecialistTaskAssignment
 from .messages import (
     AGENTIC_PROTOCOL,
@@ -108,15 +118,34 @@ class SpecialistAgent(BaseAgent):
             assignment = self.assignment
             try:
                 cached = self.agent._completed_react_results.get(assignment.task_id)
+                peer_context = self.agent._peer_context_by_task.get(assignment.task_id)
                 if cached is None:
                     executor = self.agent._react_executor
                     if executor is None:
                         raise RuntimeError("Specialist ReAct executor was not initialized")
 
+                    anomaly = dict(assignment.anomaly)
+                    if peer_context is not None:
+                        anomaly["peer_collaboration_context"] = {
+                            "peer_role": peer_context["peer_role"],
+                            "support_domain": peer_context.get("support_domain"),
+                            "support_reason": peer_context.get("support_reason"),
+                            "specialist_result": dict(peer_context["specialist_result"]),
+                            "instruction": (
+                                "Treat this as direct evidence and hypotheses shared by a peer "
+                                "specialist. Correlate it with your own MCP/RAG observations; "
+                                "do not assume peer hypotheses are facts."
+                            ),
+                        }
+
                     self.agent.set_activity(
                         "WORKING",
                         incident_id=assignment.incident_id,
-                        detail="react_investigation",
+                        detail=(
+                            "peer_collaborative_react_investigation"
+                            if peer_context is not None
+                            else "react_investigation"
+                        ),
                     )
                     result = await executor.investigate(
                         task_id=assignment.task_id,
@@ -124,7 +153,7 @@ class SpecialistAgent(BaseAgent):
                         agent_role=self.agent.role,
                         severity=assignment.severity,
                         entity=assignment.entity,
-                        anomaly=assignment.anomaly,
+                        anomaly=anomaly,
                     )
                     self.agent._completed_react_results[assignment.task_id] = result
                     self.agent.tasks_react_completed += 1
@@ -132,6 +161,19 @@ class SpecialistAgent(BaseAgent):
                     self.agent.last_react_error = None
                 else:
                     result = cached
+
+                # The data plane is peer-to-peer: an approved support specialist
+                # returns its evidence directly to the specialist that requested
+                # help. The TL still receives the durable task result separately
+                # as coordination/control-plane information.
+                if peer_context is not None:
+                    await send_peer_result(
+                        self.agent,
+                        receiver=str(peer_context["peer_jid"]),
+                        result_payload=result.to_payload(),
+                        correlation_id=self.correlation_id,
+                    )
+                    self.agent.peer_results_sent += 1
 
                 envelope = AgentMessage.create(
                     type=INVESTIGATION_TASK_RESULT_TYPE,
@@ -147,16 +189,21 @@ class SpecialistAgent(BaseAgent):
                 self.agent.set_activity(
                     "WAITING",
                     incident_id=assignment.incident_id,
-                    detail="awaiting_technical_lead_review",
+                    detail=(
+                        "peer_result_shared_awaiting_tl_review"
+                        if peer_context is not None
+                        else "awaiting_technical_lead_review"
+                    ),
                 )
                 LOGGER.warning(
-                    "%s completed ReAct task=%s incident=%s steps=%d tools=%s confidence=%.3f",
+                    "%s completed ReAct task=%s incident=%s steps=%d tools=%s confidence=%.3f peer=%s",
                     self.agent.display_name,
                     assignment.task_id,
                     assignment.incident_id,
                     result.react_steps,
                     ",".join(result.tools_used) or "none",
                     result.confidence,
+                    peer_context["peer_role"] if peer_context is not None else "none",
                 )
             except Exception as exc:
                 self.agent.last_react_error = str(exc)
@@ -241,10 +288,15 @@ class SpecialistAgent(BaseAgent):
                 self.agent.last_task_assignment = assignment
                 self.agent.last_bdi_task_result = deliberation
                 self.agent.last_request_error = None
+                peer_context = self.agent._peer_context_by_task.get(assignment.task_id)
                 self.agent.set_activity(
                     "WORKING",
                     incident_id=assignment.incident_id,
-                    detail="investigation_intention_committed",
+                    detail=(
+                        "collaborative_investigation_intention_committed"
+                        if peer_context is not None
+                        else "investigation_intention_committed"
+                    ),
                 )
 
                 acknowledgement = AgentMessage.create(
@@ -260,6 +312,7 @@ class SpecialistAgent(BaseAgent):
                         "bdi_goal": deliberation.goal,
                         "bdi_acceptance_intention": deliberation.acceptance_intention,
                         "bdi_investigation_intention": deliberation.investigation_intention,
+                        "peer_collaboration": peer_context is not None,
                     },
                 )
                 await self.agent.send_agent_message(
@@ -272,12 +325,13 @@ class SpecialistAgent(BaseAgent):
                     correlation_id=request.correlation_id,
                 )
                 LOGGER.warning(
-                    "%s accepted task=%s incident=%s through BDI goal=%s intention=%s; ReAct scheduled",
+                    "%s accepted task=%s incident=%s through BDI goal=%s intention=%s; ReAct scheduled peer=%s",
                     self.agent.display_name,
                     assignment.task_id,
                     assignment.incident_id,
                     deliberation.goal,
                     deliberation.investigation_intention,
+                    peer_context["peer_role"] if peer_context is not None else "none",
                 )
             except Exception as exc:
                 self.agent.last_request_error = str(exc)
@@ -355,14 +409,22 @@ class SpecialistAgent(BaseAgent):
         self._react_executor: SpecialistReActExecutor | None = None
         self._react_max_steps = 6
         self._react_tool_timeout_seconds = 30.0
+        self._peer_context_by_task: dict[str, dict[str, Any]] = {}
+        self._pending_peer_acknowledgements: dict[str, Any] = {}
+        self._peer_results_by_incident: dict[str, list[dict[str, Any]]] = {}
         self.tasks_accepted = 0
         self.tasks_react_completed = 0
+        self.peer_contexts_received = 0
+        self.peer_results_sent = 0
+        self.peer_results_received = 0
         self.last_received_request: AgentMessage | None = None
         self.last_request_error: str | None = None
         self.last_task_assignment: SpecialistTaskAssignment | None = None
         self.last_bdi_task_result: BDISpecialistTaskResult | None = None
         self.last_react_result: ReActInvestigationResult | None = None
         self.last_react_error: str | None = None
+        self.last_peer_context: dict[str, Any] | None = None
+        self.last_peer_result: dict[str, Any] | None = None
 
     def configure_react(
         self,
@@ -400,6 +462,52 @@ class SpecialistAgent(BaseAgent):
         task_template.set_metadata("message_type", INVESTIGATION_TASK_MESSAGE_TYPE)
         self.add_behaviour(self.InvestigationTaskBehaviour(), task_template)
 
+        peer_context_template = Template()
+        peer_context_template.set_metadata("protocol", AGENTIC_PROTOCOL)
+        peer_context_template.set_metadata("performative", Performative.REQUEST.value)
+        peer_context_template.set_metadata("message_type", PEER_COLLABORATION_CONTEXT_TYPE)
+        self.add_behaviour(PeerCollaborationContextBehaviour(), peer_context_template)
+
+        peer_ack_template = Template()
+        peer_ack_template.set_metadata("protocol", AGENTIC_PROTOCOL)
+        peer_ack_template.set_metadata(
+            "message_type", PEER_COLLABORATION_CONTEXT_ACCEPTED_TYPE
+        )
+        self.add_behaviour(
+            PeerCollaborationAcknowledgementBehaviour(),
+            peer_ack_template,
+        )
+
+        peer_result_template = Template()
+        peer_result_template.set_metadata("protocol", AGENTIC_PROTOCOL)
+        peer_result_template.set_metadata("performative", Performative.INFORM.value)
+        peer_result_template.set_metadata("message_type", PEER_COLLABORATION_RESULT_TYPE)
+        self.add_behaviour(PeerCollaborationResultBehaviour(), peer_result_template)
+
+    async def share_peer_context(
+        self,
+        *,
+        receiver: str,
+        incident_id: str,
+        support_task_id: str,
+        target_role: str,
+        support_domain: str,
+        support_reason: str,
+        specialist_result: dict[str, Any],
+        timeout: float = 10.0,
+    ) -> AgentMessage:
+        return await share_peer_context(
+            self,
+            receiver=receiver,
+            incident_id=incident_id,
+            support_task_id=support_task_id,
+            target_role=target_role,
+            support_domain=support_domain,
+            support_reason=support_reason,
+            specialist_result=specialist_result,
+            timeout=timeout,
+        )
+
     def start_react_investigation(
         self,
         assignment: SpecialistTaskAssignment,
@@ -417,50 +525,3 @@ class SpecialistAgent(BaseAgent):
                 correlation_id=correlation_id,
             )
         )
-
-    def health_snapshot(self) -> dict[str, object]:
-        snapshot = super().health_snapshot()
-        bdi = self.last_bdi_task_result
-        react = self.last_react_result
-        snapshot.update(
-            {
-                "tasks_accepted": self.tasks_accepted,
-                "tasks_react_completed": self.tasks_react_completed,
-                "react_inflight": len(self._react_tasks_inflight),
-                "react_max_steps": self._react_max_steps,
-                "react_tool_timeout_seconds": self._react_tool_timeout_seconds,
-                "last_request_error": self.last_request_error,
-                "last_react_error": self.last_react_error,
-                "last_task_id": (
-                    self.last_task_assignment.task_id
-                    if self.last_task_assignment is not None
-                    else None
-                ),
-                "specialist_bdi": (
-                    {
-                        "task_id": bdi.task_id,
-                        "incident_id": bdi.incident_id,
-                        "goal": bdi.goal,
-                        "acceptance_intention": bdi.acceptance_intention,
-                        "investigation_intention": bdi.investigation_intention,
-                    }
-                    if bdi is not None
-                    else None
-                ),
-                "specialist_react": (
-                    {
-                        "task_id": react.task_id,
-                        "incident_id": react.incident_id,
-                        "summary": react.summary,
-                        "confidence": react.confidence,
-                        "react_steps": react.react_steps,
-                        "tools_used": list(react.tools_used),
-                        "assistance_required": react.assistance_required,
-                        "assistance_domain": react.assistance_domain,
-                    }
-                    if react is not None
-                    else None
-                ),
-            }
-        )
-        return snapshot
