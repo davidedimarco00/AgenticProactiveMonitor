@@ -7,6 +7,7 @@ from typing import Any
 from agentic_system.incidents import (
     InvestigationTaskResultReceipt,
     ReActIncidentCoordinator,
+    TechnicalLeadReviewReceipt,
 )
 
 
@@ -81,7 +82,30 @@ class FakeTaskWorkflow:
 
 
 class FakeAssignee:
-    pass
+    def __init__(self, decision: str) -> None:
+        self.decision = decision
+        self.agents: list[Any] = []
+
+    async def review_investigation_result(self, incident, result):
+        return TechnicalLeadReviewReceipt(
+            incident_id=str(incident["incident_id"]),
+            decision=self.decision,
+            confidence=0.9,
+            diagnosis_summary="Specialist evidence was reviewed by the Technical Lead.",
+            root_cause="The available evidence supports a transient resource anomaly.",
+            rationale="The critic accepted the evidence gathered by the specialist.",
+            remediation_summary="No autonomous corrective change is required.",
+            remediation_steps=(),
+            support_domain="application" if self.decision == "request_support" else None,
+            support_reason=(
+                "Application evidence is still required."
+                if self.decision == "request_support"
+                else None
+            ),
+            bdi_goal="review_investigation",
+            bdi_review_intention="review_specialist_result",
+            bdi_decision_intention="commit_review_decision",
+        )
 
 
 class FakeWorkflow:
@@ -89,10 +113,10 @@ class FakeWorkflow:
         raise AssertionError("Operator escalation was not expected")
 
 
-def _coordinator(repository: FakeRepository) -> ReActIncidentCoordinator:
+def _coordinator(repository: FakeRepository, *, decision: str) -> ReActIncidentCoordinator:
     return ReActIncidentCoordinator(
         FakeWorkflow(),  # type: ignore[arg-type]
-        FakeAssignee(),  # type: ignore[arg-type]
+        FakeAssignee(decision),  # type: ignore[arg-type]
         object(),  # type: ignore[arg-type]
         FakeTaskWorkflow(repository),  # type: ignore[arg-type]
         repository,  # type: ignore[arg-type]
@@ -130,32 +154,55 @@ def _success_receipt() -> InvestigationTaskResultReceipt:
     )
 
 
-def test_successful_react_result_completes_task_but_keeps_incident_non_terminal() -> None:
+def test_successful_react_result_can_request_support_after_tl_review() -> None:
     repository = FakeRepository()
-    coordinator = _coordinator(repository)
-    receipt = _success_receipt()
+    coordinator = _coordinator(repository, decision="request_support")
 
     asyncio.run(
         coordinator._persist_successful_react_result(
             deepcopy(repository.incident),
             deepcopy(repository.task),
-            receipt,
+            _success_receipt(),
         )
     )
 
     assert repository.task["state"] == "COMPLETED"
     assert repository.incident["status"] == "UNDER_ANALYSIS"
-    assert repository.incident["agentic"]["current_agent"] == "technical_lead"
-    assert repository.incident["agentic"]["active_agents"] == ["technical_lead"]
-    assert repository.events[-1]["event_type"] == "SPECIALIST_INVESTIGATION_COMPLETED"
-    assert repository.events[-1]["outcome"]["confidence"] == 0.86
-    assert repository.events[-1]["outcome"]["evidence"][0]["tool"] == "get_system_load"
+    assert repository.incident["agentic"]["review_decision"] == "request_support"
+    assert repository.incident["agentic"]["support_requested"] is True
+    assert repository.incident["agentic"]["support_domain"] == "application"
+    assert repository.events[-1]["event_type"] == "TECHNICAL_LEAD_REVIEW_COMPLETED"
     assert coordinator.react_results_completed_count == 1
+    assert coordinator.technical_lead_reviews_completed_count == 1
+
+
+def test_successful_react_result_can_resolve_incident_after_tl_review() -> None:
+    repository = FakeRepository()
+    coordinator = _coordinator(repository, decision="resolve")
+
+    asyncio.run(
+        coordinator._persist_successful_react_result(
+            deepcopy(repository.incident),
+            deepcopy(repository.task),
+            _success_receipt(),
+        )
+    )
+
+    assert repository.task["state"] == "COMPLETED"
+    assert repository.incident["status"] == "RESOLVED"
+    assert repository.incident["agentic"]["active_agents"] == []
+    assert repository.incident["diagnosis"]["confidence"] == 0.9
+    assert repository.incident["diagnosis"]["evidence"] == [
+        "CPU remained above the expected range."
+    ]
+    assert repository.incident["remediation"]["status"] == "ADVISORY"
+    assert repository.incident["validation"]["status"] == "EVIDENCE_REVIEWED"
+    assert repository.events[-1]["event_type"] == "TECHNICAL_LEAD_REVIEW_COMPLETED"
 
 
 def test_failed_react_result_moves_task_to_retrying_without_terminal_incident() -> None:
     repository = FakeRepository()
-    coordinator = _coordinator(repository)
+    coordinator = _coordinator(repository, decision="resolve")
     receipt = InvestigationTaskResultReceipt(
         task_id="TASK-REACT-001",
         incident_id="INC-REACT-001",
