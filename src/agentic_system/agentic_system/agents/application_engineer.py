@@ -20,6 +20,9 @@ class ApplicationEngineerAgent(SpecialistAgent):
         provider: LLMProvider,
         mcp_servers: list[MCPServerConfig],
         interaction_memory_path: str,
+        agentspeak_specialist_asl: str,
+        agentspeak_action_timeout_seconds: float,
+        agentspeak_bdi_max_concurrency: int,
     ) -> None:
         super().__init__(
             jid,
@@ -31,4 +34,7 @@ class ApplicationEngineerAgent(SpecialistAgent):
             provider=provider,
             mcp_servers=mcp_servers,
             interaction_memory_path=interaction_memory_path,
+            agentspeak_specialist_asl=agentspeak_specialist_asl,
+            agentspeak_action_timeout_seconds=agentspeak_action_timeout_seconds,
+            agentspeak_bdi_max_concurrency=agentspeak_bdi_max_concurrency,
         )

@@ -10,6 +10,49 @@ class DetectorContextPort(Protocol):
     async def get_detector_context(self, detector_id: str) -> dict[str, Any]: ...
 
 
+class AnomalyInboxPort(Protocol):
+    """Durable persistence contract for OpenSearch anomaly observations."""
+
+    async def record_anomaly(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def get_anomaly(self, anomaly_key: str) -> dict[str, Any] | None: ...
+
+    async def update_detector_metadata(
+        self,
+        anomaly_key: str,
+        detector_context: dict[str, Any],
+    ) -> dict[str, Any] | None: ...
+
+    async def mark_anomaly_processing(self, anomaly_key: str) -> dict[str, Any] | None: ...
+
+    async def mark_anomaly_completed(self, anomaly_key: str) -> dict[str, Any] | None: ...
+
+    async def mark_anomaly_retryable(
+        self,
+        anomaly_key: str,
+        *,
+        error: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def dismiss_waiting_anomaly(
+        self,
+        anomaly_key: str,
+        *,
+        dismissed_by: str = "operator",
+        reason: str = "Marked as not a true anomaly by the operator.",
+    ) -> dict[str, Any] | None: ...
+
+    async def link_anomaly_to_incident(
+        self,
+        anomaly_key: str,
+        incident_id: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def mark_incident_anomalies_processing(self, incident_id: str) -> int: ...
+
+    async def mark_incident_anomalies_completed(self, incident_id: str) -> int: ...
+
+
 @dataclass(frozen=True, slots=True)
 class IncidentAssigneeReceipt:
     """Confirmation that an agent accepted an incident into its local workflow."""
@@ -33,8 +76,22 @@ class IncidentTriageReceipt:
     bdi_intention: str
 
 
+@dataclass(frozen=True, slots=True)
+class InvestigationTaskDispatchReceipt:
+    """Acknowledgement that the selected specialist accepted a durable task."""
+
+    task_id: str
+    incident_id: str
+    agent_role: str
+    agent_jid: str
+    correlation_id: str
+    bdi_goal: str
+    bdi_acceptance_intention: str
+    bdi_investigation_intention: str
+
+
 class IncidentAssigneePort(Protocol):
-    """Contract for assigning and triaging persisted incidents."""
+    """Contract for assigning, triaging and dispatching persisted work."""
 
     async def assign_incident(
         self,
@@ -47,6 +104,12 @@ class IncidentAssigneePort(Protocol):
         *,
         detector_context: dict[str, Any],
     ) -> IncidentTriageReceipt: ...
+
+    async def dispatch_investigation_task(
+        self,
+        incident: dict[str, Any],
+        task: dict[str, Any],
+    ) -> InvestigationTaskDispatchReceipt: ...
 
 
 class IncidentRepositoryPort(Protocol):
@@ -87,8 +150,6 @@ class IncidentRepositoryPort(Protocol):
     ) -> dict[str, Any] | None:
         ...
 
-    # The coordinator must observe the durable task linked by an incident while
-    # it keeps exclusive ownership of the global anomaly FIFO slot.
     async def get_task(self, task_id: str) -> dict[str, Any] | None:
         ...
 

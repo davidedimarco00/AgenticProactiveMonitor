@@ -5,10 +5,7 @@ import pytest
 from agentic_system.settings import EXPECTED_ROLES, load_runtime_config
 
 
-def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPatch) -> None:
-    config_path = Path(__file__).parents[2] / "config" / "agents.yaml"
-    monkeypatch.setenv("AGENT_CONFIG_PATH", str(config_path))
-
+def _configure_agent_passwords(monkeypatch: pytest.MonkeyPatch) -> None:
     password_vars = (
         "XMPP_TECHNICAL_LEAD_PASSWORD",
         "XMPP_SYSTEM_ENGINEER_PASSWORD",
@@ -18,6 +15,15 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     )
     for name in password_vars:
         monkeypatch.setenv(name, "test-password")
+
+
+def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = Path(__file__).parents[2] / "config" / "agents.yaml"
+    monkeypatch.setenv("AGENT_CONFIG_PATH", str(config_path))
+    monkeypatch.delenv("AGENT_MAX_LLM_CONCURRENCY", raising=False)
+    monkeypatch.delenv("ENABLE_TEST_ANOMALY_INJECTION", raising=False)
+    monkeypatch.delenv("ENABLE_OPENSEARCH_ANOMALY_WATCHER", raising=False)
+    _configure_agent_passwords(monkeypatch)
 
     config = load_runtime_config()
 
@@ -31,5 +37,39 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     assert config.agentspeak_technical_lead_asl.endswith(
         "/agentic_system/reasoning/plans/technical_lead.asl"
     )
+    assert config.agentspeak_specialist_asl.endswith(
+        "/agentic_system/reasoning/plans/specialist.asl"
+    )
     assert config.agentspeak_action_timeout_seconds == 120.0
     assert config.agentspeak_bdi_max_concurrency == 2
+    assert config.task_dispatch_timeout_seconds == 10.0
+    assert config.max_llm_concurrency == 1
+    assert config.enable_test_anomaly_injection is False
+    assert config.enable_opensearch_anomaly_watcher is True
+
+
+def test_runtime_config_enables_explicit_test_anomaly_injection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = Path(__file__).parents[2] / "config" / "agents.yaml"
+    monkeypatch.setenv("AGENT_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("ENABLE_TEST_ANOMALY_INJECTION", "1")
+    monkeypatch.setenv("ENABLE_OPENSEARCH_ANOMALY_WATCHER", "0")
+    _configure_agent_passwords(monkeypatch)
+
+    config = load_runtime_config()
+
+    assert config.enable_test_anomaly_injection is True
+    assert config.enable_opensearch_anomaly_watcher is False
+
+
+def test_runtime_config_rejects_non_positive_llm_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = Path(__file__).parents[2] / "config" / "agents.yaml"
+    monkeypatch.setenv("AGENT_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("AGENT_MAX_LLM_CONCURRENCY", "0")
+    _configure_agent_passwords(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="AGENT_MAX_LLM_CONCURRENCY"):
+        load_runtime_config()

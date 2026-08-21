@@ -1,11 +1,13 @@
 from .anomalies import AnomalyObservation
 from .contracts import (
     AgentTaskRepositoryPort,
+    AnomalyInboxPort,
     DetectorContextPort,
     IncidentAssigneePort,
     IncidentAssigneeReceipt,
     IncidentRepositoryPort,
     IncidentTriageReceipt,
+    InvestigationTaskDispatchReceipt,
 )
 from .coordinator import IncidentCoordinator
 from .ingestion import AnomalyIntake
@@ -26,6 +28,7 @@ __all__ = [
     "AgentTaskRepositoryPort",
     "AgentTaskState",
     "AgentTaskWorkflow",
+    "AnomalyInboxPort",
     "AnomalyIntake",
     "AnomalyObservation",
     "DetectorContextPort",
@@ -35,6 +38,7 @@ __all__ = [
     "IncidentCorrelationPolicy",
     "IncidentRepositoryPort",
     "IncidentTriageReceipt",
+    "InvestigationTaskDispatchReceipt",
     "IncidentWorkflow",
     "IncidentWorkflowResult",
     "InvalidTaskTransition",

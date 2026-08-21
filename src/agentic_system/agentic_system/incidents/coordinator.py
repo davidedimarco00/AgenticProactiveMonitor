@@ -7,7 +7,7 @@ from typing import Any
 from .anomalies import AnomalyObservation
 from .contracts import DetectorContextPort, IncidentAssigneePort, IncidentRepositoryPort
 from .models import IncidentWorkflowResult
-from .tasks import AgentTaskState, AgentTaskWorkflow
+from .tasks import AgentTaskState, AgentTaskWorkflow, normalize_task_state
 from .workflow import IncidentWorkflow
 
 
@@ -19,6 +19,7 @@ AUTONOMOUS_WORKFLOW_TERMINAL_STATUSES = {
     "OPERATOR_ACTION_REQUIRED",
 }
 WORKFLOW_COMPLETION_POLL_SECONDS = 0.5
+TASK_DISPATCH_RETRY_DELAY_SECONDS = 2.0
 RECOVERY_RESULT_INDEX = "agentic-workflow-recovery"
 
 
@@ -41,9 +42,12 @@ class IncidentCoordinator:
         self.assigned_count = 0
         self.triaged_count = 0
         self.tasks_created_count = 0
+        self.tasks_dispatched_count = 0
+        self.tasks_running_count = 0
         self.last_assigned_incident_id: str | None = None
         self.last_triaged_incident_id: str | None = None
         self.last_task_id: str | None = None
+        self.last_dispatched_task_id: str | None = None
 
     async def handle_anomaly(
         self,
@@ -81,10 +85,6 @@ class IncidentCoordinator:
             detector_context=detector_context,
         )
 
-        # The state-driven continuation is intentionally executed for both a new
-        # anomaly and a correlated re-observation. If a previous attempt failed
-        # after persistence, the next delivery resumes from the last durable
-        # incident state instead of silently abandoning the workflow.
         resumed = await self._resume_incident(result.incident, detector_context)
         return IncidentWorkflowResult(
             incident=resumed,
@@ -96,14 +96,7 @@ class IncidentCoordinator:
         self,
         observation: AnomalyObservation,
     ) -> IncidentWorkflowResult:
-        """Own one anomaly until the complete autonomous workflow can be released.
-
-        `AnomalyIntake` has exactly one consumer and awaits this method. Keeping
-        this coroutine pending therefore keeps the current anomaly ACTIVE and all
-        subsequent OpenSearch anomalies physically queued. Creating a PENDING
-        specialist task is not completion: the FIFO slot is released only after
-        the incident reaches a terminal autonomous status.
-        """
+        """Own one anomaly until the complete autonomous workflow can be released."""
 
         result = await self.handle_anomaly(observation)
         terminal_incident = await self.wait_until_workflow_terminal(
@@ -116,13 +109,7 @@ class IncidentCoordinator:
         )
 
     async def build_recovery_observations(self) -> list[AnomalyObservation]:
-        """Translate incomplete durable incidents into FIFO work items.
-
-        Startup recovery must obey the same single-active policy as fresh anomaly
-        processing. Therefore incomplete incidents are not resumed in parallel;
-        they are converted to synthetic observations, ordered oldest first, and
-        seeded into the global queue before the OpenSearch watcher starts.
-        """
+        """Translate incomplete durable incidents into FIFO work items oldest-first."""
 
         incidents: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -173,13 +160,7 @@ class IncidentCoordinator:
         *,
         poll_interval_seconds: float = WORKFLOW_COMPLETION_POLL_SECONDS,
     ) -> dict[str, Any]:
-        """Wait without blocking the event loop until one incident can release the FIFO.
-
-        A PENDING/DISPATCHED/RUNNING/RETRYING task keeps exclusive ownership of
-        the anomaly. A terminal task failure is escalated to
-        OPERATOR_ACTION_REQUIRED so the failed work item does not poison the
-        global queue and the agents remain available for the next anomaly.
-        """
+        """Keep exclusive FIFO ownership while durable agent work is non-terminal."""
 
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be greater than zero")
@@ -209,8 +190,9 @@ class IncidentCoordinator:
                     raise RuntimeError(
                         f"Incident {incident_id} references missing agent task {task_id}"
                     )
-                task_state = str(task.get("state") or "").upper()
-                if task_state == AgentTaskState.FAILED.value:
+                task_state = normalize_task_state(task.get("state") or "")
+
+                if task_state == AgentTaskState.FAILED:
                     last_error = task.get("last_error") or {}
                     reason = str(last_error.get("message") or "Agent task failed.")
                     escalated = await self.workflow.mark_operator_action_required(
@@ -226,19 +208,19 @@ class IncidentCoordinator:
                     )
                     return escalated
 
-            # PENDING is intentionally included here. Until specialist dispatch
-            # and the downstream collaborative stages are implemented, this is
-            # the correct visible state: the first anomaly remains ACTIVE and
-            # later anomalies remain in the FIFO instead of being triaged early.
+                if task_state in {
+                    AgentTaskState.PENDING,
+                    AgentTaskState.RETRYING,
+                    AgentTaskState.DISPATCHED,
+                }:
+                    await self._advance_investigation_task(incident)
+                    await asyncio.sleep(TASK_DISPATCH_RETRY_DELAY_SECONDS)
+                    continue
+
             await asyncio.sleep(poll_interval_seconds)
 
     async def recover_incomplete_incidents(self) -> dict[str, int]:
-        """Compatibility recovery helper used by isolated tests.
-
-        Runtime startup now uses `build_recovery_observations()` so recovery is
-        serialized through the global FIFO. This direct helper remains useful for
-        unit tests that validate state-driven durable resumption in isolation.
-        """
+        """Compatibility recovery helper used by isolated tests."""
 
         scanned = 0
         resumed = 0
@@ -287,9 +269,6 @@ class IncidentCoordinator:
         current = dict(incident)
         technical_lead_jid = "technical-lead@xmpp"
 
-        # Each transition is persisted before the next external interaction.
-        # Re-entering this method therefore continues from the latest durable
-        # state and does not repeat already completed workflow stages.
         if str(current.get("status") or "").upper() == "NEW":
             assignment_receipt = await self.assignee.assign_incident(current)
             technical_lead_jid = assignment_receipt.agent_jid
@@ -320,39 +299,163 @@ class IncidentCoordinator:
 
         if str(current.get("status") or "").upper() == "TRIAGED":
             agentic = dict(current.get("agentic") or {})
-            if agentic.get("investigation_task_id"):
-                return current
+            task_id = str(agentic.get("investigation_task_id") or "").strip()
 
-            primary_investigator = str(
-                agentic.get("primary_investigator") or ""
-            ).strip().lower()
-            if not primary_investigator:
-                raise RuntimeError(
-                    f"Triaged incident {current.get('incident_id')} has no primary investigator"
-                )
+            if not task_id:
+                primary_investigator = str(
+                    agentic.get("primary_investigator") or ""
+                ).strip().lower()
+                if not primary_investigator:
+                    raise RuntimeError(
+                        f"Triaged incident {current.get('incident_id')} has no primary investigator"
+                    )
 
-            task = await self.task_workflow.create_investigation_task(
-                current,
-                primary_investigator=primary_investigator,
-            )
-            current = dict(
-                await self.workflow.mark_investigation_task_created(
-                    str(current["incident_id"]),
-                    task_id=str(task["task_id"]),
+                task = await self.task_workflow.create_investigation_task(
+                    current,
                     primary_investigator=primary_investigator,
                 )
-            )
-            self.tasks_created_count += 1
-            self.last_task_id = str(task["task_id"])
-            LOGGER.warning(
-                "Incident=%s now owns durable task=%s state=%s assigned_to=%s",
-                current["incident_id"],
-                task["task_id"],
-                task["state"],
-                primary_investigator,
-            )
+                current = dict(
+                    await self.workflow.mark_investigation_task_created(
+                        str(current["incident_id"]),
+                        task_id=str(task["task_id"]),
+                        primary_investigator=primary_investigator,
+                    )
+                )
+                self.tasks_created_count += 1
+                self.last_task_id = str(task["task_id"])
+                LOGGER.warning(
+                    "Incident=%s now owns durable task=%s state=%s assigned_to=%s",
+                    current["incident_id"],
+                    task["task_id"],
+                    task["state"],
+                    primary_investigator,
+                )
+
+            current = await self._advance_investigation_task(current)
 
         return current
+
+    async def _advance_investigation_task(
+        self,
+        incident: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Advance durable task through XMPP acceptance to RUNNING ownership."""
+
+        current = dict(incident)
+        incident_id = str(current.get("incident_id") or "").strip()
+        task_id = str(
+            (current.get("agentic") or {}).get("investigation_task_id") or ""
+        ).strip()
+        if not task_id:
+            return current
+
+        task = await self.repository.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Incident {incident_id} references missing task {task_id}")
+        state = normalize_task_state(task["state"])
+
+        # DISPATCHED without a confirmed transition to RUNNING is an uncertain
+        # delivery state (for example DB failure after an XMPP AGREE). Convert it
+        # to RETRYING and rely on the stable task_id for idempotent redelivery.
+        if state == AgentTaskState.DISPATCHED:
+            recovered = await self.task_workflow.mark_execution_failed(
+                task_id,
+                error_type="dispatch_state_uncertain",
+                message=(
+                    "Task remained DISPATCHED without durable RUNNING ownership; "
+                    "scheduling an idempotent specialist redelivery."
+                ),
+                retryable=True,
+            )
+            LOGGER.warning(
+                "Recovered uncertain DISPATCHED task=%s into state=%s",
+                task_id,
+                recovered.get("state"),
+            )
+            return current
+
+        if state not in {AgentTaskState.PENDING, AgentTaskState.RETRYING}:
+            return current
+
+        dispatched = await self.task_workflow.mark_dispatched(task_id)
+        dispatched_state = normalize_task_state(dispatched["state"])
+        if dispatched_state == AgentTaskState.FAILED:
+            return current
+
+        try:
+            receipt = await self.assignee.dispatch_investigation_task(current, dispatched)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failed = await self.task_workflow.mark_execution_failed(
+                task_id,
+                error_type="specialist_dispatch_failed",
+                message=str(exc),
+                retryable=True,
+            )
+            LOGGER.warning(
+                "Task dispatch failed without killing agents: task=%s state=%s error=%s",
+                task_id,
+                failed.get("state"),
+                exc,
+            )
+            return current
+
+        running = await self.task_workflow.mark_running(task_id)
+        self.tasks_dispatched_count += 1
+        self.tasks_running_count += 1
+        self.last_dispatched_task_id = task_id
+
+        updated = await self.repository.update_incident(
+            incident_id,
+            {
+                "agentic": {
+                    "current_agent": receipt.agent_role,
+                    "active_agents": ["technical_lead", receipt.agent_role],
+                    "task_dispatch_correlation_id": receipt.correlation_id,
+                    "specialist_bdi_goal": receipt.bdi_goal,
+                    "specialist_bdi_acceptance_intention": receipt.bdi_acceptance_intention,
+                    "specialist_bdi_intention": receipt.bdi_investigation_intention,
+                }
+            },
+        )
+        if updated is None:
+            raise RuntimeError(
+                f"Incident disappeared after specialist accepted task: {incident_id}"
+            )
+
+        event = await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": "INVESTIGATION_TASK_DISPATCHED",
+                "agent_role": receipt.agent_role,
+                "agent_jid": receipt.agent_jid,
+                "action": "accept_investigation_task",
+                "reason": (
+                    "Technical Lead delegated the durable task and the selected "
+                    "specialist committed its BDI investigation intention."
+                ),
+                "status": updated.get("status", "TRIAGED"),
+                "task_id": task_id,
+                "task_state": running.get("state"),
+                "correlation_id": receipt.correlation_id,
+                "bdi_goal": receipt.bdi_goal,
+                "bdi_intention": receipt.bdi_investigation_intention,
+                "outcome": receipt.agent_role,
+            },
+        )
+        if event is None:
+            raise RuntimeError(
+                f"Could not persist specialist dispatch event for incident: {incident_id}"
+            )
+
+        LOGGER.warning(
+            "Task=%s accepted by %s and entered RUNNING with BDI intention=%s",
+            task_id,
+            receipt.agent_role,
+            receipt.bdi_investigation_intention,
+        )
+        return dict(updated)
 
     async def _resolve_detector_context(self, detector_id: str) -> dict[str, Any]:
         if not detector_id:
@@ -378,12 +481,15 @@ class IncidentCoordinator:
         }
 
     @staticmethod
-    def _progress_marker(incident: dict[str, Any]) -> tuple[str, str | None]:
+    def _progress_marker(incident: dict[str, Any]) -> tuple[str, str | None, str | None]:
         agentic = dict(incident.get("agentic") or {})
         return (
             str(incident.get("status") or "").upper(),
             str(agentic.get("investigation_task_id"))
             if agentic.get("investigation_task_id")
+            else None,
+            str(agentic.get("specialist_bdi_intention"))
+            if agentic.get("specialist_bdi_intention")
             else None,
         )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from http.client import RemoteDisconnected
 import json
 import os
 import time
@@ -33,6 +34,15 @@ def get_json(path: str, *, timeout: float = 3.0) -> dict[str, Any]:
 def wait_for_backend_ready(
     *, timeout_seconds: float = DEFAULT_STARTUP_TIMEOUT_SECONDS
 ) -> dict[str, Any]:
+    """Wait through Docker restart/startup transients until the backend is ready.
+
+    During a container rebuild/recreate the host port can briefly accept a TCP
+    connection and close it before an HTTP status line is returned. Treat that
+    exactly like connection-refused/503 while the readiness deadline is active;
+    otherwise one transient RemoteDisconnected aborts the whole integration
+    session and hides the real backend startup result.
+    """
+
     deadline = time.monotonic() + timeout_seconds
     last_error: BaseException | None = None
 
@@ -41,12 +51,20 @@ def wait_for_backend_ready(
             payload = get_json("/health")
             if payload.get("status") == "ok" and payload.get("phase") == "agents-running":
                 return payload
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (
+            HTTPError,
+            URLError,
+            RemoteDisconnected,
+            ConnectionResetError,
+            ConnectionAbortedError,
+            TimeoutError,
+            json.JSONDecodeError,
+        ) as exc:
             last_error = exc
 
         time.sleep(0.5)
 
-    detail = f" Last error: {last_error}" if last_error else ""
+    detail = f" Last error: {type(last_error).__name__}: {last_error}" if last_error else ""
     pytest.fail(
         "Agentic backend did not reach status=ok and phase=agents-running "
         f"within {timeout_seconds:.1f}s.{detail}"

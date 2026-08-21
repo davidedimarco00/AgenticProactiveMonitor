@@ -61,7 +61,7 @@
         <div>
           <span>Active anomaly</span>
           <strong id="workflow-anomaly">
-            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.detector_id }}{% else %}—{% endif %}
+            {% if workflow.active_anomaly %}{{ workflow.active_anomaly.detector_name or workflow.active_anomaly.detector_id }}{% else %}—{% endif %}
           </strong>
           <small id="workflow-result-id">
             {% if workflow.active_anomaly %}{{ workflow.active_anomaly.result_id }}{% elif effective_workflow_state == 'RECOVERY' %}Persisted workflow from an earlier runtime{% else %}No anomaly currently owned by the team{% endif %}
@@ -119,6 +119,49 @@
         {% endif %}
       </p>
     </aside>
+  </div>
+</section>
+
+<section class="panel incidents-panel" id="anomaly-inbox-panel">
+  <div class="section-header">
+    <div>
+      <span class="eyebrow">DURABLE ANOMALY INBOX</span>
+      <h2>Waiting anomalies</h2>
+      <p class="section-description">
+        OpenSearch anomalies are persisted in MongoDB before FIFO admission. Detector names are resolved from OpenSearch so queued work is readable. The trash action dismisses a WAITING result as an operator false positive before any incident is created.
+      </p>
+    </div>
+    <div class="workflow-mode">
+      <span class="label">MongoDB state</span>
+      <strong><span id="anomaly-inbox-waiting-count">—</span> WAITING</strong>
+      <small><span id="anomaly-inbox-processing-count">—</span> processing · <span id="anomaly-inbox-recovery-count">—</span> recovery</small>
+    </div>
+  </div>
+
+  <div class="incident-table-wrap">
+    <table class="incident-table" id="anomaly-inbox-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Anomaly / detector</th>
+          <th>OpenSearch result</th>
+          <th>Grade</th>
+          <th>Confidence</th>
+          <th>Received</th>
+          <th>State</th>
+          <th aria-label="Actions">Action</th>
+        </tr>
+      </thead>
+      <tbody id="anomaly-inbox-body">
+        <tr id="anomaly-inbox-loading-row">
+          <td colspan="8" class="muted">Loading durable anomaly inbox…</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="empty-state" id="anomaly-inbox-empty" hidden>
+    <strong>No waiting anomalies</strong>
+    <p>The MongoDB anomaly inbox currently has no observations waiting for the global FIFO.</p>
   </div>
 </section>
 

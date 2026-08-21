@@ -11,6 +11,7 @@ from agentic_system.incidents import (
     IncidentCorrelationPolicy,
     IncidentTriageReceipt,
     IncidentWorkflow,
+    InvestigationTaskDispatchReceipt,
 )
 
 
@@ -38,6 +39,10 @@ class FakeRepository:
         if status:
             incidents = [item for item in incidents if item.get("status") == status]
         return deepcopy(incidents[:limit])
+
+    async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
+        incident = self.incidents.get(incident_id)
+        return deepcopy(incident) if incident else None
 
     async def create_incident(self, payload: dict[str, Any]) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -137,6 +142,7 @@ class FakeAssignee:
     def __init__(self) -> None:
         self.assign_calls = 0
         self.triage_calls = 0
+        self.dispatch_calls = 0
 
     async def assign_incident(self, incident: dict[str, Any]) -> IncidentAssigneeReceipt:
         self.assign_calls += 1
@@ -168,6 +174,26 @@ class FakeAssignee:
             bdi_intention="select_primary_investigator",
         )
 
+    async def dispatch_investigation_task(
+        self,
+        incident: dict[str, Any],
+        task: dict[str, Any],
+    ) -> InvestigationTaskDispatchReceipt:
+        self.dispatch_calls += 1
+        assert task["state"] == "DISPATCHED"
+        assert task["attempt"] == 1
+        assert task["assigned_to"] == "system_engineer"
+        return InvestigationTaskDispatchReceipt(
+            task_id=str(task["task_id"]),
+            incident_id=str(incident["incident_id"]),
+            agent_role="system_engineer",
+            agent_jid="system-engineer@xmpp",
+            correlation_id="corr-task-001",
+            bdi_goal="handle_investigation_task",
+            bdi_acceptance_intention="accept_task",
+            bdi_investigation_intention="investigate_incident",
+        )
+
 
 def _observation(result_id: str) -> AnomalyObservation:
     return AnomalyObservation(
@@ -184,7 +210,7 @@ def _observation(result_id: str) -> AnomalyObservation:
     )
 
 
-def test_new_incident_is_triaged_and_gets_one_idempotent_durable_task() -> None:
+def test_new_incident_is_triaged_dispatched_and_running_idempotently() -> None:
     repository = FakeRepository()
     assignee = FakeAssignee()
     detector_context = FakeDetectorContext()
@@ -205,29 +231,22 @@ def test_new_incident_is_triaged_and_gets_one_idempotent_durable_task() -> None:
     assert first["status"] == "TRIAGED"
     assert first["incident_id"] == "INC-20260818-001"
     assert first["entity"] == "CPU-processing-service"
-    assert first["anomaly"]["detector_name"] == "CPU-processing-service"
-    assert first["agentic"] == {
-        "current_agent": "technical_lead",
-        "active_agents": ["technical_lead"],
-        "primary_investigator": "system_engineer",
-        "triage_domain": "system",
-        "triage_confidence": 0.91,
-        "triage_rationale": (
-            "CPU detector metadata makes system resources the best first domain to inspect."
-        ),
-        "bdi_goal": "manage_incident",
-        "bdi_triage_intention": "triage_incident",
-        "bdi_intention": "select_primary_investigator",
-        "investigation_task_id": "TASK-TEST-001",
-    }
+    assert first["agentic"]["current_agent"] == "system_engineer"
+    assert first["agentic"]["active_agents"] == ["technical_lead", "system_engineer"]
+    assert first["agentic"]["primary_investigator"] == "system_engineer"
+    assert first["agentic"]["investigation_task_id"] == "TASK-TEST-001"
+    assert first["agentic"]["task_dispatch_correlation_id"] == "corr-task-001"
+    assert first["agentic"]["specialist_bdi_goal"] == "handle_investigation_task"
+    assert first["agentic"]["specialist_bdi_acceptance_intention"] == "accept_task"
+    assert first["agentic"]["specialist_bdi_intention"] == "investigate_incident"
     assert first.get("diagnosis", {}) == {}
 
     task = repository.tasks["TASK-TEST-001"]
     assert task["incident_id"] == "INC-20260818-001"
     assert task["assigned_to"] == "system_engineer"
     assert task["task_type"] == "INVESTIGATE_INCIDENT"
-    assert task["state"] == "PENDING"
-    assert task["attempt"] == 0
+    assert task["state"] == "RUNNING"
+    assert task["attempt"] == 1
     assert task["max_attempts"] == 3
 
     assert second.created is False
@@ -235,21 +254,25 @@ def test_new_incident_is_triaged_and_gets_one_idempotent_durable_task() -> None:
     assert second["agentic"]["investigation_task_id"] == "TASK-TEST-001"
     assert assignee.assign_calls == 1
     assert assignee.triage_calls == 1
+    assert assignee.dispatch_calls == 1
     assert detector_context.calls == 2
     assert coordinator.assigned_count == 1
     assert coordinator.triaged_count == 1
     assert coordinator.tasks_created_count == 1
+    assert coordinator.tasks_dispatched_count == 1
+    assert coordinator.tasks_running_count == 1
     assert len(repository.tasks) == 1
     assert [event["event_type"] for event in repository.events] == [
         "ANOMALY_DETECTED",
         "INCIDENT_TAKEN_IN_CHARGE",
         "INCIDENT_TRIAGED",
         "INVESTIGATION_TASK_CREATED",
+        "INVESTIGATION_TASK_DISPATCHED",
         "ANOMALY_REOBSERVED",
     ]
 
 
-def test_recovery_resumes_persisted_taken_in_charge_incident() -> None:
+def test_recovery_resumes_and_dispatches_persisted_taken_in_charge_incident() -> None:
     repository = FakeRepository()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     repository.incidents["INC-20260818-001"] = {
@@ -286,5 +309,8 @@ def test_recovery_resumes_persisted_taken_in_charge_incident() -> None:
     assert recovered["status"] == "TRIAGED"
     assert recovered["agentic"]["primary_investigator"] == "system_engineer"
     assert recovered["agentic"]["investigation_task_id"] == "TASK-TEST-001"
+    assert recovered["agentic"]["specialist_bdi_intention"] == "investigate_incident"
+    assert repository.tasks["TASK-TEST-001"]["state"] == "RUNNING"
     assert assignee.assign_calls == 0
     assert assignee.triage_calls == 1
+    assert assignee.dispatch_calls == 1

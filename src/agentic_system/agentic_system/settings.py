@@ -51,8 +51,13 @@ class RuntimeConfig:
     mongodb_database: str
     incident_correlation_window_seconds: int = 600
     agentspeak_technical_lead_asl: str = "/app/agentic_system/reasoning/plans/technical_lead.asl"
+    agentspeak_specialist_asl: str = "/app/agentic_system/reasoning/plans/specialist.asl"
     agentspeak_action_timeout_seconds: float = 120.0
     agentspeak_bdi_max_concurrency: int = 2
+    task_dispatch_timeout_seconds: float = 10.0
+    max_llm_concurrency: int = 1
+    enable_test_anomaly_injection: bool = False
+    enable_opensearch_anomaly_watcher: bool = True
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -159,12 +164,22 @@ def load_runtime_config() -> RuntimeConfig:
         "AGENTSPEAK_TECHNICAL_LEAD_ASL",
         "/app/agentic_system/reasoning/plans/technical_lead.asl",
     ).strip()
+    agentspeak_specialist_asl = os.getenv(
+        "AGENTSPEAK_SPECIALIST_ASL",
+        "/app/agentic_system/reasoning/plans/specialist.asl",
+    ).strip()
     agentspeak_action_timeout_seconds = float(
         os.getenv("AGENTSPEAK_ACTION_TIMEOUT_SECONDS", "120")
     )
     agentspeak_bdi_max_concurrency = int(
         os.getenv("AGENTSPEAK_BDI_MAX_CONCURRENCY", "2")
     )
+    task_dispatch_timeout_seconds = float(
+        os.getenv("AGENT_TASK_DISPATCH_TIMEOUT_SECONDS", "10")
+    )
+    max_llm_concurrency = int(os.getenv("AGENT_MAX_LLM_CONCURRENCY", "1"))
+    enable_test_anomaly_injection = _env_bool("ENABLE_TEST_ANOMALY_INJECTION", False)
+    enable_opensearch_anomaly_watcher = _env_bool("ENABLE_OPENSEARCH_ANOMALY_WATCHER", True)
     ollama_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").strip()
     reasoning_model = os.getenv("OLLAMA_REASONING_MODEL", "gemma4:e2b").strip()
     tool_model = os.getenv("OLLAMA_TOOL_MODEL", "qwen3.5:4b").strip()
@@ -193,6 +208,7 @@ def load_runtime_config() -> RuntimeConfig:
         "MONGODB_URI": mongodb_uri,
         "MONGODB_DATABASE": mongodb_database,
         "AGENTSPEAK_TECHNICAL_LEAD_ASL": agentspeak_technical_lead_asl,
+        "AGENTSPEAK_SPECIALIST_ASL": agentspeak_specialist_asl,
     }
     for name, value in required_values.items():
         if not value:
@@ -208,6 +224,10 @@ def load_runtime_config() -> RuntimeConfig:
         raise RuntimeError("AGENTSPEAK_ACTION_TIMEOUT_SECONDS must be greater than zero")
     if agentspeak_bdi_max_concurrency <= 0:
         raise RuntimeError("AGENTSPEAK_BDI_MAX_CONCURRENCY must be greater than zero")
+    if task_dispatch_timeout_seconds <= 0:
+        raise RuntimeError("AGENT_TASK_DISPATCH_TIMEOUT_SECONDS must be greater than zero")
+    if max_llm_concurrency <= 0:
+        raise RuntimeError("AGENT_MAX_LLM_CONCURRENCY must be greater than zero")
 
     return RuntimeConfig(
         agents=tuple(agents),
@@ -232,6 +252,11 @@ def load_runtime_config() -> RuntimeConfig:
         mongodb_database=mongodb_database,
         incident_correlation_window_seconds=incident_correlation_window_seconds,
         agentspeak_technical_lead_asl=agentspeak_technical_lead_asl,
+        agentspeak_specialist_asl=agentspeak_specialist_asl,
         agentspeak_action_timeout_seconds=agentspeak_action_timeout_seconds,
         agentspeak_bdi_max_concurrency=agentspeak_bdi_max_concurrency,
+        task_dispatch_timeout_seconds=task_dispatch_timeout_seconds,
+        max_llm_concurrency=max_llm_concurrency,
+        enable_test_anomaly_injection=enable_test_anomaly_injection,
+        enable_opensearch_anomaly_watcher=enable_opensearch_anomaly_watcher,
     )

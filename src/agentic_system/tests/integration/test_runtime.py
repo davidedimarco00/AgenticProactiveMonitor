@@ -94,8 +94,12 @@ def test_spade_agent_behaviours_keep_updating_heartbeats(
 
 @pytest.mark.integration
 def test_ready_endpoint_matches_running_backend(
+    backend_health: dict[str, Any],
     backend_get_json: Callable[[str], dict[str, Any]],
 ) -> None:
+    """Read /ready only after the shared readiness fixture confirmed startup."""
+
+    assert backend_health["status"] == "ok"
     payload = backend_get_json("/ready")
 
     assert payload["status"] == "ok"

@@ -1,0 +1,5 @@
+services:
+  agentic-backend:
+    environment:
+      ENABLE_TEST_ANOMALY_INJECTION: "1"
+      ENABLE_OPENSEARCH_ANOMALY_WATCHER: "0"

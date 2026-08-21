@@ -10,7 +10,13 @@ ANOMALY_RESULTS_PATH = "/_plugins/_anomaly_detection/detectors/results/_search/"
 
 
 class OpenSearchAnomalyClient:
-    """Async client restricted to OpenSearch Anomaly Detection result retrieval."""
+    """Async client restricted to real-time OpenSearch Anomaly Detection results.
+
+    OpenSearch stores both real-time detector results and historical-analysis
+    results in anomaly-result indexes. Real-time results are identified by the
+    absence of ``task_id``; historical analysis results carry a task ID. The
+    watcher therefore explicitly excludes documents that contain ``task_id``.
+    """
 
     def __init__(
         self,
@@ -37,13 +43,17 @@ class OpenSearchAnomalyClient:
                 "data_end_time",
                 "execution_start_time",
                 "execution_end_time",
+                "task_id",
             ],
             "query": {
                 "bool": {
                     "filter": [
                         {"range": {"anomaly_grade": {"gt": 0}}},
                         {"range": {"execution_end_time": {"gte": cutoff_ms}}},
-                    ]
+                    ],
+                    "must_not": [
+                        {"exists": {"field": "task_id"}},
+                    ],
                 }
             },
             "sort": [{"execution_end_time": {"order": "asc"}}],

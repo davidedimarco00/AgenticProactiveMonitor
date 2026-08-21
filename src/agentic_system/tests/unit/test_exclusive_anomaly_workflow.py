@@ -18,7 +18,7 @@ class WaitingRepository:
         self.task: dict[str, Any] = {
             "task_id": "TASK-EXCLUSIVE-001",
             "incident_id": "INC-EXCLUSIVE-001",
-            "state": "PENDING",
+            "state": "RUNNING",
         }
 
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
@@ -58,7 +58,7 @@ def _observation() -> AnomalyObservation:
     )
 
 
-def test_exclusive_handler_does_not_release_pending_task() -> None:
+def test_exclusive_handler_does_not_release_running_specialist_task() -> None:
     async def scenario() -> None:
         repository = WaitingRepository()
         coordinator = IncidentCoordinator(
@@ -80,8 +80,8 @@ def test_exclusive_handler_does_not_release_pending_task() -> None:
 
         processing = asyncio.create_task(coordinator.handle_anomaly_exclusively(_observation()))
 
-        # A durable PENDING task is not workflow completion. The anomaly must
-        # still own the global FIFO slot while the specialist has not finished.
+        # RUNNING means the selected specialist owns the durable task. The
+        # current anomaly must still occupy the single global FIFO slot.
         await asyncio.sleep(0.05)
         assert processing.done() is False
 

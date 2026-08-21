@@ -41,21 +41,34 @@ class BDITriageResult:
     rationale: str
 
 
+@dataclass(frozen=True, slots=True)
+class BDISpecialistTaskResult:
+    """Specialist BDI decision after receiving one durable investigation task."""
+
+    task_id: str
+    incident_id: str
+    role: str
+    goal: str
+    acceptance_intention: str
+    investigation_intention: str
+
+
 TriageCallback = Callable[[], Awaitable[BDITriageAssessment]]
 
 
 class AgentSpeakBDIRuntime:
-    """In-process Python AgentSpeak runtime used by the SPADE agents.
+    """In-process AgentSpeak runtime used by the SPADE agents.
 
-    The AgentSpeak interpreter owns beliefs, goals, plan selection and intentions.
-    Python only hosts the interpreter and exposes bridge actions that call the
-    surrounding asynchronous agent services.
+    Each SPADE agent owns its own instance of this bridge. AgentSpeak owns
+    beliefs, goals, plan selection and intentions; Python only hosts the
+    interpreter and exposes narrow bridge actions to the asynchronous runtime.
     """
 
     def __init__(
         self,
         *,
-        technical_lead_asl: str,
+        technical_lead_asl: str | None = None,
+        specialist_asl: str | None = None,
         action_timeout_seconds: float = 120.0,
         max_concurrency: int = 2,
     ) -> None:
@@ -63,17 +76,30 @@ class AgentSpeakBDIRuntime:
             raise ValueError("action_timeout_seconds must be greater than zero")
         if max_concurrency <= 0:
             raise ValueError("max_concurrency must be greater than zero")
+        if not technical_lead_asl and not specialist_asl:
+            raise ValueError("At least one AgentSpeak plan path must be configured")
 
         self.technical_lead_asl = technical_lead_asl
+        self.specialist_asl = specialist_asl
         self.action_timeout_seconds = action_timeout_seconds
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._technical_lead_plan = self._load_plan(
+            technical_lead_asl,
+            label="Technical Lead",
+        )
+        self._specialist_plan = self._load_plan(
+            specialist_asl,
+            label="Specialist",
+        )
 
-        plan_path = Path(technical_lead_asl)
+    @staticmethod
+    def _load_plan(path: str | None, *, label: str) -> str | None:
+        if path is None:
+            return None
+        plan_path = Path(path)
         if not plan_path.is_file():
-            raise RuntimeError(
-                f"Technical Lead AgentSpeak source not found: {technical_lead_asl}"
-            )
-        self._technical_lead_plan = plan_path.read_text(encoding="utf-8")
+            raise RuntimeError(f"{label} AgentSpeak source not found: {path}")
+        return plan_path.read_text(encoding="utf-8")
 
     async def triage_incident(
         self,
@@ -83,6 +109,9 @@ class AgentSpeakBDIRuntime:
         available_agents: list[str],
         triage_callback: TriageCallback,
     ) -> BDITriageResult:
+        if self._technical_lead_plan is None:
+            raise RuntimeError("Technical Lead AgentSpeak plan is not configured")
+
         available = self._validate_available_agents(available_agents)
         event_loop = asyncio.get_running_loop()
 
@@ -94,6 +123,48 @@ class AgentSpeakBDIRuntime:
                 available,
                 event_loop,
                 triage_callback,
+            )
+
+    async def accept_specialist_task(
+        self,
+        *,
+        task_id: str,
+        incident_id: str,
+        role: str,
+        task_type: str,
+    ) -> BDISpecialistTaskResult:
+        """Deliberate a received specialist task before operational ReAct starts.
+
+        This stage intentionally does not diagnose or call tools. It gives every
+        specialist its own explicit BDI state: the task becomes a belief, the
+        desire is to investigate the incident, and the selected intention is to
+        start the specialist investigation. ReAct will later execute that
+        intention.
+        """
+
+        if self._specialist_plan is None:
+            raise RuntimeError("Specialist AgentSpeak plan is not configured")
+
+        normalized_task = task_id.strip()
+        normalized_incident = incident_id.strip()
+        normalized_role = role.strip().lower()
+        normalized_type = task_type.strip().upper()
+        if not normalized_task:
+            raise ValueError("Specialist BDI requires task_id")
+        if not normalized_incident:
+            raise ValueError("Specialist BDI requires incident_id")
+        if normalized_role not in _ALLOWED_ROLES:
+            raise ValueError(f"Unsupported specialist role: {role!r}")
+        if normalized_type != "INVESTIGATE_INCIDENT":
+            raise ValueError(f"Unsupported specialist task type: {task_type!r}")
+
+        async with self._semaphore:
+            return await asyncio.to_thread(
+                self._run_specialist,
+                normalized_task,
+                normalized_incident,
+                normalized_role,
+                normalized_type,
             )
 
     def _run_technical_lead(
@@ -132,11 +203,7 @@ class AgentSpeakBDIRuntime:
             normalized = self._validate_assessment(assessment, available_agents)
             state["assessment"] = normalized
 
-            self._add_belief(
-                agent,
-                "triage_complete",
-                incident_id,
-            )
+            self._add_belief(agent, "triage_complete", incident_id)
             self._add_belief(
                 agent,
                 "probable_domain",
@@ -155,12 +222,7 @@ class AgentSpeakBDIRuntime:
                 incident_id,
                 normalized.confidence,
             )
-            self._add_belief(
-                agent,
-                "triage_rationale",
-                incident_id,
-                normalized.rationale,
-            )
+            self._add_belief(agent, "triage_rationale", incident_id, normalized.rationale)
 
         @actions.add_procedure(
             ".commit_primary_investigator",
@@ -183,7 +245,7 @@ class AgentSpeakBDIRuntime:
 
         source = agentspeak.StringSource(
             "technical_lead_runtime.asl",
-            self._build_program(incident_id, anomaly, available_agents),
+            self._build_technical_lead_program(incident_id, anomaly, available_agents),
         )
         environment = agentspeak.runtime.Environment()
         agent = environment.build_agent(source, actions, name="technical_lead_bdi")
@@ -216,12 +278,83 @@ class AgentSpeakBDIRuntime:
             rationale=assessment.rationale,
         )
 
-    def _build_program(
+    def _run_specialist(
+        self,
+        task_id: str,
+        incident_id: str,
+        role: str,
+        task_type: str,
+    ) -> BDISpecialistTaskResult:
+        state: dict[str, object] = {
+            "acceptance_intention": None,
+            "investigation_intention": None,
+        }
+        actions = agentspeak.Actions(agentspeak.stdlib.actions)
+
+        @actions.add_procedure(
+            ".accept_specialist_task",
+            (
+                agentspeak.runtime.Agent,
+                agentspeak.asl_str,
+                agentspeak.asl_str,
+                agentspeak.asl_str,
+            ),
+        )
+        def accept_specialist_task(
+            agent: agentspeak.runtime.Agent,
+            action_task_id: str,
+            action_incident_id: str,
+            action_role: str,
+        ) -> None:
+            if action_task_id != task_id or action_incident_id != incident_id:
+                raise RuntimeError("Specialist AgentSpeak received a different task identity")
+            if action_role != role:
+                raise RuntimeError("Specialist AgentSpeak task was assigned to another role")
+            state["acceptance_intention"] = "accept_task"
+            self._add_belief(agent, "task_accepted", task_id)
+
+        @actions.add_procedure(
+            ".commit_specialist_investigation",
+            (agentspeak.asl_str, agentspeak.asl_str),
+        )
+        def commit_specialist_investigation(
+            action_task_id: str,
+            action_incident_id: str,
+        ) -> None:
+            if action_task_id != task_id or action_incident_id != incident_id:
+                raise RuntimeError("Specialist AgentSpeak committed a different task identity")
+            state["investigation_intention"] = "investigate_incident"
+
+        source = agentspeak.StringSource(
+            "specialist_runtime.asl",
+            self._build_specialist_program(task_id, incident_id, role, task_type),
+        )
+        environment = agentspeak.runtime.Environment()
+        agent = environment.build_agent(source, actions, name=f"{role}_bdi")
+        environment.run_agent(agent)
+
+        if state["acceptance_intention"] != "accept_task":
+            raise RuntimeError("Specialist AgentSpeak did not commit to accept_task")
+        if state["investigation_intention"] != "investigate_incident":
+            raise RuntimeError("Specialist AgentSpeak did not commit to investigate_incident")
+
+        return BDISpecialistTaskResult(
+            task_id=task_id,
+            incident_id=incident_id,
+            role=role,
+            goal="handle_investigation_task",
+            acceptance_intention="accept_task",
+            investigation_intention="investigate_incident",
+        )
+
+    def _build_technical_lead_program(
         self,
         incident_id: str,
         anomaly: dict[str, object],
         available_agents: list[str],
     ) -> str:
+        if self._technical_lead_plan is None:
+            raise RuntimeError("Technical Lead AgentSpeak plan is not configured")
         incident = json.dumps(incident_id)
         lines = [
             f"incident({incident}).",
@@ -242,12 +375,37 @@ class AgentSpeakBDIRuntime:
         if isinstance(confidence, (int, float)):
             lines.append(f"anomaly_confidence({incident}, {float(confidence)}).")
 
-        for role in available_agents:
-            lines.append(f"agent_available({role}).")
+        for available_role in available_agents:
+            lines.append(f"agent_available({available_role}).")
 
         lines.append(f"!manage_incident({incident}).")
         lines.append("")
         lines.append(self._technical_lead_plan)
+        return "\n".join(lines)
+
+    def _build_specialist_program(
+        self,
+        task_id: str,
+        incident_id: str,
+        role: str,
+        task_type: str,
+    ) -> str:
+        if self._specialist_plan is None:
+            raise RuntimeError("Specialist AgentSpeak plan is not configured")
+        task = json.dumps(task_id)
+        incident = json.dumps(incident_id)
+        lines = [
+            f"task({task}).",
+            f"task_type({task}, {task_type.lower()}).",
+            f"task_state({task}, dispatched).",
+            f"incident({incident}).",
+            f"root_cause_unknown({incident}).",
+            f"assigned_to({task}, {role}).",
+            f"self_role({role}).",
+            f"!handle_investigation_task({task}, {incident}).",
+            "",
+            self._specialist_plan,
+        ]
         return "\n".join(lines)
 
     @staticmethod

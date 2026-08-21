@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any, Optional
 
 import httpx
@@ -153,7 +156,14 @@ class OllamaToolCallingProvider(BaseLLMProvider):
 
 
 class HybridLLMProvider(BaseLLMProvider):
-    """Assign Gemma to reasoning, Qwen to tools and Granite to embeddings."""
+    """Assign model roles and serialize shared GPU access for all agents.
+
+    ``build_agents`` creates one provider instance and gives that same instance to
+    all five SPADE-LLM agents. The semaphore in this provider is therefore a
+    backend-wide GPU gate rather than a per-agent lock. Agent concurrency remains
+    available for XMPP, MCP, persistence and other I/O; only Ollama model calls
+    are bounded here.
+    """
 
     TOOL_SELECTOR_SYSTEM_PROMPT = (
         "You are the tool-calling model of an agent. Use only the tools supplied "
@@ -171,8 +181,12 @@ class HybridLLMProvider(BaseLLMProvider):
         reasoning_provider: BaseLLMProvider,
         tool_provider: BaseLLMProvider,
         embedding_provider: LLMProvider,
+        max_concurrency: int = 1,
     ) -> None:
         super().__init__()
+        if max_concurrency <= 0:
+            raise ValueError("max_concurrency must be greater than zero")
+
         self.reasoning_provider = reasoning_provider
         self.tool_provider = tool_provider
         self.embedding_provider = embedding_provider
@@ -181,6 +195,12 @@ class HybridLLMProvider(BaseLLMProvider):
         self.tool_model = tool_provider.model
         self.embedding_model = embedding_provider.model
         self.base_url = reasoning_provider.base_url
+
+        self.max_concurrency = max_concurrency
+        self._gpu_semaphore = asyncio.Semaphore(max_concurrency)
+        self._gpu_active = 0
+        self._gpu_waiting = 0
+        self._gpu_peak_active = 0
 
     @classmethod
     def from_runtime(cls, config: Any) -> "HybridLLMProvider":
@@ -197,7 +217,37 @@ class HybridLLMProvider(BaseLLMProvider):
                 model=f"ollama/{config.embedding_model}",
                 base_url=config.ollama_url,
             ),
+            max_concurrency=int(getattr(config, "max_llm_concurrency", 1)),
         )
+
+    @asynccontextmanager
+    async def _gpu_slot(self) -> AsyncIterator[None]:
+        """Acquire one backend-wide permit for an Ollama inference sequence."""
+
+        self._gpu_waiting += 1
+        try:
+            await self._gpu_semaphore.acquire()
+        finally:
+            self._gpu_waiting -= 1
+
+        self._gpu_active += 1
+        self._gpu_peak_active = max(self._gpu_peak_active, self._gpu_active)
+        try:
+            yield
+        finally:
+            self._gpu_active -= 1
+            self._gpu_semaphore.release()
+
+    def concurrency_snapshot(self) -> dict[str, int | str]:
+        """Expose the shared GPU gate without leaking semaphore internals."""
+
+        return {
+            "scope": "BACKEND_GLOBAL",
+            "max_concurrency": self.max_concurrency,
+            "active": self._gpu_active,
+            "waiting": self._gpu_waiting,
+            "peak_active": self._gpu_peak_active,
+        }
 
     async def get_llm_response(
         self,
@@ -205,6 +255,25 @@ class HybridLLMProvider(BaseLLMProvider):
         tools: Optional[list[LLMTool]] = None,
         conversation_id: Optional[str] = None,
         output_schema: Optional[Any] = None,
+    ) -> dict[str, Any]:
+        # One permit covers the complete Gemma -> Qwen model sequence for a
+        # single SPADE-LLM reasoning step. The permit is released before MCP tool
+        # execution, so another agent may use the GPU while this agent waits on I/O.
+        async with self._gpu_slot():
+            return await self._get_llm_response_locked(
+                context,
+                tools=tools,
+                conversation_id=conversation_id,
+                output_schema=output_schema,
+            )
+
+    async def _get_llm_response_locked(
+        self,
+        context: ContextManager,
+        *,
+        tools: Optional[list[LLMTool]],
+        conversation_id: Optional[str],
+        output_schema: Optional[Any],
     ) -> dict[str, Any]:
         if not tools:
             return await self.reasoning_provider.get_llm_response(
@@ -280,4 +349,8 @@ class HybridLLMProvider(BaseLLMProvider):
         return reasoning_response
 
     async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        return await self.embedding_provider.get_embeddings(texts)
+        # Agent-side embedding calls share the same GPU gate. Embeddings executed
+        # by another process (for example the MCP server) are outside this in-process
+        # semaphore and can be moved behind a cross-process arbiter later if needed.
+        async with self._gpu_slot():
+            return await self.embedding_provider.get_embeddings(texts)

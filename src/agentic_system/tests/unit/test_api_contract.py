@@ -1,9 +1,13 @@
 from types import SimpleNamespace
 
-from agentic_system.api import create_api_app
+from agentic_system.api import attach_anomaly_inbox_api, create_api_app
 
 
 class FakeRepository:
+    pass
+
+
+class FakeAnomalyInbox:
     pass
 
 
@@ -40,3 +44,14 @@ def test_public_openapi_exposes_pdf_report_endpoint() -> None:
     paths = app.openapi()["paths"]
 
     assert "get" in paths["/api/v1/incidents/{incident_id}/report"]
+
+
+def test_public_openapi_exposes_readable_inbox_and_waiting_anomaly_dismissal() -> None:
+    app = create_api_app(FakeRuntime(), FakeRepository())  # type: ignore[arg-type]
+    attach_anomaly_inbox_api(app, FakeAnomalyInbox())  # type: ignore[arg-type]
+    paths = app.openapi()["paths"]
+
+    assert "get" in paths["/api/v1/anomalies"]
+    assert "post" not in paths["/api/v1/anomalies"]
+    assert "put" not in paths["/api/v1/anomalies"]
+    assert "delete" in paths["/api/v1/anomalies/{anomaly_key}"]

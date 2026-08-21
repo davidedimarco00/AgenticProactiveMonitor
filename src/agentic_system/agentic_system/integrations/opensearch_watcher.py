@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import logging
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from ..incidents import AnomalyObservation
+from .opensearch_catalog import OpenSearchDetectorCatalog
 from .opensearch_client import OpenSearchAnomalyClient
 from .opensearch_mapper import anomaly_observation_from_hit
 
@@ -19,7 +21,9 @@ class OpenSearchAnomalyWatcher:
     Deduplication belongs to the queue because only that component knows whether
     an observation is queued, currently active, completed or released after a
     failure. The watcher therefore remains a producer and never starts parallel
-    incident workflows by itself.
+    incident workflows by itself. Detector metadata is cached only to make the
+    operator-facing durable inbox readable; detector enforcement remains
+    SINGLE_ENTITY through ``OpenSearchDetectorCatalog``.
     """
 
     def __init__(
@@ -52,6 +56,10 @@ class OpenSearchAnomalyWatcher:
             lookback_seconds=lookback_seconds,
             request_timeout_seconds=request_timeout_seconds,
         )
+        self.detector_catalog = OpenSearchDetectorCatalog(
+            self.opensearch_url,
+            timeout_seconds=request_timeout_seconds,
+        )
         self.results_url = self.client.results_url
 
         self.running = False
@@ -61,9 +69,45 @@ class OpenSearchAnomalyWatcher:
         self.failed_delivery_count = 0
         self.last_error: str | None = None
         self._stop_event = asyncio.Event()
+        self._detector_context_cache: dict[str, dict[str, Any]] = {}
 
     async def _fetch_hits(self) -> list[dict[str, object]]:
         return await self.client.fetch_hits()
+
+    async def _with_readable_detector_metadata(
+        self,
+        observation: AnomalyObservation,
+    ) -> AnomalyObservation:
+        detector_id = observation.detector_id
+        try:
+            context = self._detector_context_cache.get(detector_id)
+            if context is None:
+                context = await self.detector_catalog.get_detector_context(detector_id)
+                self._detector_context_cache[detector_id] = dict(context)
+
+            indices = context.get("indices") or []
+            if not isinstance(indices, list):
+                indices = []
+            name = str(context.get("name") or "").strip() or None
+            description = str(context.get("description") or "").strip() or None
+            return replace(
+                observation,
+                detector_name=name,
+                detector_description=description,
+                detector_indices=tuple(str(index) for index in indices),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Metadata is not part of the anomaly admission safety boundary. The
+            # raw result must still be persisted and queued if catalog lookup is
+            # temporarily unavailable.
+            LOGGER.warning(
+                "Could not resolve readable detector metadata for %s: %s",
+                detector_id,
+                exc,
+            )
+            return observation
 
     async def poll_once(self) -> int:
         hits = await self._fetch_hits()
@@ -75,6 +119,8 @@ class OpenSearchAnomalyWatcher:
             observation = anomaly_observation_from_hit(hit)
             if observation is None:
                 continue
+
+            observation = await self._with_readable_detector_metadata(observation)
 
             try:
                 accepted = await self.on_anomaly(observation)

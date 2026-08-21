@@ -1,3 +1,4 @@
+from .anomaly_inbox import ANOMALY_INBOX_STATES, MongoAnomalyInbox, normalize_anomaly_record
 from .mongodb import (
     ACTIVE_STATUSES,
     IncidentRepository,
@@ -22,8 +23,10 @@ from .opensearch_watcher import OpenSearchAnomalyWatcher
 
 __all__ = [
     "ACTIVE_STATUSES",
+    "ANOMALY_INBOX_STATES",
     "ANOMALY_RESULTS_PATH",
     "IncidentRepository",
+    "MongoAnomalyInbox",
     "OpenSearchAnomalyClient",
     "OpenSearchAnomalyWatcher",
     "OpenSearchDetectorCatalog",
@@ -33,6 +36,7 @@ __all__ = [
     "new_event_id",
     "new_incident_id",
     "new_task_id",
+    "normalize_anomaly_record",
     "normalize_event",
     "normalize_incident",
     "normalize_task",

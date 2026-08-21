@@ -8,11 +8,17 @@ from .agents.base import BaseAgent
 from .agents.factory import build_agents
 from .agents.messages import Performative
 from .agents.roles import SystemEngineerAgent, TechnicalLeadAgent
+from .agents.specialist import (
+    INVESTIGATION_TASK_ACCEPTED_TYPE,
+    INVESTIGATION_TASK_MESSAGE_TYPE,
+    SpecialistAgent,
+)
 from .incidents import (
     AnomalyIntake,
     AnomalyObservation,
     IncidentAssigneeReceipt,
     IncidentTriageReceipt,
+    InvestigationTaskDispatchReceipt,
 )
 from .integrations import OpenSearchAnomalyWatcher
 from .settings import RuntimeConfig
@@ -22,8 +28,6 @@ LOGGER = logging.getLogger("agentic_system.runtime")
 HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
 HEALTH_PROBE_INTERVAL_SECONDS = 30.0
 HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
-# Recovery scans are bounded to 500 incidents. Keep enough queue capacity to
-# seed all durable recovery work before fresh OpenSearch polling starts.
 ANOMALY_QUEUE_MAXSIZE = 4096
 AnomalyHandler = Callable[[AnomalyObservation], Awaitable[object]]
 
@@ -107,7 +111,7 @@ class AgentRuntime:
         *,
         detector_context: dict[str, Any],
     ) -> IncidentTriageReceipt:
-        """Run BDI-led TL triage without delegating to a specialist yet."""
+        """Run BDI-led TL triage and select the primary specialist."""
 
         technical_lead = self._technical_lead()
         available_agents = [
@@ -129,6 +133,83 @@ class AgentRuntime:
             bdi_goal=decision.bdi_goal,
             bdi_triage_intention=decision.bdi_triage_intention,
             bdi_intention=decision.bdi_intention,
+        )
+
+    async def dispatch_investigation_task(
+        self,
+        incident: dict[str, Any],
+        task: dict[str, Any],
+    ) -> InvestigationTaskDispatchReceipt:
+        """Delegate one durable DISPATCHED task through TL -> specialist XMPP."""
+
+        if not self.started:
+            raise RuntimeError("Agent runtime is not running")
+
+        task_id = str(task.get("task_id") or "").strip()
+        incident_id = str(task.get("incident_id") or "").strip()
+        assigned_to = str(task.get("assigned_to") or "").strip().lower()
+        task_type = str(task.get("task_type") or "").strip().upper()
+        state = str(task.get("state") or "").strip().upper()
+        if not task_id or not incident_id or not assigned_to:
+            raise ValueError("Durable task is missing dispatch identity fields")
+        if incident_id != str(incident.get("incident_id") or "").strip():
+            raise RuntimeError("Task incident_id does not match the incident being dispatched")
+        if state != "DISPATCHED":
+            raise RuntimeError(
+                f"Task {task_id} must be DISPATCHED before XMPP delivery, got {state}"
+            )
+
+        technical_lead = self._technical_lead()
+        specialist = self._specialist_by_role(assigned_to)
+        if not specialist.xmpp_connected or not specialist.communication_ok:
+            raise RuntimeError(f"Selected specialist {assigned_to} is not reachable")
+
+        request, acknowledgement = await technical_lead.request_specialist(
+            receiver=str(specialist.jid),
+            request_type=INVESTIGATION_TASK_MESSAGE_TYPE,
+            payload={
+                "task_id": task_id,
+                "incident_id": incident_id,
+                "task_type": task_type,
+                "assigned_to": assigned_to,
+                "attempt": int(task.get("attempt") or 0),
+                "max_attempts": int(task.get("max_attempts") or 0),
+                "severity": str(incident.get("severity") or "MEDIUM").upper(),
+                "entity": str(incident.get("entity") or "unknown"),
+                "anomaly": dict(incident.get("anomaly") or {}),
+            },
+            timeout=self.config.task_dispatch_timeout_seconds,
+        )
+
+        valid = (
+            acknowledgement.type == INVESTIGATION_TASK_ACCEPTED_TYPE
+            and acknowledgement.correlation_id == request.correlation_id
+            and acknowledgement.sender == str(specialist.jid)
+            and acknowledgement.receiver == str(technical_lead.jid)
+            and acknowledgement.payload.get("accepted_by") == specialist.role
+            and acknowledgement.payload.get("task_id") == task_id
+            and acknowledgement.payload.get("incident_id") == incident_id
+        )
+        if not valid:
+            specialist.mark_communication_failed()
+            raise RuntimeError(
+                f"Specialist {assigned_to} returned an invalid task acknowledgement"
+            )
+
+        specialist.mark_communication_ok()
+        return InvestigationTaskDispatchReceipt(
+            task_id=task_id,
+            incident_id=incident_id,
+            agent_role=specialist.role,
+            agent_jid=str(specialist.jid),
+            correlation_id=request.correlation_id,
+            bdi_goal=str(acknowledgement.payload.get("bdi_goal") or ""),
+            bdi_acceptance_intention=str(
+                acknowledgement.payload.get("bdi_acceptance_intention") or ""
+            ),
+            bdi_investigation_intention=str(
+                acknowledgement.payload.get("bdi_investigation_intention") or ""
+            ),
         )
 
     async def start(self, *, start_observation_pipeline: bool = True) -> None:
@@ -232,8 +313,18 @@ class AgentRuntime:
             raise RuntimeError("Technical Lead SPADE-LLM agent is not available")
         return agent
 
-    def _specialists(self) -> list[BaseAgent]:
-        return [agent for agent in self.agents if agent.role != "technical_lead"]
+    def _specialists(self) -> list[SpecialistAgent]:
+        return [agent for agent in self.agents if isinstance(agent, SpecialistAgent)]
+
+    def _specialist_by_role(self, role: str) -> SpecialistAgent:
+        normalized = role.strip().lower()
+        specialist = next(
+            (agent for agent in self._specialists() if agent.role == normalized),
+            None,
+        )
+        if specialist is None:
+            raise RuntimeError(f"Specialist SPADE-LLM agent is not available: {normalized}")
+        return specialist
 
     async def _run_communication_probe(self) -> dict[str, Any]:
         technical_lead = self._technical_lead()
@@ -370,10 +461,6 @@ class AgentRuntime:
             self._anomaly_watcher_task = None
 
         if self._anomaly_intake_task is not None:
-            # Do not wait for queue.join() here. The exclusive FIFO handler may
-            # legitimately be waiting on a PENDING/RUNNING durable task for a
-            # long time. Shutdown must cancel volatile execution immediately;
-            # durable incident/task state remains in MongoDB for recovery.
             self._anomaly_intake_task.cancel()
             try:
                 await self._anomaly_intake_task

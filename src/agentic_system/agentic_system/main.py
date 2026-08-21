@@ -6,19 +6,21 @@ import json
 import logging
 import signal
 import threading
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import spade
 import uvicorn
 
-from .api import create_api_app
+from .api import attach_anomaly_inbox_api, attach_test_support_api, create_api_app
 from .incidents import (
     AgentTaskWorkflow,
+    AnomalyObservation,
     IncidentCoordinator,
     IncidentCorrelationPolicy,
     IncidentWorkflow,
+    IncidentWorkflowResult,
 )
-from .integrations import IncidentRepository, OpenSearchDetectorCatalog
+from .integrations import IncidentRepository, MongoAnomalyInbox, OpenSearchDetectorCatalog
 from .runtime import AgentRuntime
 from .settings import RuntimeConfig, load_runtime_config
 
@@ -30,6 +32,8 @@ HEALTH_STATE: dict[str, Any] = {
     "component": "agentic-backend",
     "phase": "bootstrap",
 }
+AUTONOMOUS_TERMINAL_STATUSES = {"RESOLVED", "CLOSED", "OPERATOR_ACTION_REQUIRED"}
+ANOMALY_INBOX_RECOVERY_INDEX = "agentic-anomaly-inbox-recovery"
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -68,7 +72,8 @@ def _log_runtime(config: RuntimeConfig) -> None:
     LOGGER.info("MCP endpoint: %s", config.mcp_url)
     LOGGER.info("OpenSearch endpoint: %s", config.opensearch_url)
     LOGGER.info(
-        "Anomaly watcher: poll=%.1fs lookback=%ss",
+        "Anomaly watcher: enabled=%s poll=%.1fs lookback=%ss",
+        config.enable_opensearch_anomaly_watcher,
         config.anomaly_watch_poll_seconds,
         config.anomaly_watch_lookback_seconds,
     )
@@ -89,6 +94,7 @@ def _log_runtime(config: RuntimeConfig) -> None:
     LOGGER.info("SPADE-LLM interaction memory: %s", config.spade_llm_memory_path)
     LOGGER.info("MongoDB database: %s", config.mongodb_database)
     LOGGER.info("REST API: http://%s:%d (Swagger: /docs)", config.api_host, config.api_port)
+    LOGGER.info("Synthetic anomaly test hooks enabled: %s", config.enable_test_anomaly_injection)
 
 
 def _start_health_server(config: RuntimeConfig) -> tuple[ThreadingHTTPServer, threading.Thread]:
@@ -135,12 +141,75 @@ async def _wait_for_api_server(
         await asyncio.sleep(0.05)
 
 
+def _build_durable_anomaly_handler(
+    coordinator: IncidentCoordinator,
+    anomaly_inbox: MongoAnomalyInbox,
+) -> Callable[[AnomalyObservation], Awaitable[object]]:
+    """Wrap incident coordination with the durable anomaly-inbox lifecycle."""
+
+    async def handle(observation: AnomalyObservation) -> IncidentWorkflowResult:
+        recovery_incident_id = observation.recovery_incident_id
+        if recovery_incident_id:
+            await anomaly_inbox.mark_incident_anomalies_processing(recovery_incident_id)
+
+        result = await coordinator.handle_anomaly(observation)
+        incident_id = str(result.incident["incident_id"])
+
+        if not recovery_incident_id:
+            linked = await anomaly_inbox.link_anomaly_to_incident(
+                observation.deduplication_key,
+                incident_id,
+            )
+            if linked is None:
+                raise RuntimeError(
+                    "Durable anomaly disappeared before incident linkage: "
+                    f"{observation.deduplication_key}"
+                )
+
+        terminal_incident = await coordinator.wait_until_workflow_terminal(incident_id)
+
+        if recovery_incident_id:
+            await anomaly_inbox.mark_incident_anomalies_completed(incident_id)
+
+        return IncidentWorkflowResult(
+            incident=terminal_incident,
+            created=result.created,
+            correlated=result.correlated,
+        )
+
+    return handle
+
+
+def _recovery_observation_from_inbox(
+    record: dict[str, Any],
+    incident_id: str,
+) -> AnomalyObservation:
+    return AnomalyObservation(
+        result_id=f"recover:{incident_id}",
+        result_index=ANOMALY_INBOX_RECOVERY_INDEX,
+        detector_id=str(record.get("detector_id") or "").strip(),
+        anomaly_grade=float(record.get("anomaly_grade") or 0.0),
+        confidence=float(record.get("confidence") or 0.0),
+        anomaly_score=(
+            float(record["anomaly_score"])
+            if record.get("anomaly_score") is not None
+            else None
+        ),
+        data_start_time=None,
+        data_end_time=None,
+        execution_start_time=None,
+        execution_end_time=None,
+        recovery_incident_id=incident_id,
+    )
+
+
 async def _run_backend() -> None:
     config = load_runtime_config()
     _log_runtime(config)
 
     health_server, health_thread = _start_health_server(config)
     repository = IncidentRepository(config.mongodb_uri, config.mongodb_database)
+    anomaly_inbox = MongoAnomalyInbox(config.mongodb_uri, config.mongodb_database)
     detector_context = OpenSearchDetectorCatalog(config.opensearch_url)
     correlation_policy = IncidentCorrelationPolicy(
         window_seconds=config.incident_correlation_window_seconds
@@ -148,6 +217,7 @@ async def _run_backend() -> None:
     incident_workflow = IncidentWorkflow(repository, correlation_policy)
     task_workflow = AgentTaskWorkflow(repository)
     runtime = AgentRuntime(config)
+    runtime.anomaly_intake.anomaly_inbox = anomaly_inbox
     incident_coordinator = IncidentCoordinator(
         incident_workflow,
         runtime,
@@ -156,10 +226,9 @@ async def _run_backend() -> None:
         repository,
     )
 
-    # The anomaly queue must own its current item for the complete collaborative
-    # workflow. A successful triage or a PENDING specialist task is therefore not
-    # an acknowledgement boundary anymore.
-    runtime.configure_anomaly_handler(incident_coordinator.handle_anomaly_exclusively)
+    runtime.configure_anomaly_handler(
+        _build_durable_anomaly_handler(incident_coordinator, anomaly_inbox)
+    )
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
@@ -168,6 +237,12 @@ async def _run_backend() -> None:
     api_task: asyncio.Task[None] | None = None
     task_recovery: dict[str, int] = {"scanned": 0, "retrying": 0, "failed": 0}
     incident_recovery: dict[str, int] = {"scanned": 0, "resumed": 0, "failed": 0}
+    anomaly_inbox_recovery: dict[str, int] = {
+        "interrupted": 0,
+        "reset_to_waiting": 0,
+        "waiting": 0,
+        "seeded_waiting": 0,
+    }
 
     _set_health(
         status="starting",
@@ -191,41 +266,113 @@ async def _run_backend() -> None:
         team_communication_ok=False,
         unreachable_specialists=[],
         anomaly_watcher=runtime.anomaly_watch_snapshot(),
+        anomaly_inbox_recovery=anomaly_inbox_recovery,
         task_recovery=task_recovery,
         incident_recovery=incident_recovery,
+        test_anomaly_injection_enabled=config.enable_test_anomaly_injection,
+        opensearch_anomaly_watcher_enabled=config.enable_opensearch_anomaly_watcher,
     )
 
     try:
         await repository.connect()
-        _set_health(mongodb_reachable=True, phase="recovering-agent-tasks")
+        await anomaly_inbox.connect()
+        _set_health(mongodb_reachable=True, phase="recovering-anomaly-inbox")
 
-        # Volatile DISPATCHED/RUNNING executions cannot survive a backend
-        # restart. Persistently reclassify them before the agents start so the
-        # next dispatcher can safely retry rather than duplicate work.
+        anomaly_inbox_recovery = await anomaly_inbox.recover_interrupted_processing()
+        _set_health(
+            anomaly_inbox_recovery=anomaly_inbox_recovery,
+            phase="recovering-agent-tasks",
+        )
+
         task_recovery = (await task_workflow.recover_incomplete_tasks()).to_dict()
         _set_health(task_recovery=task_recovery, phase="starting-agents")
 
-        # Start the agents and their communication supervisor, but deliberately
-        # keep fresh OpenSearch polling paused while durable work is seeded.
         await runtime.start(start_observation_pipeline=False)
 
-        # Incomplete persisted incidents must obey the same one-anomaly-at-a-time
-        # invariant after a restart. Seed them oldest-first into the same FIFO
-        # before the watcher is allowed to discover fresh anomaly results.
         _set_health(phase="seeding-incident-recovery")
         recovery_observations = await incident_coordinator.build_recovery_observations()
+        recovery_incident_ids = {
+            str(observation.recovery_incident_id)
+            for observation in recovery_observations
+            if observation.recovery_incident_id
+        }
+
+        waiting_records = await anomaly_inbox.list_anomalies(
+            states=["WAITING"],
+            limit=4096,
+            ascending=True,
+        )
+        backlog_observations: list[AnomalyObservation] = []
+        for record in waiting_records:
+            incident_id = str(record.get("incident_id") or "").strip()
+            if not incident_id:
+                backlog_observations.append(AnomalyObservation.from_dict(record))
+                continue
+
+            incident = await repository.get_incident(incident_id)
+            if incident is None:
+                released = await anomaly_inbox.release_orphaned_incident_link(
+                    str(record["anomaly_key"])
+                )
+                if released is not None:
+                    backlog_observations.append(AnomalyObservation.from_dict(released))
+                continue
+
+            status = str(incident.get("status") or "").upper()
+            if status in AUTONOMOUS_TERMINAL_STATUSES:
+                await anomaly_inbox.mark_anomaly_completed(str(record["anomaly_key"]))
+                continue
+
+            if incident_id not in recovery_incident_ids:
+                recovery_observations.append(
+                    _recovery_observation_from_inbox(record, incident_id)
+                )
+                recovery_incident_ids.add(incident_id)
+
+        for incident_id in recovery_incident_ids:
+            await anomaly_inbox.mark_incident_anomalies_recovery_queued(incident_id)
+
         seeded_recovery = await runtime.enqueue_recovery_observations(recovery_observations)
+        seeded_waiting = 0
+        for observation in backlog_observations:
+            if await runtime.anomaly_intake.enqueue(observation):
+                seeded_waiting += 1
+
         incident_recovery = {
             "scanned": len(recovery_observations),
             "resumed": seeded_recovery,
             "failed": 0,
         }
+        anomaly_inbox_recovery = {
+            **anomaly_inbox_recovery,
+            "seeded_waiting": seeded_waiting,
+        }
 
-        # Recovery items are now physically ahead of fresh work in the FIFO.
+        # In normal mode the watcher starts together with the exclusive intake.
+        # The test compose override pre-stops the watcher before its task is
+        # scheduled, so synthetic FIFO tests are not polluted by OpenSearch.
+        if not config.enable_opensearch_anomaly_watcher:
+            runtime.anomaly_watcher.stop()
         runtime.start_observation_pipeline()
-        _set_health(incident_recovery=incident_recovery, phase="starting-api")
+        _set_health(
+            incident_recovery=incident_recovery,
+            anomaly_inbox_recovery=anomaly_inbox_recovery,
+            phase="starting-api",
+        )
 
         api = create_api_app(runtime, repository)
+        attach_anomaly_inbox_api(api, anomaly_inbox)
+        if config.enable_test_anomaly_injection:
+            attach_test_support_api(
+                api,
+                runtime=runtime,
+                repository=repository,
+                task_workflow=task_workflow,
+            )
+            LOGGER.warning(
+                "Development test hooks enabled under /internal/v1/test; do not enable in production"
+            )
+
         api_server = uvicorn.Server(
             uvicorn.Config(
                 api,
@@ -248,6 +395,7 @@ async def _run_backend() -> None:
             team_communication_ok=runtime.team_communication_ok,
             unreachable_specialists=runtime.unreachable_specialists,
             anomaly_watcher=runtime.anomaly_watch_snapshot(),
+            anomaly_inbox_recovery=anomaly_inbox_recovery,
             task_recovery=task_recovery,
             incident_recovery=incident_recovery,
             api_docs=f"http://{config.api_host}:{config.api_port}/docs",
@@ -262,6 +410,7 @@ async def _run_backend() -> None:
                 team_communication_ok=runtime.team_communication_ok,
                 unreachable_specialists=runtime.unreachable_specialists,
                 anomaly_watcher=runtime.anomaly_watch_snapshot(),
+                anomaly_inbox_recovery=anomaly_inbox_recovery,
                 task_recovery=task_recovery,
                 incident_recovery=incident_recovery,
             )
@@ -281,6 +430,7 @@ async def _run_backend() -> None:
 
         _set_health(phase="stopping-agents")
         await runtime.stop()
+        await anomaly_inbox.close()
         await repository.close()
         _set_health(
             agents_running=0,

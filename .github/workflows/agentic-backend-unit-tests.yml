@@ -5,6 +5,7 @@ on:
     branches:
       - feature/agentic-system-backend
       - feature/agentic-system-backend-fault-tolerance
+      - feature/agentic-dispatch-bdi
     paths:
       - "src/agentic_system/**"
       - ".github/workflows/agentic-backend-unit-tests.yml"

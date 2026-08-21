@@ -226,6 +226,54 @@
   line-height: 1.45;
 }
 
+.anomaly-action-cell {
+  width: 72px;
+  text-align: center;
+}
+
+.anomaly-dismiss-button {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #dc2626;
+  border-radius: 10px;
+  background: #dc2626;
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(220, 38, 38, .18);
+  transition: transform .15s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+
+.anomaly-dismiss-button svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.anomaly-dismiss-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #b91c1c;
+  background: #b91c1c;
+  box-shadow: 0 6px 14px rgba(185, 28, 28, .24);
+}
+
+.anomaly-dismiss-button:focus-visible {
+  outline: 3px solid rgba(220, 38, 38, .22);
+  outline-offset: 2px;
+}
+
+.anomaly-dismiss-button:disabled {
+  cursor: wait;
+  opacity: .6;
+}
+
+.anomaly-detector-description {
+  max-width: 420px;
+  color: var(--muted);
+}
+
 .task-card {
   padding: 18px;
   margin-top: 12px;

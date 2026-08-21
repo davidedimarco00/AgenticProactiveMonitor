@@ -122,6 +122,28 @@ def search_incidents(
         return []
 
 
+def search_anomalies(
+    limit: int = 100,
+    *,
+    state: str | None = None,
+    ascending: bool = True,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "limit": min(max(limit, 1), 4096),
+        "ascending": str(bool(ascending)).lower(),
+    }
+    if state:
+        params["state"] = state
+    try:
+        response = backend_request("GET", "/api/v1/anomalies", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"anomalies": [], "summary": {}}
+    except (requests.RequestException, ValueError):
+        app.logger.warning("Could not load durable anomalies from the backend API")
+        return {"anomalies": [], "summary": {}}
+
+
 def get_incident(incident_id: str) -> dict[str, Any] | None:
     try:
         response = backend_request("GET", f"/api/v1/incidents/{incident_id}")
@@ -579,6 +601,19 @@ def api_incidents():
     query = request.args.get("q", "").strip() or None
     limit = int(request.args.get("limit", "100"))
     return jsonify({"incidents": search_incidents(limit, status=status, query=query)})
+
+
+@app.get("/api/anomalies")
+def api_anomalies():
+    state = request.args.get("state", "").strip().upper() or None
+    limit = int(request.args.get("limit", "100"))
+    ascending = request.args.get("ascending", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return jsonify(search_anomalies(limit, state=state, ascending=ascending))
 
 
 @app.get("/api/incidents/<incident_id>")

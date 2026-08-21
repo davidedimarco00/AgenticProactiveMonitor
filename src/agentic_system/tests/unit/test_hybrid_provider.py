@@ -39,6 +39,37 @@ class FakeProvider:
         return [[0.1, 0.2, 0.3] for _ in texts]
 
 
+class SlowProvider(FakeProvider):
+    def __init__(
+        self,
+        model: str,
+        response: dict[str, Any],
+        tracker: dict[str, int],
+    ) -> None:
+        super().__init__(model, response)
+        self.tracker = tracker
+
+    async def get_llm_response(
+        self,
+        context: Any,
+        tools: Any = None,
+        conversation_id: str | None = None,
+        output_schema: Any = None,
+    ) -> dict[str, Any]:
+        self.tracker["active"] += 1
+        self.tracker["peak"] = max(self.tracker["peak"], self.tracker["active"])
+        try:
+            await asyncio.sleep(0.05)
+            return await super().get_llm_response(
+                context,
+                tools=tools,
+                conversation_id=conversation_id,
+                output_schema=output_schema,
+            )
+        finally:
+            self.tracker["active"] -= 1
+
+
 def _context() -> ContextManager:
     context = ContextManager(system_prompt="You are a monitoring specialist.")
     context.add_message_dict(
@@ -151,6 +182,46 @@ def test_hybrid_provider_delegates_embeddings_to_granite() -> None:
     assert embeddings.embedding_calls == [["processing-service"]]
 
 
+def test_hybrid_provider_serializes_concurrent_agent_gpu_calls() -> None:
+    tracker = {"active": 0, "peak": 0}
+    reasoning = SlowProvider(
+        "ollama/gemma4:e2b",
+        {"text": "done", "tool_calls": [], "structured": None},
+        tracker,
+    )
+    selector = FakeProvider(
+        "ollama_native/qwen3.5:4b",
+        {"text": "", "tool_calls": [], "structured": None},
+    )
+    embeddings = FakeProvider(
+        "ollama/ibm/granite-embedding:30m",
+        {"text": "", "tool_calls": [], "structured": None},
+    )
+    provider = HybridLLMProvider(
+        reasoning_provider=reasoning,  # type: ignore[arg-type]
+        tool_provider=selector,  # type: ignore[arg-type]
+        embedding_provider=embeddings,  # type: ignore[arg-type]
+        max_concurrency=1,
+    )
+
+    async def scenario() -> None:
+        await asyncio.gather(
+            provider.get_llm_response(_context(), conversation_id="incident-1"),
+            provider.get_llm_response(_context(), conversation_id="incident-2"),
+            provider.get_llm_response(_context(), conversation_id="incident-3"),
+        )
+
+    asyncio.run(scenario())
+
+    snapshot = provider.concurrency_snapshot()
+    assert tracker["peak"] == 1
+    assert snapshot["scope"] == "BACKEND_GLOBAL"
+    assert snapshot["max_concurrency"] == 1
+    assert snapshot["peak_active"] == 1
+    assert snapshot["active"] == 0
+    assert snapshot["waiting"] == 0
+
+
 def test_ollama_tool_provider_parses_native_api_chat_tool_calls(monkeypatch) -> None:
     provider = OllamaToolCallingProvider(
         model="qwen3.5:4b",
@@ -207,6 +278,7 @@ def test_hybrid_provider_uses_project_model_roles_from_runtime_config() -> None:
         tool_model="qwen3.5:4b",
         embedding_model="ibm/granite-embedding:30m",
         ollama_url="http://ollama:11434",
+        max_llm_concurrency=1,
     )
 
     provider = HybridLLMProvider.from_runtime(config)
@@ -214,4 +286,5 @@ def test_hybrid_provider_uses_project_model_roles_from_runtime_config() -> None:
     assert provider.reasoning_model == "ollama/gemma4:e2b"
     assert provider.tool_model == "ollama_native/qwen3.5:4b"
     assert provider.embedding_model == "ollama/ibm/granite-embedding:30m"
+    assert provider.max_concurrency == 1
     assert MCP_SERVER_NAME == "apm_mcp"

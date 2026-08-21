@@ -26,10 +26,14 @@ def _utc_now_iso() -> str:
 def _detector_display_name(
     detector_context: dict[str, Any] | None,
     detector_id: str,
+    observation_name: str | None = None,
 ) -> str:
     name = str((detector_context or {}).get("name") or "").strip()
     if name and name.lower() != "unknown":
         return name
+    carried_name = str(observation_name or "").strip()
+    if carried_name:
+        return carried_name
     return f"single-entity-detector:{detector_id}"
 
 
@@ -53,7 +57,11 @@ class IncidentWorkflow:
         *,
         detector_context: dict[str, Any] | None = None,
     ) -> IncidentWorkflowResult:
-        detector_name = _detector_display_name(detector_context, observation.detector_id)
+        detector_name = _detector_display_name(
+            detector_context,
+            observation.detector_id,
+            observation.detector_name,
+        )
         existing = await self.repository.find_active_incident_by_detector(
             observation.detector_id
         )
@@ -70,9 +78,14 @@ class IncidentWorkflow:
                     "anomaly": {
                         "detector_id": observation.detector_id,
                         "detector_name": detector_name,
-                        "anomaly_type": "opensearch_anomaly",
+                        "anomaly_type": (
+                            "opensearch_anomaly"
+                            if observation.source == "opensearch"
+                            else "synthetic_test_anomaly"
+                        ),
                         "grade": observation.anomaly_grade,
                         "confidence": observation.confidence,
+                        "source": observation.source,
                     },
                 },
             )
@@ -89,6 +102,8 @@ class IncidentWorkflow:
                     "reason": (
                         "A new OpenSearch result from the same SINGLE_ENTITY detector "
                         "was correlated with the active incident."
+                        if observation.source == "opensearch"
+                        else "A synthetic test result from the same SINGLE_ENTITY detector was correlated with the active incident."
                     ),
                     "status": updated.get("status", "NEW"),
                 },
@@ -109,23 +124,37 @@ class IncidentWorkflow:
             )
 
         detected_at = _epoch_ms_to_iso(observation.execution_start_time) or _utc_now_iso()
+        is_opensearch = observation.source == "opensearch"
+        takeover_reason = (
+            "OpenSearch SINGLE_ENTITY detector reported an anomaly."
+            if is_opensearch
+            else "Synthetic test SINGLE_ENTITY detector observation reported an anomaly."
+        )
+        event_reason = (
+            "Incident created automatically from an OpenSearch anomaly result."
+            if is_opensearch
+            else "Incident created automatically from a synthetic test anomaly observation."
+        )
         incident = await self.repository.create_incident(
             {
                 "status": "NEW",
                 "severity": "MEDIUM",
                 "entity": detector_name,
                 "service": "unknown",
-                "takeover_reason": "OpenSearch SINGLE_ENTITY detector reported an anomaly.",
+                "takeover_reason": takeover_reason,
                 "takeover_factors": [
-                    "automatic_opensearch_anomaly",
+                    "automatic_opensearch_anomaly" if is_opensearch else "synthetic_test_anomaly",
                     "single_entity_detector",
                 ],
                 "anomaly": {
                     "detector_id": observation.detector_id,
                     "detector_name": detector_name,
-                    "anomaly_type": "opensearch_anomaly",
+                    "anomaly_type": (
+                        "opensearch_anomaly" if is_opensearch else "synthetic_test_anomaly"
+                    ),
                     "grade": observation.anomaly_grade,
                     "confidence": observation.confidence,
+                    "source": observation.source,
                 },
                 "detected_at": detected_at,
             }
@@ -136,7 +165,7 @@ class IncidentWorkflow:
             {
                 "event_type": "ANOMALY_DETECTED",
                 "action": "create_incident",
-                "reason": "Incident created automatically from an OpenSearch anomaly result.",
+                "reason": event_reason,
                 "status": "NEW",
             },
         )
@@ -144,11 +173,12 @@ class IncidentWorkflow:
         self.created_count += 1
         self.last_incident_id = incident_id
         LOGGER.warning(
-            "Created incident=%s from anomaly result=%s detector=%s (%s)",
+            "Created incident=%s from anomaly result=%s detector=%s (%s) source=%s",
             incident_id,
             observation.result_id,
             detector_name,
             observation.detector_id,
+            observation.source,
         )
         return IncidentWorkflowResult(
             incident=incident,

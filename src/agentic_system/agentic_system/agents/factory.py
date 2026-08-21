@@ -52,6 +52,17 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
                     "agentspeak_bdi_max_concurrency": config.agentspeak_bdi_max_concurrency,
                 }
             )
+        else:
+            # Every specialist owns an independent AgentSpeak runtime instance.
+            # The common plan defines the BDI lifecycle; role-specific expertise
+            # remains in each agent's prompt and later ReAct execution.
+            common_kwargs.update(
+                {
+                    "agentspeak_specialist_asl": config.agentspeak_specialist_asl,
+                    "agentspeak_action_timeout_seconds": config.agentspeak_action_timeout_seconds,
+                    "agentspeak_bdi_max_concurrency": config.agentspeak_bdi_max_concurrency,
+                }
+            )
 
         agents.append(
             constructor(

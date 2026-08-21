@@ -54,18 +54,30 @@ class TechnicalLeadAgent(BaseAgent):
             try:
                 envelope = parse_spade_message(message)
             except (ValueError, TypeError) as exc:
-                LOGGER.warning("Technical Lead received invalid AGREE message: %s", exc)
+                LOGGER.warning("Technical Lead received invalid specialist response: %s", exc)
                 return
 
             self.agent.mark_message_received()
             self.agent.last_acknowledgement = envelope
+            # SPADE exposes message metadata through get_metadata(); _metadata is
+            # intentionally private and there is no public `metadata` property.
+            performative = str(message.get_metadata("performative") or "").upper()
 
             pending = self.agent._pending_acknowledgements.get(envelope.correlation_id)
             if pending is not None and not pending.done():
-                pending.set_result(envelope)
+                if performative == Performative.AGREE.value:
+                    pending.set_result(envelope)
+                else:
+                    error = str(envelope.payload.get("error") or envelope.type)
+                    pending.set_exception(
+                        RuntimeError(
+                            f"Specialist returned {performative or 'ERROR'}: {error}"
+                        )
+                    )
 
             LOGGER.info(
-                "Technical Lead received AGREE/%s from %s correlation_id=%s",
+                "Technical Lead received %s/%s from %s correlation_id=%s",
+                performative or "UNKNOWN",
                 envelope.type,
                 envelope.sender,
                 envelope.correlation_id,
@@ -97,8 +109,6 @@ class TechnicalLeadAgent(BaseAgent):
                 if not pending.accepted.done():
                     pending.accepted.set_result(None)
 
-                # Acceptance is complete. The agent remains healthy and waits for
-                # the persisted workflow to request the next stage.
                 self.agent.set_activity(
                     "WAITING",
                     incident_id=assignment.incident_id,
@@ -119,9 +129,6 @@ class TechnicalLeadAgent(BaseAgent):
                 )
                 if not pending.accepted.done():
                     pending.accepted.set_exception(exc)
-                # A bad work item must not terminate the long-lived SPADE
-                # behaviour. The failure belongs to the task/workflow, not to
-                # the Technical Lead process.
                 LOGGER.exception("Technical Lead incident assignment failed: %s", exc)
             finally:
                 self.agent._incident_inbox.task_done()
@@ -267,10 +274,15 @@ class TechnicalLeadAgent(BaseAgent):
 
     async def setup(self) -> None:
         await super().setup()
-        template = Template()
-        template.set_metadata("protocol", AGENTIC_PROTOCOL)
-        template.set_metadata("performative", Performative.AGREE.value)
-        self.add_behaviour(self.AcknowledgementBehaviour(), template)
+        for performative in (
+            Performative.AGREE,
+            Performative.REFUSE,
+            Performative.FAILURE,
+        ):
+            template = Template()
+            template.set_metadata("protocol", AGENTIC_PROTOCOL)
+            template.set_metadata("performative", performative.value)
+            self.add_behaviour(self.AcknowledgementBehaviour(), template)
         self.add_behaviour(self.IncidentAssignmentBehaviour())
         self.add_behaviour(self.TriageBehaviour())
 
@@ -308,7 +320,7 @@ class TechnicalLeadAgent(BaseAgent):
         available_agents: list[str],
         timeout: float = 120.0,
     ) -> TechnicalLeadTriageDecision:
-        """Perform BDI-led first analysis without diagnosing or delegating the incident."""
+        """Perform BDI-led first analysis without diagnosing the incident."""
 
         if self.lifecycle_state != "running":
             raise RuntimeError("Technical Lead is not running")
