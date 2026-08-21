@@ -90,6 +90,48 @@ class InvestigationTaskDispatchReceipt:
     bdi_investigation_intention: str
 
 
+@dataclass(frozen=True, slots=True)
+class InvestigationTaskResultReceipt:
+    """Structured ReAct outcome delivered by a specialist to the Technical Lead."""
+
+    task_id: str
+    incident_id: str
+    agent_role: str
+    agent_jid: str
+    correlation_id: str
+    succeeded: bool
+    summary: str = ""
+    confidence: float = 0.0
+    findings: tuple[str, ...] = ()
+    evidence: tuple[dict[str, Any], ...] = ()
+    hypotheses: tuple[str, ...] = ()
+    recommended_next_steps: tuple[str, ...] = ()
+    assistance_required: bool = False
+    assistance_domain: str | None = None
+    react_steps: int = 0
+    tools_used: tuple[str, ...] = ()
+    conversation_id: str | None = None
+    error: str | None = None
+    retryable: bool = True
+
+    def task_outcome(self) -> dict[str, Any]:
+        return {
+            "status": "completed" if self.succeeded else "failed",
+            "summary": self.summary,
+            "confidence": self.confidence,
+            "agent_role": self.agent_role,
+            "findings": list(self.findings),
+            "evidence": [dict(item) for item in self.evidence],
+            "hypotheses": list(self.hypotheses),
+            "recommended_next_steps": list(self.recommended_next_steps),
+            "assistance_required": self.assistance_required,
+            "assistance_domain": self.assistance_domain,
+            "react_steps": self.react_steps,
+            "tools_used": list(self.tools_used),
+            "conversation_id": self.conversation_id,
+        }
+
+
 class IncidentAssigneePort(Protocol):
     """Contract for assigning, triaging and dispatching persisted work."""
 
@@ -110,6 +152,12 @@ class IncidentAssigneePort(Protocol):
         incident: dict[str, Any],
         task: dict[str, Any],
     ) -> InvestigationTaskDispatchReceipt: ...
+
+    async def collect_investigation_result(
+        self,
+        incident: dict[str, Any],
+        task: dict[str, Any],
+    ) -> InvestigationTaskResultReceipt | None: ...
 
 
 class IncidentRepositoryPort(Protocol):
