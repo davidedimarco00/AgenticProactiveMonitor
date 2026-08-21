@@ -10,12 +10,7 @@ from spade.template import Template
 from spade_llm.mcp import MCPServerConfig
 from spade_llm.providers import LLMProvider
 
-from ..reasoning import (
-    AgentSpeakBDIRuntime,
-    BDIReviewAssessment,
-    BDITriageAssessment,
-    TechnicalLeadReviewBDIRuntime,
-)
+from ..reasoning import AgentSpeakBDIRuntime, BDIReviewAssessment, BDITriageAssessment
 from .base import BaseAgent
 from .commands import IncidentAssignment
 from .messages import (
@@ -46,14 +41,7 @@ class _ControlCommand:
 
 
 class TechnicalLeadAgent(BaseAgent):
-    """SPADE Technical Lead with one serialized BDI control loop.
-
-    XMPP acknowledgements stay on their own SPADE behaviour so communication can
-    progress while a triage or review is running. All local TL work (take charge,
-    triage and review) is intentionally serialized through one command queue,
-    matching the system-wide single-active-incident policy and avoiding three
-    parallel queues/behaviours for the same logical actor.
-    """
+    """SPADE Technical Lead with one serialized BDI control loop."""
 
     SYSTEM_PROMPT = TECHNICAL_LEAD_SYSTEM_PROMPT
 
@@ -74,7 +62,6 @@ class TechnicalLeadAgent(BaseAgent):
             self.agent.mark_message_received()
             self.agent.last_acknowledgement = envelope
             performative = str(message.get_metadata("performative") or "").upper()
-
             pending = self.agent._pending_acknowledgements.get(envelope.correlation_id)
             if pending is not None and not pending.done():
                 if performative == Performative.AGREE.value:
@@ -154,10 +141,6 @@ class TechnicalLeadAgent(BaseAgent):
             action_timeout_seconds=agentspeak_action_timeout_seconds,
             max_concurrency=agentspeak_bdi_max_concurrency,
         )
-        self._review_bdi_runtime = TechnicalLeadReviewBDIRuntime(
-            technical_lead_asl=agentspeak_technical_lead_asl,
-            action_timeout_seconds=agentspeak_action_timeout_seconds,
-        )
 
         self.incidents_received = 0
         self.triages_completed = 0
@@ -173,9 +156,6 @@ class TechnicalLeadAgent(BaseAgent):
 
     async def setup(self) -> None:
         await super().setup()
-
-        # XMPP acknowledgements must remain independently responsive while the
-        # serialized local control loop can spend time in LLM/BDI reasoning.
         for performative in (
             Performative.AGREE,
             Performative.REFUSE,
@@ -185,7 +165,6 @@ class TechnicalLeadAgent(BaseAgent):
             template.set_metadata("protocol", AGENTIC_PROTOCOL)
             template.set_metadata("performative", performative.value)
             self.add_behaviour(self.AcknowledgementBehaviour(), template)
-
         self.add_behaviour(self.ControlBehaviour())
 
     async def _execute_control(self, command: _ControlCommand) -> Any:
@@ -277,7 +256,6 @@ class TechnicalLeadAgent(BaseAgent):
             bdi_triage_intention=deliberation.triage_intention,
             bdi_intention=deliberation.selection_intention,
         )
-
         self.triages_completed += 1
         self.last_triage_decision = decision
         self.last_triage_error = None
@@ -338,7 +316,7 @@ class TechnicalLeadAgent(BaseAgent):
                 detail="reviewing_specialist_result",
             )
             try:
-                deliberation = await self._review_bdi_runtime.review_specialist_result(
+                deliberation = await self._bdi_runtime.review_specialist_result(
                     incident_id=incident_id or "",
                     review_callback=reason_for_review,
                 )
@@ -394,7 +372,6 @@ class TechnicalLeadAgent(BaseAgent):
             bdi_review_intention=deliberation.review_intention,
             bdi_decision_intention=deliberation.decision_intention,
         )
-
         self.reviews_completed += 1
         self.last_review_decision = decision
         self.last_review_error = None
@@ -521,7 +498,6 @@ class TechnicalLeadAgent(BaseAgent):
             receiver=receiver,
             payload=payload,
         )
-
         loop = asyncio.get_running_loop()
         future: asyncio.Future[AgentMessage] = loop.create_future()
         self._pending_acknowledgements[request.correlation_id] = future
@@ -533,9 +509,6 @@ class TechnicalLeadAgent(BaseAgent):
         return request, acknowledgement
 
     def _queued_control_count(self, kind: ControlKind) -> int:
-        # asyncio.Queue has no public filtered-count API. Reading the internal
-        # deque is safe here because this is synchronous diagnostic telemetry on
-        # the same event loop; no workflow decision depends on this value.
         return sum(
             1
             for command in tuple(self._control_inbox._queue)  # noqa: SLF001
@@ -569,8 +542,6 @@ class TechnicalLeadAgent(BaseAgent):
                 "bdi_decision_intention": self.last_review_decision.bdi_decision_intention,
             }
 
-        # Keep the old per-stage depth fields for dashboard/API compatibility,
-        # while exposing the new single control queue explicitly.
         snapshot.update(
             {
                 "control_inbox_depth": self._control_inbox.qsize(),
