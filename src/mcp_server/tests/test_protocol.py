@@ -15,6 +15,12 @@ EXPECTED_TOOLS = {
     "get_runtime_stats",
     "get_disk_usage",
     "get_network_connections",
+    "get_process_threads",
+    "inspect_process",
+    "get_process_tree",
+    "resolve_service_dns",
+    "test_tcp_connection",
+    "check_http_endpoint",
     "search_knowledge",
 }
 
