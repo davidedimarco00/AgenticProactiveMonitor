@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from spade_llm.context import ContextManager
 from spade_llm.providers.base_provider import BaseLLMProvider
 
@@ -24,6 +24,34 @@ _MAX_SUPPORT_ROUNDS = 1
 
 ReviewDecision = Literal["resolve", "operator_action_required", "request_support"]
 SupportDomain = Literal["system", "network", "application", "software"]
+CommandType = Literal["verification", "remediation"]
+
+
+class _RemediationStep(BaseModel):
+    """One operator-facing advisory action produced by the Technical Lead."""
+
+    title: str
+    target: str
+    command_type: CommandType
+    command: str
+    purpose: str
+    expected_result: str
+    what_to_verify: str
+
+    @field_validator(
+        "title",
+        "target",
+        "command",
+        "purpose",
+        "expected_result",
+        "what_to_verify",
+    )
+    @classmethod
+    def _not_empty(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("remediation step fields cannot be empty")
+        return normalized
 
 
 class _TechnicalLeadReviewOutput(BaseModel):
@@ -35,7 +63,7 @@ class _TechnicalLeadReviewOutput(BaseModel):
     root_cause: str
     rationale: str
     remediation_summary: str
-    remediation_steps: list[str]
+    remediation_steps: list[_RemediationStep]
     support_domain: SupportDomain | None = None
     support_reason: str | None = None
 
@@ -48,7 +76,7 @@ class TechnicalLeadReviewAssessment:
     root_cause: str
     rationale: str
     remediation_summary: str
-    remediation_steps: tuple[str, ...]
+    remediation_steps: tuple[dict[str, str], ...]
     support_domain: str | None = None
     support_reason: str | None = None
 
@@ -62,7 +90,7 @@ class TechnicalLeadReviewDecision:
     root_cause: str
     rationale: str
     remediation_summary: str
-    remediation_steps: tuple[str, ...]
+    remediation_steps: tuple[dict[str, str], ...]
     support_domain: str | None
     support_reason: str | None
     bdi_goal: str
@@ -71,34 +99,48 @@ class TechnicalLeadReviewDecision:
 
 
 class TechnicalLeadReviewReasoner:
-    """Gemma critic with a bounded, evidence-driven collaboration policy."""
+    """Gemma critic with bounded collaboration and operator-ready remediation."""
 
     SYSTEM_PROMPT = """You are the Technical Lead of an IT monitoring multi-agent team.
 Review only the supplied specialist evidence and choose the next workflow action.
 
 Decisions:
-- resolve: accept a confirmed evidence-backed diagnosis when no human corrective action is
-  immediately required.
-- operator_action_required: use when a confirmed diagnosis needs human corrective action OR
-  when the bounded autonomous investigation budget has been exhausted and a human diagnostic
-  review is required.
-- request_support: ask exactly one new specialist domain only when the current specialist
-  explicitly needs cross-domain diagnostic evidence and the support budget is still available.
+- resolve: accept a confirmed evidence-backed diagnosis when no immediate human corrective action
+  is required.
+- operator_action_required: use when a confirmed diagnosis needs human corrective action, when an
+  unresolved diagnosis no longer needs another specialist, or when the bounded support budget is
+  exhausted.
+- request_support: ask exactly one NEW specialist domain only when the current specialist explicitly
+  requests cross-domain diagnostic evidence and the support budget is still available.
 
-Important rules:
+Collaboration rules:
 - A confirmed diagnosis with assistance_required=false is terminal for autonomous diagnosis.
-  Do NOT request another specialist merely to re-check or validate an already confirmed result.
-- Collaboration is bounded to one cross-domain support round. Never walk through all available
-  specialists. If support_budget_exhausted=true, request_support is forbidden.
-- When support is allowed, support_domain must be one of eligible_support_domains. Prefer the
-  specialist_requested_domain when it is eligible.
-- Never invent evidence, measurements, commands, or a root cause.
-- Remediation is advisory only and must not contain unresolved diagnostic checks.
+- A probable/inconclusive diagnosis with assistance_required=false must NOT trigger another
+  specialist. Escalate to the operator if it cannot be resolved autonomously.
+- Collaboration is bounded to one cross-domain support round. Never walk through all specialists.
+- If support_budget_exhausted=true, request_support is forbidden.
+- When support is allowed, support_domain must be one of eligible_support_domains and should match
+  specialist_requested_domain when that request is valid.
 
-Return only one JSON object with: decision, confidence, diagnosis_summary, root_cause,
-rationale, remediation_summary, remediation_steps, support_domain, support_reason.
-confidence must be 0..1. support_domain and support_reason must be null unless the decision
-is request_support."""
+Remediation rules:
+- Never invent evidence, measurements or a root cause.
+- Remediation is advisory only; the agent must never execute it automatically.
+- For terminal decisions, provide concrete operator steps grounded in the diagnosis/evidence.
+- Commands must be suitable for the thesis Windows operator workstation: prefer PowerShell and
+  Docker CLI commands. To inspect or act inside a monitored Linux container, wrap the command with
+  `docker exec <container> ...` so it is executable from PowerShell.
+- Each remediation step must state target, command_type (verification or remediation), exact command,
+  purpose, expected_result, and what_to_verify.
+- Verification steps should be read-only. Remediation commands that change service state are only
+  recommendations for a human operator and must be clearly described as such.
+- Do not recommend a diagnostic check that the specialists have already executed unless it is a
+  post-remediation verification.
+- For request_support, remediation_steps may be empty because diagnosis is still in progress.
+
+Return only one JSON object with: decision, confidence, diagnosis_summary, root_cause, rationale,
+remediation_summary, remediation_steps, support_domain, support_reason. confidence is the confidence
+in the workflow/review decision, not diagnostic confidence. support_domain and support_reason must be
+null unless decision=request_support."""
 
     def __init__(
         self,
@@ -163,8 +205,7 @@ is request_support."""
                 )
                 if attempt > 1:
                     LOGGER.warning(
-                        "Technical Lead review reasoning recovered after retry: "
-                        "incident=%s attempt=%d/%d",
+                        "Technical Lead review reasoning recovered after retry: incident=%s attempt=%d/%d",
                         incident_id,
                         attempt,
                         self.max_attempts,
@@ -175,8 +216,7 @@ is request_support."""
                 if attempt >= self.max_attempts:
                     raise
                 LOGGER.warning(
-                    "Technical Lead review response rejected; retrying inference: "
-                    "incident=%s attempt=%d/%d error=%s",
+                    "Technical Lead review response rejected; retrying inference: incident=%s attempt=%d/%d error=%s",
                     incident_id,
                     attempt,
                     self.max_attempts,
@@ -209,8 +249,8 @@ is request_support."""
             )
         except Exception as structured_error:
             LOGGER.warning(
-                "Technical Lead structured output transport failed; falling back to "
-                "plain JSON generation: incident=%s attempt=%d/%d error=%s",
+                "Technical Lead structured output transport failed; falling back to plain JSON generation: "
+                "incident=%s attempt=%d/%d error=%s",
                 incident_id,
                 attempt,
                 self.max_attempts,
@@ -227,20 +267,20 @@ is request_support."""
     def _retry_instruction(error: RuntimeError, support_policy: dict[str, Any]) -> str:
         if support_policy["support_budget_exhausted"]:
             next_rule = (
-                "The support budget is exhausted. Do not request another specialist. "
-                "Choose resolve only for a confirmed diagnosis that needs no human action; "
-                "otherwise choose operator_action_required."
+                "The support budget is exhausted. Do not request another specialist. Choose resolve "
+                "only for a confirmed diagnosis that needs no human action; otherwise choose "
+                "operator_action_required."
             )
         else:
             next_rule = (
-                "If cross-domain evidence is still required, request support only from "
-                f"eligible_support_domains={support_policy['eligible_support_domains']} and "
-                f"prefer specialist_requested_domain="
-                f"{support_policy['specialist_requested_domain']!r}."
+                "Request support only if specialist_result.assistance_required=true. Otherwise do "
+                "not add a specialist. If support is required, use only "
+                f"eligible_support_domains={support_policy['eligible_support_domains']} and prefer "
+                f"specialist_requested_domain={support_policy['specialist_requested_domain']!r}."
             )
         return (
-            "The previous review decision violated the deterministic collaboration policy. "
-            f"Validation error: {error}. {next_rule} Return ONLY the required JSON object."
+            "The previous review decision violated the deterministic collaboration/remediation "
+            f"contract. Validation error: {error}. {next_rule} Return ONLY the required JSON object."
         )
 
     @classmethod
@@ -275,6 +315,30 @@ is request_support."""
         return cls._parse_payload(payload)
 
     @staticmethod
+    def _normalize_remediation_step(item: Any) -> dict[str, str] | None:
+        if isinstance(item, BaseModel):
+            item = item.model_dump()
+        if isinstance(item, str):
+            text = item.strip()
+            if not text:
+                return None
+            return {
+                "title": "Operator action",
+                "target": "affected monitored component",
+                "command_type": "verification",
+                "command": text,
+                "purpose": text,
+                "expected_result": "The command should provide the expected verification outcome.",
+                "what_to_verify": "Confirm the observed state matches the incident diagnosis.",
+            }
+        if not isinstance(item, dict):
+            return None
+        try:
+            return _RemediationStep.model_validate(item).model_dump()
+        except Exception as exc:
+            raise RuntimeError(f"Invalid structured remediation step: {exc}") from exc
+
+    @staticmethod
     def _parse_payload(payload: dict[str, Any]) -> TechnicalLeadReviewAssessment:
         decision = str(payload.get("decision") or "").strip().lower()
         if decision not in _ALLOWED_DECISIONS:
@@ -296,7 +360,17 @@ is request_support."""
         steps_raw = payload.get("remediation_steps") or []
         if not isinstance(steps_raw, list):
             raise RuntimeError("Technical Lead remediation_steps must be an array")
-        remediation_steps = tuple(str(item).strip() for item in steps_raw if str(item).strip())
+        normalized_steps = []
+        for item in steps_raw:
+            normalized = TechnicalLeadReviewReasoner._normalize_remediation_step(item)
+            if normalized is not None:
+                normalized_steps.append(normalized)
+        remediation_steps = tuple(normalized_steps)
+
+        if decision in {"resolve", "operator_action_required"} and not remediation_steps:
+            raise RuntimeError(
+                "Terminal Technical Lead decision requires at least one structured operator step"
+            )
 
         support_domain_raw = payload.get("support_domain")
         support_domain = (
@@ -390,28 +464,30 @@ is request_support."""
                 )
             if assessment.decision == "request_support":
                 raise RuntimeError(
-                    "Confirmed diagnosis without assistance must terminate autonomous "
-                    "investigation; additional specialist support is not allowed"
+                    "Confirmed diagnosis without assistance must terminate autonomous investigation"
                 )
             return
 
         if support_budget_exhausted:
             if assessment.decision != "operator_action_required":
                 raise RuntimeError(
-                    "Cross-domain support budget exhausted; unresolved autonomous diagnosis "
-                    "must escalate to operator review"
+                    "Cross-domain support budget exhausted; unresolved autonomous diagnosis must "
+                    "escalate to operator review"
                 )
             return
 
         if not assistance_required:
-            raise RuntimeError(
-                f"{diagnosis_status} diagnosis must explicitly identify a cross-domain "
-                "assistance need before another specialist can be added"
-            )
+            if assessment.decision != "operator_action_required":
+                raise RuntimeError(
+                    f"{diagnosis_status} diagnosis does not request peer assistance; do not add a "
+                    "specialist. Escalate unresolved work to the operator."
+                )
+            return
+
         if assessment.decision != "request_support":
             raise RuntimeError(
-                f"{diagnosis_status} diagnosis with explicit assistance requires one "
-                "bounded support round"
+                f"{diagnosis_status} diagnosis explicitly requests cross-domain evidence; authorize "
+                "the one bounded support round while budget is available"
             )
 
         support_domain = str(assessment.support_domain or "").strip().lower()
@@ -419,11 +495,11 @@ is request_support."""
         requested_domain = support_policy["specialist_requested_domain"]
         if support_domain not in eligible_domains:
             raise RuntimeError(
-                f"support_domain={support_domain!r} is not eligible; "
-                f"eligible support domains are {eligible_domains}"
+                f"support_domain={support_domain!r} is not eligible; eligible support domains are "
+                f"{eligible_domains}"
             )
         if requested_domain and requested_domain in eligible_domains and support_domain != requested_domain:
             raise RuntimeError(
-                f"Specialist requested support_domain={requested_domain!r}; TL cannot redirect "
-                f"to {support_domain!r} without a new evidence-backed reason"
+                f"Specialist requested support_domain={requested_domain!r}; TL cannot redirect to "
+                f"{support_domain!r} without a new evidence-backed reason"
             )
