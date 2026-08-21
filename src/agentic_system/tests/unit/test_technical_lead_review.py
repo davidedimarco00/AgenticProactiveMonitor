@@ -5,13 +5,13 @@ from agentic_system.agents.review import TechnicalLeadReviewReasoner
 from agentic_system.reasoning import BDIReviewAssessment, TechnicalLeadReviewBDIRuntime
 
 
-def _technical_lead_review_plan_path() -> Path:
+def _technical_lead_plan_path() -> Path:
     return (
         Path(__file__).parents[2]
         / "agentic_system"
         / "reasoning"
         / "plans"
-        / "technical_lead_review.asl"
+        / "technical_lead.asl"
     )
 
 
@@ -81,7 +81,7 @@ def test_review_reasoner_retries_empty_response_before_escalating() -> None:
 
 def test_agentspeak_review_commits_critic_decision() -> None:
     runtime = TechnicalLeadReviewBDIRuntime(
-        technical_lead_asl=str(_technical_lead_review_plan_path()),
+        technical_lead_asl=str(_technical_lead_plan_path()),
         action_timeout_seconds=5.0,
     )
 
