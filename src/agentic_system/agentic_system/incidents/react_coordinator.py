@@ -94,7 +94,18 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 if task_state == AgentTaskState.RUNNING:
                     collector = getattr(self.assignee, "collect_investigation_result", None)
                     if collector is not None:
-                        receipt = await collector(incident, task)
+                        try:
+                            receipt = await collector(incident, task)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            await self._persist_result_collection_failure(
+                                incident,
+                                task,
+                                error=exc,
+                            )
+                            continue
+
                         if receipt is not None:
                             if receipt.succeeded:
                                 await self._persist_successful_react_result(
@@ -227,4 +238,52 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             task_id,
             failed.get("state"),
             receipt.error,
+        )
+
+    async def _persist_result_collection_failure(
+        self,
+        incident: dict[str, Any],
+        task: dict[str, Any],
+        *,
+        error: Exception,
+    ) -> None:
+        """Turn malformed/invalid specialist result messages into task retries."""
+
+        task_id = str(task["task_id"])
+        incident_id = str(incident["incident_id"])
+        failed = await self.task_workflow.mark_execution_failed(
+            task_id,
+            error_type="invalid_specialist_result",
+            message=str(error),
+            retryable=True,
+        )
+        await self.repository.update_incident(
+            incident_id,
+            {
+                "agentic": {
+                    "current_agent": "technical_lead",
+                    "active_agents": ["technical_lead"],
+                    "task_state": failed.get("state"),
+                }
+            },
+        )
+        await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": "SPECIALIST_RESULT_INVALID",
+                "agent_role": str(task.get("assigned_to") or "specialist"),
+                "action": "reject_invalid_specialist_result",
+                "reason": str(error),
+                "status": incident.get("status", "TRIAGED"),
+                "task_id": task_id,
+                "outcome": {"task_state": failed.get("state"), "retryable": True},
+            },
+        )
+        self.react_results_failed_count += 1
+        LOGGER.warning(
+            "Invalid specialist result converted into task retry: incident=%s task=%s state=%s error=%s",
+            incident_id,
+            task_id,
+            failed.get("state"),
+            error,
         )
