@@ -76,8 +76,16 @@ confidence must be 0..1. remediation_steps must be an array of concise strings.
 support_domain must be null unless decision=request_support, otherwise one of system,
 network, application, software. support_reason must be null unless support is requested."""
 
-    def __init__(self, provider: BaseLLMProvider) -> None:
+    def __init__(
+        self,
+        provider: BaseLLMProvider,
+        *,
+        max_attempts: int = _MAX_REVIEW_ATTEMPTS,
+    ) -> None:
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be greater than zero")
         self.provider = provider
+        self.max_attempts = max_attempts
 
     async def assess(
         self,
@@ -114,7 +122,7 @@ network, application, software. support_reason must be null unless support is re
         )
 
         last_error: RuntimeError | None = None
-        for attempt in range(1, _MAX_REVIEW_ATTEMPTS + 1):
+        for attempt in range(1, self.max_attempts + 1):
             response = await self.provider.get_llm_response(
                 context,
                 tools=None,
@@ -125,14 +133,14 @@ network, application, software. support_reason must be null unless support is re
                 assessment = self._parse_response(text)
             except RuntimeError as exc:
                 last_error = exc
-                if attempt >= _MAX_REVIEW_ATTEMPTS:
+                if attempt >= self.max_attempts:
                     raise
                 LOGGER.warning(
                     "Technical Lead review response rejected; retrying inference: "
                     "incident=%s attempt=%d/%d error=%s",
                     incident_id,
                     attempt,
-                    _MAX_REVIEW_ATTEMPTS,
+                    self.max_attempts,
                     exc,
                 )
                 context.add_message_dict(
@@ -154,7 +162,7 @@ network, application, software. support_reason must be null unless support is re
                     "incident=%s attempt=%d/%d",
                     incident_id,
                     attempt,
-                    _MAX_REVIEW_ATTEMPTS,
+                    self.max_attempts,
                 )
             return assessment
 
