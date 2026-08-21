@@ -184,9 +184,6 @@ class FakeAssignee:
         }
         self.agents: list[Any] = [self.technical_lead, *self.specialists.values()]
 
-    def _technical_lead(self):
-        return self.technical_lead
-
     def _specialist_by_role(self, role):
         return self.specialists[role]
 
@@ -221,7 +218,7 @@ class FakeAssignee:
             correlation_id="dispatch-support-001",
             bdi_goal="handle_investigation_task",
             bdi_acceptance_intention="accept_task",
-            bdi_investigation_intention="investigate_incident",
+            bdi_investigation_intention="investigate_with_peer",
         )
 
 
@@ -289,6 +286,11 @@ def test_successful_react_result_authorizes_direct_peer_support() -> None:
     assert repository.incident["status"] == "UNDER_ANALYSIS"
     assert repository.incident["agentic"]["investigation_task_id"] == support_task["task_id"]
     assert repository.incident["agentic"]["current_agent"] == "application_engineer"
+    assert repository.incident["agentic"]["peer_collaboration_state"] == "ACTIVE"
+    assert repository.incident["agentic"]["collaboration_roles"] == [
+        "system_engineer",
+        "application_engineer",
+    ]
     assignee = coordinator.assignee
     primary = assignee.specialists["system_engineer"]
     assert len(primary.shared_contexts) == 1
@@ -313,6 +315,8 @@ def test_successful_react_result_can_resolve_incident_after_tl_review() -> None:
     assert repository.task["state"] == "COMPLETED"
     assert repository.incident["status"] == "RESOLVED"
     assert repository.incident["agentic"]["active_agents"] == []
+    assert repository.incident["agentic"]["review_decision"] == "resolve"
+    assert repository.incident["agentic"]["support_requested"] is False
     assert repository.incident["diagnosis"]["confidence"] == 0.9
     assert repository.incident["diagnosis"]["evidence"] == [
         "CPU remained above the expected range."
