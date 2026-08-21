@@ -51,21 +51,21 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     assert config.max_llm_concurrency == 1
     assert config.react_max_steps == 10
     assert config.react_tool_timeout_seconds == 30.0
-    assert config.enable_test_anomaly_injection is False
+    assert config.enable_test_anomaly_injection is True
     assert config.enable_opensearch_anomaly_watcher is True
 
 
-def test_runtime_config_enables_explicit_test_anomaly_injection(
+def test_runtime_config_can_disable_test_anomaly_injection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_CONFIG_PATH", str(_config_path()))
-    monkeypatch.setenv("ENABLE_TEST_ANOMALY_INJECTION", "1")
+    monkeypatch.setenv("ENABLE_TEST_ANOMALY_INJECTION", "0")
     monkeypatch.setenv("ENABLE_OPENSEARCH_ANOMALY_WATCHER", "0")
     _configure_agent_passwords(monkeypatch)
 
     config = load_runtime_config()
 
-    assert config.enable_test_anomaly_injection is True
+    assert config.enable_test_anomaly_injection is False
     assert config.enable_opensearch_anomaly_watcher is False
 
 
