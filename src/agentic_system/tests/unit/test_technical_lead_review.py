@@ -29,6 +29,41 @@ def _valid_review_json() -> str:
     }"""
 
 
+def _review_payload() -> dict:
+    return {
+        "decision": "resolve",
+        "confidence": 0.91,
+        "diagnosis_summary": "The reported CPU anomaly is not currently reproduced.",
+        "root_cause": "The evidence is consistent with a transient CPU spike.",
+        "rationale": "Current runtime and metric evidence is healthy.",
+        "remediation_summary": "No immediate corrective action is required.",
+        "remediation_steps": ["Continue monitoring the service."],
+        "support_domain": None,
+        "support_reason": None,
+    }
+
+
+def _incident() -> dict:
+    return {
+        "incident_id": "INC-REVIEW-RETRY",
+        "status": "UNDER_ANALYSIS",
+        "severity": "MEDIUM",
+        "entity": "processing-service",
+        "anomaly": {"detector_id": "cpu-detector"},
+        "agentic": {"primary_investigator": "system_engineer"},
+    }
+
+
+def _specialist_result() -> dict:
+    return {
+        "status": "completed",
+        "summary": "Current CPU usage is normal after the reported anomaly.",
+        "confidence": 0.9,
+        "findings": ["Current CPU usage is within the expected range."],
+        "evidence": [],
+    }
+
+
 def test_review_parser_accepts_resolve_decision() -> None:
     result = TechnicalLeadReviewReasoner._parse_response(
         f"```json\n{_valid_review_json()}\n```"
@@ -44,39 +79,63 @@ def test_review_reasoner_retries_empty_response_before_escalating() -> None:
     class FakeProvider:
         def __init__(self) -> None:
             self.calls = 0
+            self.output_schemas = []
 
-        async def get_llm_response(self, context, tools=None, conversation_id=None):
+        async def get_llm_response(
+            self,
+            context,
+            tools=None,
+            conversation_id=None,
+            output_schema=None,
+        ):
             self.calls += 1
+            self.output_schemas.append(output_schema)
             if self.calls == 1:
-                return {"text": ""}
-            return {"text": _valid_review_json()}
+                return {"text": "", "structured": None}
+            return {"text": _valid_review_json(), "structured": None}
 
     provider = FakeProvider()
     reasoner = TechnicalLeadReviewReasoner(provider, max_attempts=3)  # type: ignore[arg-type]
 
     result = asyncio.run(
         reasoner.assess(
-            incident={
-                "incident_id": "INC-REVIEW-RETRY",
-                "status": "UNDER_ANALYSIS",
-                "severity": "MEDIUM",
-                "entity": "processing-service",
-                "anomaly": {"detector_id": "cpu-detector"},
-                "agentic": {"primary_investigator": "system_engineer"},
-            },
-            specialist_result={
-                "status": "completed",
-                "summary": "Current CPU usage is normal after the reported anomaly.",
-                "confidence": 0.9,
-                "findings": ["Current CPU usage is within the expected range."],
-                "evidence": [],
-            },
+            incident=_incident(),
+            specialist_result=_specialist_result(),
         )
     )
 
     assert provider.calls == 2
+    assert all(schema is not None for schema in provider.output_schemas)
     assert result.decision == "resolve"
     assert result.confidence == 0.91
+
+
+def test_review_reasoner_prefers_structured_provider_output() -> None:
+    class FakeProvider:
+        async def get_llm_response(
+            self,
+            context,
+            tools=None,
+            conversation_id=None,
+            output_schema=None,
+        ):
+            assert output_schema is not None
+            return {
+                "text": None,
+                "structured": output_schema(**_review_payload()),
+            }
+
+    reasoner = TechnicalLeadReviewReasoner(FakeProvider())  # type: ignore[arg-type]
+    result = asyncio.run(
+        reasoner.assess(
+            incident=_incident(),
+            specialist_result=_specialist_result(),
+        )
+    )
+
+    assert result.decision == "resolve"
+    assert result.confidence == 0.91
+    assert result.remediation_steps == ("Continue monitoring the service.",)
 
 
 def test_agentspeak_review_commits_critic_decision() -> None:
