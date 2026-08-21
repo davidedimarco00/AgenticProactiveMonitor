@@ -64,37 +64,50 @@ class TechnicalLeadReviewDecision:
 
 
 class TechnicalLeadReviewReasoner:
-    """Gemma-only critic that reviews a completed specialist ReAct result."""
+    """Gemma-only critic that reviews a completed specialist diagnostic result."""
 
     SYSTEM_PROMPT = """You are the Technical Lead of an IT monitoring multi-agent team.
 A specialist has completed an evidence-gathering ReAct investigation. Critically review
 only the supplied evidence and decide what the autonomous workflow should do next.
 
+The specialist result now contains an explicit diagnostic closure:
+- diagnosis_status: confirmed, probable, or inconclusive
+- root_cause: the specialist's evidence-backed causal explanation, or null
+- causal_chain: cause -> mechanism -> observed anomaly
+- recommended_next_steps: remaining DIAGNOSTIC checks, not remediation
+
 Choose exactly one decision:
-- resolve: evidence is sufficient and no immediate human corrective action is required.
-  Use this for transient/non-reproduced anomalies or a diagnosis that is already safe to
-  close without executing a change.
-- operator_action_required: evidence is sufficient for a diagnosis, but remediation needs
-  an operator or a change that this monitoring system must not execute autonomously.
-- request_support: evidence is insufficient or another technical domain must investigate
-  before a diagnosis can be accepted.
+- resolve: use only when diagnosis_status=confirmed and the evidence supports a root cause,
+  while no immediate human corrective action is required.
+- operator_action_required: use only when diagnosis_status=confirmed, the root cause is
+  sufficiently supported, and the required corrective change must be performed by a human.
+- request_support: use when the diagnosis is probable/inconclusive, when remaining diagnostic
+  steps require another technical domain, or when another specialist must validate the causal
+  explanation before the diagnosis can be accepted.
+
+Do NOT escalate to the operator merely because more investigation is needed. Investigation
+belongs to the agents. If the specialist still recommends actions such as inspect logs,
+query metrics, examine connections, validate service behaviour, or collect another domain's
+evidence, select request_support rather than presenting those diagnostic actions as remediation.
 
 The specialist result may contain `specialists_already_involved`. When requesting support,
 prefer a technical domain whose specialist has not already participated in this incident.
-The support specialist will receive the current specialist's evidence directly over XMPP
-and will correlate it with its own MCP/RAG observations. Do not use request_support merely
-to repeat the same investigation with a specialist that has already participated.
+If the specialist explicitly sets assistance_required=true and provides assistance_domain,
+treat that as strong evidence that another domain is needed, while still checking whether
+that domain has already participated. The support specialist will receive the current
+specialist's evidence directly over XMPP and correlate it with its own MCP/RAG observations.
 
 Do not invent evidence, commands, measurements, or a root cause that the specialist did
-not support. Keep remediation advisory only. Return only one JSON object with fields:
-decision, confidence, diagnosis_summary, root_cause, rationale, remediation_summary,
-remediation_steps, support_domain, support_reason.
+not support. Keep remediation advisory only. Remediation must describe what should be done
+AFTER the diagnosis; do not copy unresolved diagnostic checks into remediation_steps.
+Return only one JSON object with fields: decision, confidence, diagnosis_summary,
+root_cause, rationale, remediation_summary, remediation_steps, support_domain,
+support_reason.
 
 The `decision` field MUST be exactly one of: resolve, operator_action_required,
-request_support. Do not place rationale, monitoring advice or remediation text in decision.
-confidence must be 0..1. remediation_steps must be an array of concise strings.
-support_domain must be null unless decision=request_support, otherwise one of system,
-network, application, software. support_reason must be null unless support is requested."""
+request_support. confidence must be 0..1. remediation_steps must be an array of concise
+strings. support_domain must be null unless decision=request_support, otherwise one of
+system, network, application, software. support_reason must be null unless support is requested."""
 
     def __init__(
         self,
@@ -168,6 +181,10 @@ network, application, software. support_reason must be null unless support is re
 
             try:
                 assessment = self._assessment_from_response(response)
+                self._validate_decision_against_specialist_result(
+                    assessment,
+                    specialist_result=specialist_result,
+                )
             except RuntimeError as exc:
                 last_error = exc
                 if attempt >= self.max_attempts:
@@ -184,12 +201,12 @@ network, application, software. support_reason must be null unless support is re
                     {
                         "role": "user",
                         "content": (
-                            "The previous review response was empty or invalid. Return ONLY "
-                            "the required JSON object with every required field present. "
-                            "The decision field MUST be exactly resolve, "
-                            "operator_action_required, or request_support. Do not put advice "
-                            "or explanation in decision. Do not call tools and do not add "
-                            "prose outside the JSON."
+                            "The previous review decision was invalid for the diagnostic state. "
+                            f"Validation error: {exc}. Return ONLY the required JSON object. "
+                            "Terminal decisions require diagnosis_status=confirmed. If the "
+                            "specialist diagnosis is probable or inconclusive, request support "
+                            "from a useful specialist domain rather than assigning diagnostic "
+                            "work to the human operator."
                         ),
                     },
                     conversation_id,
@@ -304,3 +321,44 @@ network, application, software. support_reason must be null unless support is re
             support_domain=support_domain,
             support_reason=support_reason,
         )
+
+    @staticmethod
+    def _validate_decision_against_specialist_result(
+        assessment: TechnicalLeadReviewAssessment,
+        *,
+        specialist_result: dict[str, Any],
+    ) -> None:
+        diagnosis_status = str(
+            specialist_result.get("diagnosis_status") or "inconclusive"
+        ).strip().lower()
+        root_cause = str(specialist_result.get("root_cause") or "").strip()
+        causal_chain = specialist_result.get("causal_chain") or []
+        assistance_required = bool(specialist_result.get("assistance_required", False))
+
+        if diagnosis_status not in {"confirmed", "probable", "inconclusive"}:
+            raise RuntimeError(
+                f"Specialist returned unsupported diagnosis_status: {diagnosis_status!r}"
+            )
+
+        if diagnosis_status != "confirmed" and assessment.decision != "request_support":
+            raise RuntimeError(
+                f"{diagnosis_status} specialist diagnosis requires request_support; "
+                f"got {assessment.decision}"
+            )
+
+        if assessment.decision in {"resolve", "operator_action_required"}:
+            if diagnosis_status != "confirmed":
+                raise RuntimeError("Terminal TL decision requires confirmed diagnosis")
+            if not root_cause or not isinstance(causal_chain, list) or not causal_chain:
+                raise RuntimeError(
+                    "Terminal TL decision requires specialist root_cause and causal_chain"
+                )
+            if assistance_required:
+                raise RuntimeError(
+                    "Terminal TL decision is inconsistent with specialist assistance request"
+                )
+
+        if assistance_required and assessment.decision != "request_support":
+            raise RuntimeError(
+                "Specialist requested diagnostic assistance, so TL must request support"
+            )
