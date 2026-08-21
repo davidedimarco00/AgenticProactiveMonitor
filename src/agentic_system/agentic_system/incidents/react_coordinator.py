@@ -92,24 +92,23 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     continue
 
                 if task_state == AgentTaskState.RUNNING:
-                    receipt = await self.assignee.collect_investigation_result(
-                        incident,
-                        task,
-                    )
-                    if receipt is not None:
-                        if receipt.succeeded:
-                            await self._persist_successful_react_result(
-                                incident,
-                                task,
-                                receipt,
-                            )
-                        else:
-                            await self._persist_failed_react_result(
-                                incident,
-                                task,
-                                receipt,
-                            )
-                        continue
+                    collector = getattr(self.assignee, "collect_investigation_result", None)
+                    if collector is not None:
+                        receipt = await collector(incident, task)
+                        if receipt is not None:
+                            if receipt.succeeded:
+                                await self._persist_successful_react_result(
+                                    incident,
+                                    task,
+                                    receipt,
+                                )
+                            else:
+                                await self._persist_failed_react_result(
+                                    incident,
+                                    task,
+                                    receipt,
+                                )
+                            continue
 
             await asyncio.sleep(poll_interval_seconds)
 
