@@ -84,6 +84,26 @@ def test_first_explicit_cross_domain_support_is_allowed() -> None:
     )
 
 
+def test_uncertain_result_without_assistance_does_not_force_another_specialist() -> None:
+    specialist_result = _result(
+        "inconclusive",
+        assistance_required=False,
+        assistance_domain=None,
+        involved=["system_engineer"],
+    )
+
+    TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
+        _assessment("operator_action_required"),
+        specialist_result=specialist_result,
+    )
+
+    with pytest.raises(RuntimeError, match="do not add a specialist"):
+        TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
+            _assessment("request_support", support_domain="network"),
+            specialist_result=specialist_result,
+        )
+
+
 def test_second_cross_domain_support_is_rejected_and_operator_review_is_terminal() -> None:
     specialist_result = _result(
         "probable",
