@@ -34,11 +34,17 @@
     primary_investigator_selected: "INVESTIGATOR SELECTED",
     specialist_bdi_deliberation: "BDI DELIBERATION",
     investigation_intention_committed: "INVESTIGATING",
+    collaborative_investigation_intention_committed: "COLLAB BDI",
     react_investigation: "REACT INVESTIGATION",
+    peer_collaborative_react_investigation: "COLLAB REACT",
     awaiting_technical_lead_review: "AWAITING TL REVIEW",
+    peer_result_shared_awaiting_tl_review: "PEER RESULT SHARED",
+    peer_context_received: "PEER CONTEXT RECEIVED",
+    peer_result_received: "PEER RESULT RECEIVED",
     reviewing_specialist_result: "REVIEWING RESULT",
     review_decision_committed: "REVIEW DECIDED",
     support_coordination_pending: "SUPPORT PENDING",
+    peer_collaboration_in_progress: "COLLABORATING",
     review_failed: "REVIEW FAILED",
     react_investigation_failed: "REACT FAILED",
     task_acceptance_failed: "TASK REJECTED",
@@ -83,6 +89,7 @@
   const activityLabel = (activity, detail) => {
     const normalized = normalizeActivity(activity);
     const key = String(detail || "").trim().toLowerCase();
+    if (key.startsWith("collaborating_with_")) return "COLLABORATING";
     return ACTIVITY_DETAIL_LABELS[key] || normalized;
   };
 
@@ -135,6 +142,7 @@
     const status = String(incident.status || "").trim().toUpperCase();
     const agentic = incident.agentic || {};
     if (status === "UNDER_ANALYSIS") {
+      if (String(agentic.peer_collaboration_state || "").toUpperCase() === "ACTIVE") return "COLLABORATING";
       if (agentic.support_requested) return "SUPPORT PENDING";
       if (agentic.review_state === "PENDING") return "TL REVIEW";
       return "UNDER ANALYSIS";
