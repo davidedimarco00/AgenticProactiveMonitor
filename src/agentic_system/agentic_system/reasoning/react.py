@@ -4,8 +4,9 @@ import asyncio
 from dataclasses import dataclass
 import json
 import logging
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import BaseModel, Field
 from spade_llm.context import ContextManager, create_assistant_tool_call_message
 from spade_llm.providers.base_provider import BaseLLMProvider
 from spade_llm.tools import LLMTool
@@ -16,6 +17,23 @@ _DEFAULT_MAX_OBSERVATION_CHARS = 6000
 _DEFAULT_EVIDENCE_EXCERPT_CHARS = 1200
 _DEFAULT_FINALIZATION_MAX_ATTEMPTS = 3
 _ALLOWED_ASSISTANCE_DOMAINS = {"system", "network", "application", "software"}
+_ALLOWED_DIAGNOSIS_STATUSES = {"confirmed", "probable", "inconclusive"}
+
+DiagnosisStatus = Literal["confirmed", "probable", "inconclusive"]
+AssistanceDomain = Literal["system", "network", "application", "software"]
+
+
+class _SpecialistFinalOutput(BaseModel):
+    summary: str
+    diagnosis_status: DiagnosisStatus
+    root_cause: str | None = None
+    causal_chain: list[str]
+    confidence: float = Field(ge=0.0, le=1.0)
+    findings: list[str]
+    hypotheses: list[str]
+    recommended_next_steps: list[str]
+    assistance_required: bool
+    assistance_domain: AssistanceDomain | None = None
 
 
 class ReActInvestigationError(RuntimeError):
@@ -46,6 +64,9 @@ class ReActInvestigationResult:
     incident_id: str
     agent_role: str
     summary: str
+    diagnosis_status: str
+    root_cause: str | None
+    causal_chain: tuple[str, ...]
     confidence: float
     findings: tuple[str, ...]
     evidence: tuple[dict[str, Any], ...]
@@ -64,6 +85,9 @@ class ReActInvestigationResult:
             "agent_role": self.agent_role,
             "status": "completed",
             "summary": self.summary,
+            "diagnosis_status": self.diagnosis_status,
+            "root_cause": self.root_cause,
+            "causal_chain": list(self.causal_chain),
             "confidence": self.confidence,
             "findings": list(self.findings),
             "evidence": [dict(item) for item in self.evidence],
@@ -78,31 +102,50 @@ class ReActInvestigationResult:
 
 
 class SpecialistReActExecutor:
-    """Execute one specialist investigation as a bounded ReAct loop.
+    """Execute one specialist investigation as a bounded diagnostic ReAct loop."""
 
-    The executor deliberately reuses SPADE-LLM primitives instead of introducing
-    another tool framework: the agent's ContextManager, provider and discovered
-    LLMTool instances are used directly. The project owns only the durable-task
-    boundary, the maximum number of operational steps and the structured result
-    contract needed by the Technical Lead.
-    """
+    DIAGNOSTIC_READINESS_INSTRUCTION = """
+Before ending the investigation, perform a diagnostic closure check.
+
+Do NOT stop merely because you collected some evidence. Ask whether the observed anomaly
+has a causal explanation. If a diagnostic action in your own domain can materially test
+the leading hypothesis, call the appropriate MCP/RAG tool now. In particular, execute
+log, metric, runtime, connection or knowledge-base checks yourself instead of listing them
+as future recommendations when the required tool is available.
+
+You may stop requesting tools only when one of these is true:
+1. the root cause is supported strongly enough to mark the diagnosis `confirmed`; or
+2. the remaining uncertainty requires evidence from another specialist domain, in which
+   case the final result must be `probable` or `inconclusive` and request assistance.
+
+If you still need evidence that you can collect with the available tools, continue ReAct.
+""".strip()
 
     FINALIZATION_INSTRUCTION = """
-Stop requesting tools. Produce the investigation result as ONE JSON object and no
-other text. Base it only on the evidence already observed in this conversation.
-Do not invent metrics, logs, commands, tool results or root causes.
+Stop requesting tools. Produce the investigation result as ONE JSON object and no other
+text. Base it only on the evidence already observed in this conversation. Do not invent
+metrics, logs, commands, tool results or root causes.
 
 Required JSON fields:
 - summary: short technical summary
+- diagnosis_status: exactly confirmed, probable, or inconclusive
+- root_cause: concise evidence-backed causal explanation, or null if inconclusive
+- causal_chain: array connecting cause -> mechanism -> observed anomaly; use only observed
+  or explicitly supported facts
 - confidence: number from 0 to 1
 - findings: array of concise evidence-backed findings
 - hypotheses: array of plausible hypotheses, clearly separated from findings
-- recommended_next_steps: array of diagnostic next steps; do not perform remediation
+- recommended_next_steps: only remaining diagnostic verification steps; do not perform
+  remediation and do not list checks that you could already have executed with available tools
 - assistance_required: boolean
 - assistance_domain: one of system, network, application, software, or null
 
-If evidence is insufficient, say so explicitly, lower confidence, and request the
-most appropriate assistance domain when useful.
+Use `confirmed` only when the observed evidence supports a root cause and causal chain.
+A confirmed diagnosis must include a non-empty root_cause and causal_chain and must not
+request another specialist. If the root cause is only probable or still inconclusive,
+do not pretend the task is diagnostically complete: set assistance_required=true and
+select the most appropriate other specialist domain. The Technical Lead will coordinate
+that peer collaboration.
 """.strip()
 
     def __init__(
@@ -111,7 +154,7 @@ most appropriate assistance domain when useful.
         provider: BaseLLMProvider,
         context: ContextManager,
         tools: list[LLMTool],
-        max_steps: int = 6,
+        max_steps: int = 10,
         tool_timeout_seconds: float = 30.0,
         max_observation_chars: int = _DEFAULT_MAX_OBSERVATION_CHARS,
         finalization_max_attempts: int = _DEFAULT_FINALIZATION_MAX_ATTEMPTS,
@@ -125,9 +168,6 @@ most appropriate assistance domain when useful.
         if finalization_max_attempts <= 0:
             raise ValueError("finalization_max_attempts must be greater than zero")
 
-        # Interaction-memory helpers are not live diagnostic evidence. The
-        # specialist keeps its normal SPADE-LLM memory, while the operational
-        # ReAct loop exposes MCP/RAG tools only.
         operational_tools = [
             tool for tool in tools if tool.name != "remember_interaction_info"
         ]
@@ -178,6 +218,7 @@ most appropriate assistance domain when useful.
         tools_used: list[str] = []
         tool_attempts = 0
         steps_executed = 0
+        diagnostic_stop_challenged = False
 
         for step in range(1, self.max_steps + 1):
             steps_executed = step
@@ -204,8 +245,20 @@ most appropriate assistance domain when useful.
                         conversation_id,
                     )
                     continue
+
+                if not diagnostic_stop_challenged and step < self.max_steps:
+                    diagnostic_stop_challenged = True
+                    self.context.add_message_dict(
+                        {
+                            "role": "user",
+                            "content": self.DIAGNOSTIC_READINESS_INSTRUCTION,
+                        },
+                        conversation_id,
+                    )
+                    continue
                 break
 
+            diagnostic_stop_challenged = False
             self.context.add_message_dict(
                 create_assistant_tool_call_message(tool_calls),
                 conversation_id,
@@ -299,6 +352,9 @@ most appropriate assistance domain when useful.
             incident_id=incident_id,
             agent_role=agent_role,
             summary=str(payload["summary"]),
+            diagnosis_status=str(payload["diagnosis_status"]),
+            root_cause=payload["root_cause"],
+            causal_chain=tuple(payload["causal_chain"]),
             confidence=float(payload["confidence"]),
             findings=tuple(payload["findings"]),
             evidence=tuple(item.to_dict() for item in evidence),
@@ -316,18 +372,31 @@ most appropriate assistance domain when useful.
 
         last_error: ReActInvestigationError | None = None
         for attempt in range(1, self.finalization_max_attempts + 1):
-            response = await self.provider.get_llm_response(
-                self.context,
-                tools=None,
-                conversation_id=conversation_id,
-            )
-            text = str(response.get("text") or "").strip()
             try:
-                if not text:
-                    raise ReActInvestigationError(
-                        "Reasoning model returned an empty final result"
-                    )
-                payload = self._parse_final_payload(text)
+                response = await self.provider.get_llm_response(
+                    self.context,
+                    tools=None,
+                    conversation_id=conversation_id,
+                    output_schema=_SpecialistFinalOutput,
+                )
+            except Exception as structured_error:
+                LOGGER.warning(
+                    "Specialist structured finalization transport failed; falling back to "
+                    "plain JSON generation: conversation=%s attempt=%d/%d error=%s",
+                    conversation_id,
+                    attempt,
+                    self.finalization_max_attempts,
+                    structured_error,
+                )
+                response = await self.provider.get_llm_response(
+                    self.context,
+                    tools=None,
+                    conversation_id=conversation_id,
+                    output_schema=None,
+                )
+
+            try:
+                payload = self._payload_from_response(response)
                 if attempt > 1:
                     LOGGER.warning(
                         "Specialist ReAct finalization recovered without repeating tool work: "
@@ -357,7 +426,8 @@ most appropriate assistance domain when useful.
                             f"Validation error: {exc}. Do NOT call any tools and do NOT "
                             "repeat the investigation. Use the evidence already present in "
                             "this conversation and return ONLY the required JSON object with "
-                            "all required fields."
+                            "all required fields. A non-confirmed diagnosis MUST request an "
+                            "assistance domain."
                         ),
                     },
                     conversation_id,
@@ -369,31 +439,66 @@ most appropriate assistance domain when useful.
         )
 
     @classmethod
-    def _parse_final_payload(cls, text: str) -> dict[str, Any]:
-        candidate = text.strip()
-        if candidate.startswith("```"):
-            lines = candidate.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            candidate = "\n".join(lines).strip()
+    def _payload_from_response(cls, response: dict[str, Any]) -> dict[str, Any]:
+        structured = response.get("structured")
+        if structured is not None:
+            if isinstance(structured, BaseModel):
+                raw = structured.model_dump()
+            elif isinstance(structured, dict):
+                raw = dict(structured)
+            else:
+                raise ReActInvestigationError(
+                    "Structured specialist result returned an unsupported object"
+                )
+            return cls._parse_final_payload(raw)
 
-        first = candidate.find("{")
-        last = candidate.rfind("}")
-        if first >= 0 and last >= first:
-            candidate = candidate[first : last + 1]
+        text = str(response.get("text") or "").strip()
+        if not text:
+            raise ReActInvestigationError("Reasoning model returned an empty final result")
+        return cls._parse_final_payload(text)
 
-        try:
-            raw = json.loads(candidate)
-        except json.JSONDecodeError as exc:
-            raise ReActInvestigationError("Final specialist result is not valid JSON") from exc
-        if not isinstance(raw, dict):
-            raise ReActInvestigationError("Final specialist result must be a JSON object")
+    @classmethod
+    def _parse_final_payload(cls, value: str | dict[str, Any]) -> dict[str, Any]:
+        if isinstance(value, dict):
+            raw = dict(value)
+        else:
+            candidate = value.strip()
+            if candidate.startswith("```"):
+                lines = candidate.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                candidate = "\n".join(lines).strip()
+
+            first = candidate.find("{")
+            last = candidate.rfind("}")
+            if first >= 0 and last >= first:
+                candidate = candidate[first : last + 1]
+
+            try:
+                raw = json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                raise ReActInvestigationError("Final specialist result is not valid JSON") from exc
+            if not isinstance(raw, dict):
+                raise ReActInvestigationError("Final specialist result must be a JSON object")
 
         summary = str(raw.get("summary") or "").strip()
         if not summary:
             raise ReActInvestigationError("Final specialist summary cannot be empty")
+
+        diagnosis_status = str(raw.get("diagnosis_status") or "").strip().lower()
+        if diagnosis_status not in _ALLOWED_DIAGNOSIS_STATUSES:
+            raise ReActInvestigationError(
+                f"Unsupported diagnosis_status: {diagnosis_status!r}"
+            )
+
+        root_cause_raw = raw.get("root_cause")
+        root_cause = str(root_cause_raw).strip() if root_cause_raw is not None else None
+        if root_cause in {"", "none", "null", "unknown", "unconfirmed"}:
+            root_cause = None
+
+        causal_chain = cls._string_list(raw.get("causal_chain"), "causal_chain")
 
         try:
             confidence = float(raw.get("confidence"))
@@ -424,13 +529,33 @@ most appropriate assistance domain when useful.
             raise ReActInvestigationError(
                 f"Unsupported assistance_domain: {assistance_domain!r}"
             )
-        if assistance_required and assistance_domain is None:
-            raise ReActInvestigationError(
-                "assistance_domain is required when assistance_required is true"
-            )
+
+        if diagnosis_status in {"confirmed", "probable"}:
+            if not root_cause:
+                raise ReActInvestigationError(
+                    f"{diagnosis_status} diagnosis requires a root_cause"
+                )
+            if not causal_chain:
+                raise ReActInvestigationError(
+                    f"{diagnosis_status} diagnosis requires a causal_chain"
+                )
+
+        if diagnosis_status == "confirmed":
+            if assistance_required or assistance_domain is not None:
+                raise ReActInvestigationError(
+                    "confirmed diagnosis cannot request diagnostic peer assistance"
+                )
+        else:
+            if not assistance_required or assistance_domain is None:
+                raise ReActInvestigationError(
+                    "probable or inconclusive diagnosis must request an assistance domain"
+                )
 
         return {
             "summary": summary,
+            "diagnosis_status": diagnosis_status,
+            "root_cause": root_cause,
+            "causal_chain": causal_chain,
             "confidence": confidence,
             "findings": findings,
             "hypotheses": hypotheses,
@@ -492,15 +617,18 @@ most appropriate assistance domain when useful.
             "anomaly": anomaly,
         }
         return (
-            "Your BDI layer has committed the intention `investigate_incident`. "
-            "Execute that intention operationally with ReAct: reason about what evidence "
-            "is missing, call an appropriate MCP or RAG tool, observe the result, then "
-            "reason again. Continue only while another observation can materially improve "
-            "the investigation. Use `search_knowledge` when project architecture, runbooks "
-            "or known system-specific facts are relevant. Do not invent observations and "
-            "do not perform remediation. At least one live evidence tool must be attempted "
-            "before final conclusions. When evidence is sufficient, stop calling tools; a "
-            "separate finalization prompt will request the structured result.\n\n"
+            "Your BDI layer has committed an investigation intention. Execute that intention "
+            "operationally with ReAct: reason about the leading causal hypothesis, identify "
+            "the evidence needed to test it, call an appropriate MCP or RAG tool, observe the "
+            "result, and update or reject the hypothesis. Continue until you can explain the "
+            "anomaly with an evidence-backed root cause or until the missing evidence belongs "
+            "to another specialist domain. Use `search_knowledge` when project architecture, "
+            "runbooks or known system-specific facts are relevant. Do not invent observations "
+            "and do not perform remediation. At least one live evidence tool must be attempted. "
+            "Do not defer an available diagnostic check to the operator or to a future step: "
+            "execute it now when it can materially test the hypothesis. When you think the "
+            "investigation can stop, a diagnostic closure challenge may ask you to verify that "
+            "there is either a supported root cause or a justified peer-assistance need.\n\n"
             "Investigation assignment:\n"
             + json.dumps(assignment, separators=(",", ":"), sort_keys=True)
         )
