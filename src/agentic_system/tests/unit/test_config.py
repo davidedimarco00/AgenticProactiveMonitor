@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_system.settings import _env_bool, _load_yaml
+from agentic_system.settings import RuntimeConfig, _env_bool, _load_yaml
 
 
 def test_env_bool_accepts_enabled_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -21,3 +21,7 @@ def test_load_yaml_requires_a_mapping(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="root must be a YAML mapping"):
         _load_yaml(path)
+
+
+def test_runtime_config_defaults_to_ten_react_diagnostic_steps() -> None:
+    assert RuntimeConfig.__dataclass_fields__["react_max_steps"].default == 10
