@@ -60,7 +60,13 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
                 "name": "Tasks",
                 "description": "Read-only durable agent task state for fault-tolerance observability.",
             },
-            {"name": "Agents", "description": "Structured runtime and agent activity information."},
+            {
+                "name": "Agents",
+                "description": (
+                    "Structured runtime activity plus bounded live reasoning/tool traces. "
+                    "Trace rationale is concise and operator-safe; private chain-of-thought is not exposed."
+                ),
+            },
         ],
     )
 
@@ -188,9 +194,25 @@ def create_api_app(runtime: AgentRuntime, repository: IncidentRepository) -> Fas
         agent_role: str | None = Query(None),
         limit: int = Query(100, ge=1, le=500),
     ) -> dict[str, Any]:
-        events = await repository.list_events(
+        persisted = await repository.list_events(
             agent_role=agent_role, limit=limit, ascending=False
         )
-        return {"events": events}
+        normalized_role = str(agent_role or "").strip().lower()
+        live: list[dict[str, Any]] = []
+        for agent in runtime.agents:
+            if normalized_role and str(agent.role).strip().lower() != normalized_role:
+                continue
+            live.extend(agent.trace_snapshot(limit=limit))
+
+        combined = [*live, *persisted]
+        combined.sort(
+            key=lambda item: str(item.get("timestamp") or item.get("created_at") or ""),
+            reverse=True,
+        )
+        return {
+            "events": combined[:limit],
+            "live_trace_events": min(len(live), limit),
+            "persisted_events": min(len(persisted), limit),
+        }
 
     return app
