@@ -138,12 +138,29 @@ network, application, software. support_reason must be null unless support is re
 
         last_error: RuntimeError | None = None
         for attempt in range(1, self.max_attempts + 1):
-            response = await self.provider.get_llm_response(
-                context,
-                tools=None,
-                conversation_id=conversation_id,
-                output_schema=_TechnicalLeadReviewOutput,
-            )
+            try:
+                response = await self.provider.get_llm_response(
+                    context,
+                    tools=None,
+                    conversation_id=conversation_id,
+                    output_schema=_TechnicalLeadReviewOutput,
+                )
+            except Exception as structured_error:
+                LOGGER.warning(
+                    "Technical Lead structured output transport failed; falling back to "
+                    "plain JSON generation for this attempt: incident=%s attempt=%d/%d error=%s",
+                    incident_id,
+                    attempt,
+                    self.max_attempts,
+                    structured_error,
+                )
+                response = await self.provider.get_llm_response(
+                    context,
+                    tools=None,
+                    conversation_id=conversation_id,
+                    output_schema=None,
+                )
+
             try:
                 assessment = self._assessment_from_response(response)
             except RuntimeError as exc:
