@@ -51,9 +51,10 @@ class SharedInferenceGate:
 class RoleLLMProvider(BaseLLMProvider):
     """Small SPADE-LLM provider that binds one model to one cognitive role.
 
-    Technical Lead agents receive the reasoning model; specialist agents receive
-    the tool-capable model. Both share the same embedding model and inference gate.
-    LangChain reuses ``inference_slot`` when it executes a specialist ReAct run.
+    A single specialist may use multiple providers: Gemma for reasoning and
+    diagnostic closure, Qwen for action/tool selection. Technical Lead reasoning
+    also uses Gemma. Every provider shares the same embedding model and the same
+    backend-wide inference gate so the local Ollama workload remains bounded.
     """
 
     def __init__(
