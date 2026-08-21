@@ -21,6 +21,18 @@ def _technical_lead_plan_path() -> Path:
     )
 
 
+def _operator_step() -> dict:
+    return {
+        "title": "Verify processing-service after diagnosis",
+        "target": "processing-service",
+        "command_type": "verification",
+        "command": "docker exec processing-service ps -eo pid,comm,%cpu --sort=-%cpu",
+        "purpose": "Verify that the diagnosed CPU-heavy workload is still present.",
+        "expected_result": "The CPU-heavy process is visible at the top of the process list.",
+        "what_to_verify": "Confirm process identity and CPU usage before any corrective action.",
+    }
+
+
 def _valid_review_payload(*, decision: str = "resolve") -> dict:
     support = decision == "request_support"
     return {
@@ -40,9 +52,9 @@ def _valid_review_payload(*, decision: str = "resolve") -> dict:
         "remediation_summary": (
             "Do not apply corrective changes before additional diagnosis."
             if support
-            else "No immediate autonomous corrective action is required."
+            else "Verify the diagnosed workload before applying operator-approved remediation."
         ),
-        "remediation_steps": [] if support else ["Continue monitoring after diagnosis."],
+        "remediation_steps": [] if support else [_operator_step()],
         "support_domain": "application" if support else None,
         "support_reason": "Application evidence is still required." if support else None,
     }
@@ -101,10 +113,10 @@ def test_review_parser_accepts_resolve_decision() -> None:
     assert result.decision == "resolve"
     assert result.confidence == 0.91
     assert result.support_domain is None
-    assert result.remediation_steps == ("Continue monitoring after diagnosis.",)
+    assert result.remediation_steps == (_operator_step(),)
 
 
-def test_review_structured_schema_constrains_decision_and_support_domain() -> None:
+def test_review_structured_schema_constrains_decision_support_and_remediation() -> None:
     schema = _TechnicalLeadReviewOutput.model_json_schema()
     properties = schema["properties"]
 
@@ -120,6 +132,7 @@ def test_review_structured_schema_constrains_decision_and_support_domain() -> No
     assert enum_values == {"system", "network", "application", "software"}
     assert properties["confidence"]["minimum"] == 0.0
     assert properties["confidence"]["maximum"] == 1.0
+    assert properties["remediation_steps"]["type"] == "array"
 
 
 def test_review_reasoner_retries_empty_response_before_escalating() -> None:
@@ -182,6 +195,7 @@ def test_review_reasoner_prefers_structured_provider_output() -> None:
 
     assert result.decision == "resolve"
     assert result.confidence == 0.91
+    assert result.remediation_steps[0]["command"].startswith("docker exec processing-service")
 
 
 def test_review_rejects_terminal_decision_for_probable_diagnosis_and_requests_support() -> None:
