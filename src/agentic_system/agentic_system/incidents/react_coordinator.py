@@ -17,18 +17,14 @@ LOGGER = logging.getLogger("agentic_system.incidents.react_coordinator")
 
 
 class ReActIncidentCoordinator(IncidentCoordinator):
-    """Extend durable incident coordination with specialist ReAct outcomes.
-
-    A completed specialist task does not close the incident. The result returns to
-    the Technical Lead and the incident enters UNDER_ANALYSIS, preserving the
-    architectural separation between specialist diagnosis proposals and the later
-    Technical Lead critic/coordination decision.
-    """
+    """Coordinate specialist ReAct work and the Technical Lead BDI critic cycle."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.react_results_completed_count = 0
         self.react_results_failed_count = 0
+        self.technical_lead_reviews_completed_count = 0
+        self.technical_lead_reviews_failed_count = 0
 
     async def wait_until_workflow_terminal(
         self,
@@ -73,6 +69,10 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                         incident_id,
                         task_id=task_id,
                         reason=reason,
+                    )
+                    self._apply_agent_activity(
+                        incident_id,
+                        decision="operator_action_required",
                     )
                     LOGGER.warning(
                         "Terminal task failure released exclusive workflow via operator escalation: "
@@ -149,6 +149,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "current_agent": "technical_lead",
                     "active_agents": ["technical_lead"],
                     "task_state": completed.get("state"),
+                    "review_state": "PENDING",
                 },
             },
         )
@@ -189,6 +190,209 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             receipt.react_steps,
             receipt.assistance_domain if receipt.assistance_required else "none",
         )
+
+        try:
+            review = await self._review_specialist_result(updated, receipt)
+            await self._persist_technical_lead_review(
+                updated,
+                receipt,
+                review,
+                task_id=task_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.technical_lead_reviews_failed_count += 1
+            LOGGER.exception(
+                "Technical Lead review failed; escalating without changing agent health: "
+                "incident=%s error=%s",
+                incident_id,
+                exc,
+            )
+            await self.repository.update_incident(
+                incident_id,
+                {
+                    "status": "OPERATOR_ACTION_REQUIRED",
+                    "validation": {
+                        "status": "TECHNICAL_LEAD_REVIEW_FAILED",
+                        "summary": "Specialist evidence was collected, but the Technical Lead critic cycle failed.",
+                    },
+                    "agentic": {
+                        "current_agent": "technical_lead",
+                        "active_agents": [],
+                        "review_state": "FAILED",
+                    },
+                },
+            )
+            await self.repository.add_event(
+                incident_id,
+                {
+                    "event_type": "TECHNICAL_LEAD_REVIEW_FAILED",
+                    "agent_role": "technical_lead",
+                    "action": "escalate_review_failure",
+                    "reason": str(exc),
+                    "status": "OPERATOR_ACTION_REQUIRED",
+                    "task_id": task_id,
+                },
+            )
+            self._apply_agent_activity(
+                incident_id,
+                decision="operator_action_required",
+            )
+
+    async def _review_specialist_result(
+        self,
+        incident: dict[str, Any],
+        receipt: Any,
+    ) -> Any:
+        reviewer = getattr(self.assignee, "review_investigation_result", None)
+        if callable(reviewer):
+            return await reviewer(incident, receipt)
+
+        # AgentRuntime already owns the Technical Lead instance; keep the review
+        # inside that SPADE agent while the formal runtime port is introduced.
+        technical_lead_getter = getattr(self.assignee, "_technical_lead", None)
+        if not callable(technical_lead_getter):
+            raise RuntimeError("Technical Lead review capability is not available")
+        technical_lead = technical_lead_getter()
+        return await technical_lead.review_specialist_result(
+            incident,
+            specialist_result=receipt.task_outcome(),
+        )
+
+    async def _persist_technical_lead_review(
+        self,
+        incident: dict[str, Any],
+        specialist_receipt: Any,
+        review: Any,
+        *,
+        task_id: str,
+    ) -> None:
+        incident_id = str(incident["incident_id"])
+        decision = str(review.decision).strip().lower()
+        if decision not in {"resolve", "operator_action_required", "request_support"}:
+            raise RuntimeError(f"Unsupported Technical Lead review decision: {decision}")
+
+        evidence = [
+            str(item).strip()
+            for item in specialist_receipt.findings
+            if str(item).strip()
+        ]
+        diagnosis = {
+            "summary": review.diagnosis_summary,
+            "root_cause": review.root_cause,
+            "confidence": review.confidence,
+            "evidence": evidence,
+        }
+        remediation = {
+            "summary": review.remediation_summary,
+            "steps": list(review.remediation_steps),
+            "status": "ADVISORY",
+        }
+
+        if decision == "resolve":
+            status = "RESOLVED"
+            validation = {
+                "status": "EVIDENCE_REVIEWED",
+                "summary": (
+                    "The Technical Lead accepted the specialist evidence and determined "
+                    "that no immediate operator action is required."
+                ),
+            }
+            active_agents: list[str] = []
+        elif decision == "operator_action_required":
+            status = "OPERATOR_ACTION_REQUIRED"
+            validation = {
+                "status": "OPERATOR_ACTION_PENDING",
+                "summary": (
+                    "The Technical Lead accepted the diagnosis, but remediation requires "
+                    "human operator action."
+                ),
+            }
+            active_agents = []
+        else:
+            status = "UNDER_ANALYSIS"
+            validation = {
+                "status": "MORE_EVIDENCE_REQUIRED",
+                "summary": (
+                    "The Technical Lead requested evidence from another technical domain "
+                    "before accepting a final diagnosis."
+                ),
+            }
+            active_agents = ["technical_lead"]
+
+        updated = await self.repository.update_incident(
+            incident_id,
+            {
+                "status": status,
+                "diagnosis": diagnosis,
+                "remediation": remediation,
+                "validation": validation,
+                "agentic": {
+                    "current_agent": "technical_lead",
+                    "active_agents": active_agents,
+                    "review_state": "COMPLETED",
+                    "review_decision": decision,
+                    "review_confidence": review.confidence,
+                    "review_rationale": review.rationale,
+                    "bdi_review_goal": review.bdi_goal,
+                    "bdi_review_intention": review.bdi_review_intention,
+                    "bdi_review_decision_intention": review.bdi_decision_intention,
+                    "support_requested": decision == "request_support",
+                    "support_domain": review.support_domain,
+                    "support_reason": review.support_reason,
+                },
+            },
+        )
+        if updated is None:
+            raise RuntimeError(
+                f"Incident disappeared while persisting Technical Lead review: {incident_id}"
+            )
+
+        await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": "TECHNICAL_LEAD_REVIEW_COMPLETED",
+                "agent_role": "technical_lead",
+                "action": "review_specialist_result",
+                "reason": review.rationale,
+                "status": status,
+                "task_id": task_id,
+                "outcome": {
+                    "decision": decision,
+                    "confidence": review.confidence,
+                    "diagnosis_summary": review.diagnosis_summary,
+                    "support_domain": review.support_domain,
+                },
+            },
+        )
+        self.technical_lead_reviews_completed_count += 1
+        self._apply_agent_activity(incident_id, decision=decision)
+        LOGGER.warning(
+            "Technical Lead BDI review persisted: incident=%s decision=%s status=%s "
+            "confidence=%.3f",
+            incident_id,
+            decision,
+            status,
+            review.confidence,
+        )
+
+    def _apply_agent_activity(self, incident_id: str, *, decision: str) -> None:
+        agents = getattr(self.assignee, "agents", None)
+        if not isinstance(agents, list):
+            return
+        for agent in agents:
+            if getattr(agent, "activity_incident_id", None) != incident_id:
+                continue
+            role = str(getattr(agent, "role", ""))
+            if decision == "request_support" and role == "technical_lead":
+                agent.set_activity(
+                    "WAITING",
+                    incident_id=incident_id,
+                    detail="support_coordination_pending",
+                )
+            else:
+                agent.set_activity("IDLE")
 
     async def _persist_failed_react_result(
         self,
@@ -247,8 +451,6 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         *,
         error: Exception,
     ) -> None:
-        """Turn malformed/invalid specialist result messages into task retries."""
-
         task_id = str(task["task_id"])
         incident_id = str(incident["incident_id"])
         failed = await self.task_workflow.mark_execution_failed(
