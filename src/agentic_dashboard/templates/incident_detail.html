@@ -38,7 +38,7 @@
     <span class="eyebrow">ANOMALY</span>
     <h3>OpenSearch Anomaly Detection</h3>
     <div class="facts-list">
-      <div><span>Detector</span><strong>{{ incident.anomaly.detector_id or '—' }}</strong></div>
+      <div><span>Detector</span><strong>{{ incident.anomaly.detector_name or incident.anomaly.detector_id or '—' }}</strong></div>
       <div><span>Type</span><strong>{{ incident.anomaly.anomaly_type or '—' }}</strong></div>
       <div><span>Grade</span><strong>{{ incident.anomaly.grade if incident.anomaly.grade is defined and incident.anomaly.grade is not none else '—' }}</strong></div>
       <div><span>AD confidence</span><strong>{{ incident.anomaly.confidence|default(none)|confidence }}</strong></div>
@@ -128,7 +128,7 @@
       <h2>Most probable cause</h2>
     </div>
     {% if incident.diagnosis.confidence is defined and incident.diagnosis.confidence is not none %}
-    <span class="confidence-pill">{{ incident.diagnosis.confidence|confidence }} confidence</span>
+    <span class="confidence-pill">{{ incident.diagnosis.confidence|confidence }} diagnostic confidence</span>
     {% endif %}
   </div>
   <p class="diagnosis-copy">{{ incident.diagnosis.summary or 'Diagnosis is still in progress.' }}</p>
@@ -166,8 +166,13 @@
       <div>
         {% if step is mapping %}
           <strong>{{ step.title or step.action or 'Operator action' }}</strong>
-          {% if step.description %}<p>{{ step.description }}</p>{% endif %}
+          {% if step.target or step.command_type %}
+          <p><b>Target:</b> {{ step.target or incident.entity or incident.service or '—' }}{% if step.command_type %} · <b>Type:</b> {{ step.command_type|replace('_', ' ')|title }}{% endif %}</p>
+          {% endif %}
+          {% if step.purpose %}<p><b>Purpose:</b> {{ step.purpose }}</p>{% elif step.description %}<p>{{ step.description }}</p>{% endif %}
           {% if step.command %}<code>{{ step.command }}</code>{% endif %}
+          {% if step.expected_result %}<p><b>Expected result:</b> {{ step.expected_result }}</p>{% endif %}
+          {% if step.what_to_verify %}<p><b>What to verify:</b> {{ step.what_to_verify }}</p>{% endif %}
         {% else %}
           <strong>{{ step }}</strong>
         {% endif %}
@@ -203,6 +208,9 @@
   <div class="facts-list">
     <div><span>Validation status</span><strong>{{ incident.validation.status or 'PENDING' }}</strong></div>
     <div><span>Incident status</span><strong>{{ incident.status or 'NEW' }}</strong></div>
+    {% if incident.agentic.review_confidence is defined and incident.agentic.review_confidence is not none %}
+    <div><span>TL review confidence</span><strong>{{ incident.agentic.review_confidence|confidence }}</strong></div>
+    {% endif %}
   </div>
 </section>
 
