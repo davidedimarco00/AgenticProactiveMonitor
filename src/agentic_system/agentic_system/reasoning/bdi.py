@@ -293,6 +293,29 @@ class AgentSpeakBDIRuntime:
             state["selection_intention"] = "select_primary_investigator"
             state["primary_investigator"] = primary_investigator
 
+        # The unified Technical Lead policy also contains review plans. Register
+        # guarded review procedures so AgentSpeak can parse the whole policy in a
+        # triage cycle without reporting unresolved actions.
+        @actions.add_procedure(
+            ".run_tl_review",
+            (agentspeak.runtime.Agent, agentspeak.asl_str),
+        )
+        def review_not_available_during_triage(
+            _agent: agentspeak.runtime.Agent,
+            _action_incident_id: str,
+        ) -> None:
+            raise RuntimeError("Technical Lead review action cannot run during triage")
+
+        @actions.add_procedure(
+            ".commit_tl_review_decision",
+            (agentspeak.asl_str, agentspeak.asl_str),
+        )
+        def review_commit_not_available_during_triage(
+            _action_incident_id: str,
+            _decision: str,
+        ) -> None:
+            raise RuntimeError("Technical Lead review commit cannot run during triage")
+
         source = agentspeak.StringSource(
             "technical_lead_runtime.asl",
             self._build_technical_lead_program(incident_id, anomaly, available_agents),
@@ -380,6 +403,28 @@ class AgentSpeakBDIRuntime:
                 raise RuntimeError(f"AgentSpeak committed invalid review decision: {decision}")
             state["decision_intention"] = "commit_review_decision"
             state["decision"] = decision
+
+        # The same policy contains triage plans. Guarded triage procedures keep
+        # the complete policy valid during a review-only deliberation cycle.
+        @actions.add_procedure(
+            ".run_tl_triage",
+            (agentspeak.runtime.Agent, agentspeak.asl_str),
+        )
+        def triage_not_available_during_review(
+            _agent: agentspeak.runtime.Agent,
+            _action_incident_id: str,
+        ) -> None:
+            raise RuntimeError("Technical Lead triage action cannot run during review")
+
+        @actions.add_procedure(
+            ".commit_primary_investigator",
+            (agentspeak.asl_str, agentspeak.asl_str),
+        )
+        def triage_commit_not_available_during_review(
+            _action_incident_id: str,
+            _primary_investigator: str,
+        ) -> None:
+            raise RuntimeError("Technical Lead triage commit cannot run during review")
 
         source = agentspeak.StringSource(
             "technical_lead_review_runtime.asl",
