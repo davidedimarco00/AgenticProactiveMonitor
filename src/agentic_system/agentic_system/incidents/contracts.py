@@ -55,8 +55,6 @@ class AnomalyInboxPort(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class IncidentAssigneeReceipt:
-    """Confirmation that an agent accepted an incident into its local workflow."""
-
     incident_id: str
     agent_role: str
     agent_jid: str
@@ -64,8 +62,6 @@ class IncidentAssigneeReceipt:
 
 @dataclass(frozen=True, slots=True)
 class IncidentTriageReceipt:
-    """Technical Lead triage outcome after real BDI deliberation."""
-
     incident_id: str
     probable_domain: str
     primary_investigator: str
@@ -78,8 +74,6 @@ class IncidentTriageReceipt:
 
 @dataclass(frozen=True, slots=True)
 class InvestigationTaskDispatchReceipt:
-    """Acknowledgement that the selected specialist accepted a durable task."""
-
     task_id: str
     incident_id: str
     agent_role: str
@@ -132,8 +126,27 @@ class InvestigationTaskResultReceipt:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class TechnicalLeadReviewReceipt:
+    """BDI critic decision after reviewing one completed specialist result."""
+
+    incident_id: str
+    decision: str
+    confidence: float
+    diagnosis_summary: str
+    root_cause: str
+    rationale: str
+    remediation_summary: str
+    remediation_steps: tuple[str, ...]
+    support_domain: str | None
+    support_reason: str | None
+    bdi_goal: str
+    bdi_review_intention: str
+    bdi_decision_intention: str
+
+
 class IncidentAssigneePort(Protocol):
-    """Contract for assigning, triaging and dispatching persisted work."""
+    """Contract for assigning, triaging, dispatching and reviewing persisted work."""
 
     async def assign_incident(
         self,
@@ -158,6 +171,14 @@ class IncidentAssigneePort(Protocol):
         incident: dict[str, Any],
         task: dict[str, Any],
     ) -> InvestigationTaskResultReceipt | None: ...
+
+    async def review_investigation_result(
+        self,
+        incident: dict[str, Any],
+        result: InvestigationTaskResultReceipt,
+    ) -> TechnicalLeadReviewReceipt: ...
+
+    def apply_review_activity(self, incident_id: str, decision: str) -> None: ...
 
 
 class IncidentRepositoryPort(Protocol):
