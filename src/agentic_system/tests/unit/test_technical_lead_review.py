@@ -1,7 +1,10 @@
 import asyncio
 from pathlib import Path
 
-from agentic_system.agents.review import TechnicalLeadReviewReasoner
+from agentic_system.agents.review import (
+    TechnicalLeadReviewReasoner,
+    _TechnicalLeadReviewOutput,
+)
 from agentic_system.reasoning import BDIReviewAssessment, TechnicalLeadReviewBDIRuntime
 
 
@@ -73,6 +76,24 @@ def test_review_parser_accepts_resolve_decision() -> None:
     assert result.confidence == 0.91
     assert result.support_domain is None
     assert result.remediation_steps == ("Continue monitoring the service.",)
+
+
+def test_review_structured_schema_constrains_decision_and_support_domain() -> None:
+    schema = _TechnicalLeadReviewOutput.model_json_schema()
+    properties = schema["properties"]
+
+    assert set(properties["decision"]["enum"]) == {
+        "resolve",
+        "operator_action_required",
+        "request_support",
+    }
+    support_schema = properties["support_domain"]
+    enum_values = set()
+    for option in support_schema.get("anyOf", []):
+        enum_values.update(option.get("enum", []))
+    assert enum_values == {"system", "network", "application", "software"}
+    assert properties["confidence"]["minimum"] == 0.0
+    assert properties["confidence"]["maximum"] == 1.0
 
 
 def test_review_reasoner_retries_empty_response_before_escalating() -> None:
