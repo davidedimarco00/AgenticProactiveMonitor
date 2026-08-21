@@ -47,6 +47,21 @@ class FakeCompiledAgent:
         return self.states.pop(0)
 
 
+class FakeFinalizer:
+    def __init__(self, outputs: list[Any]) -> None:
+        self.outputs = list(outputs)
+        self.calls: list[Any] = []
+
+    async def ainvoke(self, messages: Any) -> Any:
+        self.calls.append(messages)
+        if not self.outputs:
+            raise AssertionError("Structured finalizer received more calls than expected")
+        output = self.outputs.pop(0)
+        if isinstance(output, BaseException):
+            raise output
+        return output
+
+
 FINAL_RESULT = {
     "summary": "CPU saturation is likely application-driven and needs cross-domain correlation.",
     "diagnosis_status": "probable",
@@ -120,6 +135,7 @@ def _executor(
     tool: FakeTool | None = None,
     *,
     max_steps: int = 10,
+    finalizer: FakeFinalizer | None = None,
 ) -> SpecialistReActExecutor:
     return SpecialistReActExecutor(
         provider=FakeProvider(),  # type: ignore[arg-type]
@@ -128,6 +144,7 @@ def _executor(
         max_steps=max_steps,
         tool_timeout_seconds=1.0,
         agent=agent,
+        finalizer=finalizer or FakeFinalizer([FINAL_RESULT]),
     )
 
 
@@ -142,12 +159,13 @@ def _investigate(executor: SpecialistReActExecutor):
     )
 
 
-def test_langchain_react_preserves_tool_evidence_and_result_contract() -> None:
-    agent = FakeCompiledAgent(
-        [{"messages": _messages(), "structured_response": FINAL_RESULT}]
-    )
-    result = asyncio.run(_investigate(_executor(agent)))
+def test_react_finalizes_evidence_without_agent_structured_response() -> None:
+    finalizer = FakeFinalizer([FINAL_RESULT])
+    agent = FakeCompiledAgent([{"messages": _messages()}])
 
+    result = asyncio.run(_investigate(_executor(agent, finalizer=finalizer)))
+
+    assert len(finalizer.calls) == 1
     assert result.task_id == "TASK-REACT-001"
     assert result.tools_used == ("get_system_load",)
     assert result.react_steps == 2
@@ -161,6 +179,10 @@ def test_langchain_react_preserves_tool_evidence_and_result_contract() -> None:
     assert result.evidence[0]["success"] is True
     assert result.evidence[0]["observation"]["cpu_percent"] == 388.2
     assert result.conversation_id == "react:system_engineer:INC-REACT-001:TASK-REACT-001"
+
+    finalizer_prompt = str(finalizer.calls[0])
+    assert "Collected tool evidence" in finalizer_prompt
+    assert "388.2" in finalizer_prompt
 
 
 def test_langchain_adapter_executes_existing_spade_mcp_tool() -> None:
@@ -179,16 +201,17 @@ def test_langchain_adapter_executes_existing_spade_mcp_tool() -> None:
 
 
 def test_react_retries_once_if_model_attempts_to_conclude_without_live_evidence() -> None:
-    no_evidence = {
-        "messages": [AIMessage(content="I can answer directly.")],
-        "structured_response": FINAL_RESULT,
-    }
+    no_evidence = {"messages": [AIMessage(content="I can answer directly.")]}
     agent = FakeCompiledAgent([no_evidence, no_evidence])
+    finalizer = FakeFinalizer([FINAL_RESULT])
 
     with pytest.raises(ReActInvestigationError, match="No operational tool"):
-        asyncio.run(_investigate(_executor(agent, max_steps=2)))
+        asyncio.run(
+            _investigate(_executor(agent, max_steps=2, finalizer=finalizer))
+        )
 
     assert len(agent.calls) == 2
+    assert finalizer.calls == []
     retry_messages = agent.calls[1]["state"]["messages"]
     assert "No live operational evidence" in str(retry_messages[-1]["content"])
 
@@ -206,11 +229,12 @@ def test_react_records_tool_failure_without_killing_investigation_contract() -> 
         "assistance_required": True,
         "assistance_domain": "application",
     }
-    agent = FakeCompiledAgent(
-        [{"messages": _messages(success=False), "structured_response": low_confidence}]
-    )
+    agent = FakeCompiledAgent([{"messages": _messages(success=False)}])
+    finalizer = FakeFinalizer([low_confidence])
 
-    result = asyncio.run(_investigate(_executor(agent)))
+    result = asyncio.run(
+        _investigate(_executor(agent, finalizer=finalizer))
+    )
 
     assert result.evidence[0]["success"] is False
     assert "MCP unavailable" in result.evidence[0]["observation"]["error"]
@@ -229,17 +253,30 @@ def test_non_confirmed_finalization_cannot_silently_stop_without_peer_assistance
         "assistance_required": False,
         "assistance_domain": None,
     }
+    agent = FakeCompiledAgent([{"messages": _messages()}])
+    finalizer = FakeFinalizer([invalid, invalid])
 
     with pytest.raises(
         ReActInvestigationError,
         match="probable or inconclusive diagnosis must request an assistance domain",
     ):
-        SpecialistReActExecutor._parse_final_payload(invalid)
+        asyncio.run(
+            _investigate(_executor(agent, finalizer=finalizer))
+        )
+
+    assert len(finalizer.calls) == 2
 
 
 def test_confirmed_diagnosis_requires_root_cause_and_causal_chain_without_peer_request() -> None:
-    payload = SpecialistReActExecutor._parse_final_payload(CONFIRMED_RESULT)
+    agent = FakeCompiledAgent([{"messages": _messages()}])
+    finalizer = FakeFinalizer([CONFIRMED_RESULT])
 
-    assert payload["diagnosis_status"] == "confirmed"
-    assert payload["root_cause"] == CONFIRMED_RESULT["root_cause"]
-    assert payload["assistance_required"] is False
+    result = asyncio.run(
+        _investigate(_executor(agent, finalizer=finalizer))
+    )
+
+    assert result.diagnosis_status == "confirmed"
+    assert result.root_cause == CONFIRMED_RESULT["root_cause"]
+    assert result.causal_chain == tuple(CONFIRMED_RESULT["causal_chain"])
+    assert result.assistance_required is False
+    assert result.assistance_domain is None
