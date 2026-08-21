@@ -15,7 +15,7 @@ from .coordinator import IncidentCoordinator as BaseIncidentCoordinator
 from .ingestion import AnomalyIntake
 from .models import IncidentWorkflowResult
 from .policies import ACTIVE_INCIDENT_STATUSES, IncidentCorrelationPolicy
-from .react_coordinator import ReActIncidentCoordinator
+from .evidence_coordinator import ReActIncidentCoordinator
 from .reporting import build_incident_report
 from .tasks import (
     AgentTaskState,
