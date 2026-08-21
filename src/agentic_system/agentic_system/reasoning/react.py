@@ -14,6 +14,7 @@ from spade_llm.tools import LLMTool
 LOGGER = logging.getLogger("agentic_system.reasoning.react")
 _DEFAULT_MAX_OBSERVATION_CHARS = 6000
 _DEFAULT_EVIDENCE_EXCERPT_CHARS = 1200
+_DEFAULT_FINALIZATION_MAX_ATTEMPTS = 3
 _ALLOWED_ASSISTANCE_DOMAINS = {"system", "network", "application", "software"}
 
 
@@ -113,6 +114,7 @@ most appropriate assistance domain when useful.
         max_steps: int = 6,
         tool_timeout_seconds: float = 30.0,
         max_observation_chars: int = _DEFAULT_MAX_OBSERVATION_CHARS,
+        finalization_max_attempts: int = _DEFAULT_FINALIZATION_MAX_ATTEMPTS,
     ) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be greater than zero")
@@ -120,6 +122,8 @@ most appropriate assistance domain when useful.
             raise ValueError("tool_timeout_seconds must be greater than zero")
         if max_observation_chars <= 0:
             raise ValueError("max_observation_chars must be greater than zero")
+        if finalization_max_attempts <= 0:
+            raise ValueError("finalization_max_attempts must be greater than zero")
 
         # Interaction-memory helpers are not live diagnostic evidence. The
         # specialist keeps its normal SPADE-LLM memory, while the operational
@@ -136,6 +140,7 @@ most appropriate assistance domain when useful.
         self.max_steps = max_steps
         self.tool_timeout_seconds = tool_timeout_seconds
         self.max_observation_chars = max_observation_chars
+        self.finalization_max_attempts = finalization_max_attempts
 
     async def investigate(
         self,
@@ -283,9 +288,11 @@ most appropriate assistance domain when useful.
             {"role": "user", "content": self.FINALIZATION_INSTRUCTION},
             conversation_id,
         )
-        final_text = await self._final_response(conversation_id)
-        payload = await self._parse_or_repair_final_payload(final_text, conversation_id)
-        self.context.add_assistant_message(json.dumps(payload, separators=(",", ":")), conversation_id)
+        payload = await self._finalize_payload(conversation_id)
+        self.context.add_assistant_message(
+            json.dumps(payload, separators=(",", ":")),
+            conversation_id,
+        )
 
         return ReActInvestigationResult(
             task_id=task_id,
@@ -304,38 +311,62 @@ most appropriate assistance domain when useful.
             conversation_id=conversation_id,
         )
 
-    async def _final_response(self, conversation_id: str) -> str:
-        response = await self.provider.get_llm_response(
-            self.context,
-            tools=None,
-            conversation_id=conversation_id,
-        )
-        text = str(response.get("text") or "").strip()
-        if not text:
-            raise ReActInvestigationError("Reasoning model returned an empty final result")
-        return text
+    async def _finalize_payload(self, conversation_id: str) -> dict[str, Any]:
+        """Retry only structured finalization, preserving already collected evidence."""
 
-    async def _parse_or_repair_final_payload(
-        self,
-        text: str,
-        conversation_id: str,
-    ) -> dict[str, Any]:
-        try:
-            return self._parse_final_payload(text)
-        except ReActInvestigationError as first_error:
-            self.context.add_message_dict(
-                {
-                    "role": "user",
-                    "content": (
-                        "Your previous final answer did not match the required JSON contract. "
-                        f"Validation error: {first_error}. Return ONLY a corrected JSON object "
-                        "with the required fields and do not request more tools."
-                    ),
-                },
-                conversation_id,
+        last_error: ReActInvestigationError | None = None
+        for attempt in range(1, self.finalization_max_attempts + 1):
+            response = await self.provider.get_llm_response(
+                self.context,
+                tools=None,
+                conversation_id=conversation_id,
             )
-            repaired = await self._final_response(conversation_id)
-            return self._parse_final_payload(repaired)
+            text = str(response.get("text") or "").strip()
+            try:
+                if not text:
+                    raise ReActInvestigationError(
+                        "Reasoning model returned an empty final result"
+                    )
+                payload = self._parse_final_payload(text)
+                if attempt > 1:
+                    LOGGER.warning(
+                        "Specialist ReAct finalization recovered without repeating tool work: "
+                        "conversation=%s attempt=%d/%d",
+                        conversation_id,
+                        attempt,
+                        self.finalization_max_attempts,
+                    )
+                return payload
+            except ReActInvestigationError as exc:
+                last_error = exc
+                if attempt >= self.finalization_max_attempts:
+                    break
+                LOGGER.warning(
+                    "Specialist ReAct finalization rejected; retrying without new tool calls: "
+                    "conversation=%s attempt=%d/%d error=%s",
+                    conversation_id,
+                    attempt,
+                    self.finalization_max_attempts,
+                    exc,
+                )
+                self.context.add_message_dict(
+                    {
+                        "role": "user",
+                        "content": (
+                            "The previous finalization response was empty or invalid. "
+                            f"Validation error: {exc}. Do NOT call any tools and do NOT "
+                            "repeat the investigation. Use the evidence already present in "
+                            "this conversation and return ONLY the required JSON object with "
+                            "all required fields."
+                        ),
+                    },
+                    conversation_id,
+                )
+
+        raise ReActInvestigationError(
+            "Specialist ReAct finalization failed after "
+            f"{self.finalization_max_attempts} attempt(s): {last_error}"
+        )
 
     @classmethod
     def _parse_final_payload(cls, text: str) -> dict[str, Any]:
