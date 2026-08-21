@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any, Literal
 
+import httpx
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -75,6 +76,71 @@ class _SpecialistFinalOutput(BaseModel):
                 "probable or inconclusive diagnosis must request an assistance domain"
             )
         return self
+
+
+class _OllamaSchemaFinalizer:
+    """Small native Ollama adapter used only to serialize completed ReAct evidence.
+
+    The operational agent loop remains LangChain-based. Finalization deliberately
+    uses Ollama's `/api/chat` JSON-schema contract directly so a thinking model
+    cannot hide the final JSON in a framework-specific output-parser path.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        base_url: str,
+        timeout_seconds: float,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self.schema = _SpecialistFinalOutput.model_json_schema()
+
+    async def ainvoke(self, messages: list[dict[str, Any]]) -> _SpecialistFinalOutput:
+        normalized_messages: list[dict[str, str]] = []
+        for message in messages:
+            role = str(message.get("role") or "user").strip() or "user"
+            content = str(message.get("content") or "").strip()
+            normalized_messages.append({"role": role, "content": content})
+
+        schema_text = json.dumps(self.schema, ensure_ascii=False, separators=(",", ":"))
+        normalized_messages.insert(
+            1 if normalized_messages else 0,
+            {
+                "role": "system",
+                "content": (
+                    "Return only an object that conforms to this JSON Schema. "
+                    f"JSON Schema: {schema_text}"
+                ),
+            },
+        )
+
+        payload = {
+            "model": self.model,
+            "messages": normalized_messages,
+            "stream": False,
+            "think": False,
+            "format": self.schema,
+            "options": {"temperature": 0},
+        }
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(f"{self.base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            body = response.json()
+
+        message = body.get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("Ollama schema finalizer returned no message object")
+        content = str(message.get("content") or "").strip()
+        if not content:
+            thinking = str(message.get("thinking") or "").strip()
+            detail = ""
+            if thinking:
+                detail = f"; unexpected thinking-only response ({len(thinking)} chars)"
+            raise RuntimeError(f"Ollama schema finalizer returned empty content{detail}")
+        return _SpecialistFinalOutput.model_validate_json(content)
 
 
 class ReActInvestigationError(RuntimeError):
@@ -218,24 +284,24 @@ Rules:
         self._tool_names = {tool.name for tool in self.tools}
         self._langchain_tools = [self._adapt_tool(tool) for tool in self.tools]
 
-        model = None
-        if agent is None or finalizer is None:
-            model = self._build_model()
+        model = self._build_model() if agent is None else None
         self._agent = agent or self._build_agent(model)
-        self._finalizer = finalizer or model.with_structured_output(
-            _SpecialistFinalOutput,
-            method="json_schema",
-        )
+        self._finalizer = finalizer or self._build_finalizer()
 
     def _build_model(self) -> ChatOllama:
         model_name = self._ollama_model_name()
-        base_url = str(getattr(self.provider, "base_url", "")).rstrip("/")
-        if not base_url:
-            raise ValueError("Specialist provider does not expose an Ollama base_url")
+        base_url = self._ollama_base_url()
         return ChatOllama(
             model=model_name,
             base_url=base_url,
             temperature=0,
+        )
+
+    def _build_finalizer(self) -> _OllamaSchemaFinalizer:
+        return _OllamaSchemaFinalizer(
+            model=self._ollama_model_name(),
+            base_url=self._ollama_base_url(),
+            timeout_seconds=max(60.0, self.tool_timeout_seconds * 4),
         )
 
     def _build_agent(self, model: Any) -> Any:
@@ -255,6 +321,12 @@ Rules:
         if raw:
             return raw
         raise ValueError("Specialist provider does not expose a model name")
+
+    def _ollama_base_url(self) -> str:
+        base_url = str(getattr(self.provider, "base_url", "")).rstrip("/")
+        if not base_url:
+            raise ValueError("Specialist provider does not expose an Ollama base_url")
+        return base_url
 
     def _system_prompt_from_spade_context(self) -> str:
         try:
@@ -498,7 +570,7 @@ Rules:
         if callable(slot):
             async with slot():
                 return await awaitable
-        return await awaitable
+        return awaitable
 
     def _extract_execution(
         self,
