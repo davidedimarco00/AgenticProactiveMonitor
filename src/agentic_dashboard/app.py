@@ -21,6 +21,7 @@ MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 XMPP_HOST = os.getenv("XMPP_HOST", "xmpp")
 XMPP_PORT = int(os.getenv("XMPP_PORT", "5222"))
 REQUEST_TIMEOUT = float(os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "2.5"))
+REPORT_REQUEST_TIMEOUT = float(os.getenv("DASHBOARD_REPORT_TIMEOUT_SECONDS", "15"))
 
 ACTIVE_STATUSES = {
     "NEW",
@@ -93,11 +94,17 @@ def parse_timestamp(value: str | None) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def backend_request(method: str, path: str, **kwargs: Any) -> requests.Response:
+def backend_request(
+    method: str,
+    path: str,
+    *,
+    timeout: float | None = None,
+    **kwargs: Any,
+) -> requests.Response:
     return http.request(
         method,
         f"{AGENTIC_BACKEND_URL}{path}",
-        timeout=REQUEST_TIMEOUT,
+        timeout=REQUEST_TIMEOUT if timeout is None else timeout,
         **kwargs,
     )
 
@@ -538,17 +545,30 @@ def incident_detail(incident_id: str):
 @app.get("/incidents/<incident_id>/report.pdf")
 def incident_report(incident_id: str):
     try:
-        response = backend_request("GET", f"/api/v1/incidents/{incident_id}/report")
+        response = backend_request(
+            "GET",
+            f"/api/v1/incidents/{incident_id}/report",
+            timeout=REPORT_REQUEST_TIMEOUT,
+        )
         if response.status_code == 404:
             return render_template("not_found.html", app_name=APP_NAME, incident_id=incident_id), 404
         response.raise_for_status()
+        content = response.content
+        if not content.startswith(b"%PDF"):
+            app.logger.error(
+                "Backend returned a non-PDF incident report for %s: content-type=%s",
+                incident_id,
+                response.headers.get("content-type"),
+            )
+            return jsonify({"error": "Backend did not return a valid PDF report"}), 502
         return send_file(
-            BytesIO(response.content),
+            BytesIO(content),
             mimetype="application/pdf",
             as_attachment=True,
             download_name=f"{incident_id}-incident-report.pdf",
         )
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        app.logger.warning("Incident report download failed for %s: %s", incident_id, exc)
         return jsonify({"error": "Incident report is temporarily unavailable"}), 503
 
 
