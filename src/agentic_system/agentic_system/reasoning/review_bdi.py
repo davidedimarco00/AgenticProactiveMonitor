@@ -54,10 +54,11 @@ class TechnicalLeadReviewBDIRuntime:
     def __init__(self, *, technical_lead_asl: str, action_timeout_seconds: float = 120.0) -> None:
         if action_timeout_seconds <= 0:
             raise ValueError("action_timeout_seconds must be greater than zero")
-        path = Path(technical_lead_asl)
-        if not path.is_file():
-            raise RuntimeError(f"Technical Lead AgentSpeak source not found: {technical_lead_asl}")
-        self._plan = path.read_text(encoding="utf-8")
+        triage_path = Path(technical_lead_asl)
+        review_path = triage_path.with_name("technical_lead_review.asl")
+        if not review_path.is_file():
+            raise RuntimeError(f"Technical Lead review AgentSpeak source not found: {review_path}")
+        self._plan = review_path.read_text(encoding="utf-8")
         self.action_timeout_seconds = action_timeout_seconds
         self._semaphore = asyncio.Semaphore(1)
 
