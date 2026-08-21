@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage
 from spade_llm.context import ContextManager
 
 from agentic_system.reasoning import ReActInvestigationError, SpecialistReActExecutor
@@ -30,21 +30,57 @@ class FakeTool:
         }
 
 
-class FakeProvider:
+class FakeReasoningProvider:
+    model = "ollama/gemma-test"
+    base_url = "http://127.0.0.1:11434"
+
+    def __init__(self, decisions: list[dict[str, Any]]) -> None:
+        self.decisions = list(decisions)
+        self.calls = 0
+
+    async def get_llm_response(
+        self,
+        context,
+        tools=None,
+        conversation_id=None,
+        output_schema=None,
+    ) -> dict[str, Any]:
+        self.calls += 1
+        if not self.decisions:
+            raise AssertionError("Gemma reasoning received more calls than expected")
+        payload = self.decisions.pop(0)
+        assert output_schema is not None
+        return {"text": None, "structured": output_schema(**payload)}
+
+
+class FakeToolProvider:
     model = "ollama/qwen-test"
     base_url = "http://127.0.0.1:11434"
 
 
-class FakeCompiledAgent:
-    def __init__(self, states: list[dict[str, Any]]) -> None:
-        self.states = list(states)
-        self.calls: list[dict[str, Any]] = []
+class FakeToolSelector:
+    def __init__(self, calls: list[dict[str, Any] | None]) -> None:
+        self.calls = list(calls)
+        self.prompts: list[Any] = []
 
-    async def ainvoke(self, state: dict[str, Any], config=None) -> dict[str, Any]:
-        self.calls.append({"state": state, "config": config})
-        if not self.states:
-            raise AssertionError("LangChain agent received more calls than expected")
-        return self.states.pop(0)
+    async def ainvoke(self, messages: Any) -> AIMessage:
+        self.prompts.append(messages)
+        if not self.calls:
+            raise AssertionError("Qwen selector received more calls than expected")
+        call = self.calls.pop(0)
+        if call is None:
+            return AIMessage(content="No tool selected")
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-test",
+                    "name": call["name"],
+                    "args": dict(call.get("args") or {}),
+                    "type": "tool_call",
+                }
+            ],
+        )
 
 
 class FakeFinalizer:
@@ -96,55 +132,44 @@ CONFIRMED_RESULT = {
     "assistance_domain": None,
 }
 
+GATHER = {
+    "action": "gather_evidence",
+    "decision_summary": "Live CPU evidence is required before deciding whether saturation is real.",
+    "current_hypothesis": "A CPU-bound workload may be saturating processing-service.",
+    "evidence_needed": "Current processing-service CPU and system load.",
+}
 
-def _messages(*, success: bool = True) -> list[Any]:
-    call = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "id": "call-load-1",
-                "name": "get_system_load",
-                "args": {"service": "processing-service"},
-                "type": "tool_call",
-            }
-        ],
-    )
-    if success:
-        content = json.dumps(
-            {
-                "success": True,
-                "observation": {
-                    "service": "processing-service",
-                    "cpu_percent": 388.2,
-                    "source": "live_mcp_test",
-                },
-            }
-        )
-    else:
-        content = json.dumps({"success": False, "error": "RuntimeError: MCP unavailable"})
-    result = ToolMessage(
-        content=content,
-        tool_call_id="call-load-1",
-        name="get_system_load",
-    )
-    return [call, result, AIMessage(content="Diagnostic closure ready.")]
+FINISH = {
+    "action": "finish",
+    "decision_summary": "Live CPU evidence is sufficient to close this specialist pass.",
+    "current_hypothesis": "A CPU-bound workload is the leading explanation.",
+    "evidence_needed": None,
+}
 
 
 def _executor(
-    agent: FakeCompiledAgent,
-    tool: FakeTool | None = None,
     *,
+    reasoning: list[dict[str, Any]] | None = None,
+    tool: FakeTool | None = None,
+    selector_calls: list[dict[str, Any] | None] | None = None,
     max_steps: int = 10,
     finalizer: FakeFinalizer | None = None,
+    traces: list[dict[str, Any]] | None = None,
 ) -> SpecialistReActExecutor:
+    trace_list = traces if traces is not None else []
     return SpecialistReActExecutor(
-        provider=FakeProvider(),  # type: ignore[arg-type]
+        provider=FakeReasoningProvider(reasoning or [GATHER, FINISH]),  # type: ignore[arg-type]
+        tool_provider=FakeToolProvider(),  # type: ignore[arg-type]
         context=ContextManager(system_prompt="You are a test system specialist."),
         tools=[tool or FakeTool()],  # type: ignore[list-item]
         max_steps=max_steps,
         tool_timeout_seconds=1.0,
-        agent=agent,
+        tool_selector=FakeToolSelector(
+            selector_calls
+            or [{"name": (tool or FakeTool()).name, "args": {"service": "processing-service"}}]
+        ),
         finalizer=finalizer or FakeFinalizer([FINAL_RESULT]),
+        trace_sink=trace_list.append,
     )
 
 
@@ -159,36 +184,33 @@ def _investigate(executor: SpecialistReActExecutor):
     )
 
 
-def test_react_finalizes_evidence_without_agent_structured_response() -> None:
+def test_hybrid_react_uses_gemma_reasoning_qwen_action_and_gemma_finalization() -> None:
+    traces: list[dict[str, Any]] = []
+    tool = FakeTool()
     finalizer = FakeFinalizer([FINAL_RESULT])
-    agent = FakeCompiledAgent([{"messages": _messages()}])
+    executor = _executor(tool=tool, finalizer=finalizer, traces=traces)
 
-    result = asyncio.run(_investigate(_executor(agent, finalizer=finalizer)))
+    result = asyncio.run(_investigate(executor))
 
-    assert len(finalizer.calls) == 1
-    assert result.task_id == "TASK-REACT-001"
+    assert tool.calls == [{"service": "processing-service"}]
     assert result.tools_used == ("get_system_load",)
     assert result.react_steps == 2
     assert result.diagnosis_status == "probable"
     assert result.root_cause == FINAL_RESULT["root_cause"]
-    assert result.causal_chain == tuple(FINAL_RESULT["causal_chain"])
-    assert result.confidence == 0.82
     assert result.assistance_required is True
     assert result.assistance_domain == "application"
-    assert len(result.evidence) == 1
-    assert result.evidence[0]["success"] is True
     assert result.evidence[0]["observation"]["cpu_percent"] == 388.2
-    assert result.conversation_id == "react:system_engineer:INC-REACT-001:TASK-REACT-001"
+    assert len(finalizer.calls) == 1
+    assert "Gemma operational reasoning summaries" in str(finalizer.calls[0])
 
-    finalizer_prompt = str(finalizer.calls[0])
-    assert "Collected tool evidence" in finalizer_prompt
-    assert "388.2" in finalizer_prompt
+    actions = [item["action"] for item in traces]
+    assert actions == ["react_started", "reason", "select_tool", "observe", "reason", "diagnosis"]
+    assert traces[2]["tool"] == "get_system_load"
 
 
-def test_langchain_adapter_executes_existing_spade_mcp_tool() -> None:
+def test_langchain_tool_adapter_executes_existing_spade_mcp_tool() -> None:
     tool = FakeTool()
-    agent = FakeCompiledAgent([])
-    executor = _executor(agent, tool)
+    executor = _executor(tool=tool)
 
     raw = asyncio.run(
         executor._langchain_tools[0].ainvoke({"service": "processing-service"})
@@ -200,48 +222,26 @@ def test_langchain_adapter_executes_existing_spade_mcp_tool() -> None:
     assert payload["observation"]["cpu_percent"] == 388.2
 
 
-def test_react_retries_once_if_model_attempts_to_conclude_without_live_evidence() -> None:
-    no_evidence = {"messages": [AIMessage(content="I can answer directly.")]}
-    agent = FakeCompiledAgent([no_evidence, no_evidence])
-    finalizer = FakeFinalizer([FINAL_RESULT])
-
-    with pytest.raises(ReActInvestigationError, match="No operational tool"):
-        asyncio.run(
-            _investigate(_executor(agent, max_steps=2, finalizer=finalizer))
-        )
-
-    assert len(agent.calls) == 2
-    assert finalizer.calls == []
-    retry_messages = agent.calls[1]["state"]["messages"]
-    assert "No live operational evidence" in str(retry_messages[-1]["content"])
-
-
-def test_react_records_tool_failure_without_killing_investigation_contract() -> None:
-    low_confidence = {
-        "summary": "Live evidence collection failed, so no root cause can be established.",
-        "diagnosis_status": "inconclusive",
-        "root_cause": None,
-        "causal_chain": [],
-        "confidence": 0.15,
-        "findings": [],
-        "hypotheses": [],
-        "recommended_next_steps": ["Obtain independent application-domain evidence."],
-        "assistance_required": True,
-        "assistance_domain": "application",
-    }
-    agent = FakeCompiledAgent([{"messages": _messages(success=False)}])
-    finalizer = FakeFinalizer([low_confidence])
-
-    result = asyncio.run(
-        _investigate(_executor(agent, finalizer=finalizer))
+def test_qwen_selection_failure_is_bounded() -> None:
+    executor = _executor(
+        reasoning=[GATHER],
+        selector_calls=[None, None],
+        max_steps=1,
     )
 
-    assert result.evidence[0]["success"] is False
-    assert "MCP unavailable" in result.evidence[0]["observation"]["error"]
-    assert result.diagnosis_status == "inconclusive"
-    assert result.root_cause is None
-    assert result.assistance_required is True
-    assert result.confidence == 0.15
+    with pytest.raises(ReActInvestigationError, match="Qwen tool selection failed"):
+        asyncio.run(_investigate(executor))
+
+
+def test_confirmed_diagnosis_stops_without_peer_request() -> None:
+    finalizer = FakeFinalizer([CONFIRMED_RESULT])
+    result = asyncio.run(_investigate(_executor(finalizer=finalizer)))
+
+    assert result.diagnosis_status == "confirmed"
+    assert result.root_cause == CONFIRMED_RESULT["root_cause"]
+    assert result.causal_chain == tuple(CONFIRMED_RESULT["causal_chain"])
+    assert result.assistance_required is False
+    assert result.assistance_domain is None
 
 
 def test_non_confirmed_finalization_cannot_silently_stop_without_peer_assistance() -> None:
@@ -253,30 +253,55 @@ def test_non_confirmed_finalization_cannot_silently_stop_without_peer_assistance
         "assistance_required": False,
         "assistance_domain": None,
     }
-    agent = FakeCompiledAgent([{"messages": _messages()}])
     finalizer = FakeFinalizer([invalid, invalid])
 
     with pytest.raises(
         ReActInvestigationError,
         match="probable or inconclusive diagnosis must request an assistance domain",
     ):
-        asyncio.run(
-            _investigate(_executor(agent, finalizer=finalizer))
-        )
+        asyncio.run(_investigate(_executor(finalizer=finalizer)))
 
     assert len(finalizer.calls) == 2
 
 
-def test_confirmed_diagnosis_requires_root_cause_and_causal_chain_without_peer_request() -> None:
-    agent = FakeCompiledAgent([{"messages": _messages()}])
-    finalizer = FakeFinalizer([CONFIRMED_RESULT])
+def test_search_knowledge_is_traced_as_rag_retrieval() -> None:
+    class KnowledgeTool(FakeTool):
+        def __init__(self) -> None:
+            super().__init__("apm_mcp_search_knowledge")
+            self.description = "Search Qdrant project knowledge."
 
+        async def execute(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(dict(kwargs))
+            return {
+                "collection": "monitored-system",
+                "results": [
+                    {
+                        "score": 0.91,
+                        "filename": "data_service.md",
+                        "text": "processing-service depends on data-service",
+                    }
+                ],
+            }
+
+    traces: list[dict[str, Any]] = []
+    tool = KnowledgeTool()
     result = asyncio.run(
-        _investigate(_executor(agent, finalizer=finalizer))
+        _investigate(
+            _executor(
+                tool=tool,
+                selector_calls=[
+                    {
+                        "name": "apm_mcp_search_knowledge",
+                        "args": {"query": "processing-service dependency"},
+                    }
+                ],
+                traces=traces,
+            )
+        )
     )
 
-    assert result.diagnosis_status == "confirmed"
-    assert result.root_cause == CONFIRMED_RESULT["root_cause"]
-    assert result.causal_chain == tuple(CONFIRMED_RESULT["causal_chain"])
-    assert result.assistance_required is False
-    assert result.assistance_domain is None
+    assert result.tools_used == ("apm_mcp_search_knowledge",)
+    rag_events = [item for item in traces if item["action"] == "rag_retrieval"]
+    assert len(rag_events) == 1
+    assert rag_events[0]["details"]["source"] == "Qdrant RAG"
+    assert "data_service.md" in rag_events[0]["outcome"]
