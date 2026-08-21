@@ -56,7 +56,7 @@ class RuntimeConfig:
     agentspeak_bdi_max_concurrency: int = 2
     task_dispatch_timeout_seconds: float = 10.0
     max_llm_concurrency: int = 1
-    react_max_steps: int = 6
+    react_max_steps: int = 10
     react_tool_timeout_seconds: float = 30.0
     enable_test_anomaly_injection: bool = False
     enable_opensearch_anomaly_watcher: bool = True
@@ -180,7 +180,7 @@ def load_runtime_config() -> RuntimeConfig:
         os.getenv("AGENT_TASK_DISPATCH_TIMEOUT_SECONDS", "10")
     )
     max_llm_concurrency = int(os.getenv("AGENT_MAX_LLM_CONCURRENCY", "1"))
-    react_max_steps = int(os.getenv("AGENT_REACT_MAX_STEPS", "6"))
+    react_max_steps = int(os.getenv("AGENT_REACT_MAX_STEPS", "10"))
     react_tool_timeout_seconds = float(os.getenv("AGENT_REACT_TOOL_TIMEOUT_SECONDS", "30"))
     enable_test_anomaly_injection = _env_bool("ENABLE_TEST_ANOMALY_INJECTION", False)
     enable_opensearch_anomaly_watcher = _env_bool("ENABLE_OPENSEARCH_ANOMALY_WATCHER", True)
