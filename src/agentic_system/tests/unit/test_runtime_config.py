@@ -49,7 +49,7 @@ def test_runtime_config_loads_five_distinct_agents(monkeypatch: pytest.MonkeyPat
     assert config.agentspeak_bdi_max_concurrency == 2
     assert config.task_dispatch_timeout_seconds == 10.0
     assert config.max_llm_concurrency == 1
-    assert config.react_max_steps == 6
+    assert config.react_max_steps == 10
     assert config.react_tool_timeout_seconds == 30.0
     assert config.enable_test_anomaly_injection is False
     assert config.enable_opensearch_anomaly_watcher is True
