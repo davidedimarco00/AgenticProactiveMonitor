@@ -157,16 +157,17 @@ def _executor(
     traces: list[dict[str, Any]] | None = None,
 ) -> SpecialistReActExecutor:
     trace_list = traces if traces is not None else []
+    selected_tool = tool or FakeTool()
     return SpecialistReActExecutor(
         provider=FakeReasoningProvider(reasoning or [GATHER, FINISH]),  # type: ignore[arg-type]
         tool_provider=FakeToolProvider(),  # type: ignore[arg-type]
         context=ContextManager(system_prompt="You are a test system specialist."),
-        tools=[tool or FakeTool()],  # type: ignore[list-item]
+        tools=[selected_tool],  # type: ignore[list-item]
         max_steps=max_steps,
         tool_timeout_seconds=1.0,
         tool_selector=FakeToolSelector(
             selector_calls
-            or [{"name": (tool or FakeTool()).name, "args": {"service": "processing-service"}}]
+            or [{"name": selected_tool.name, "args": {"service": "processing-service"}}]
         ),
         finalizer=finalizer or FakeFinalizer([FINAL_RESULT]),
         trace_sink=trace_list.append,
@@ -201,7 +202,7 @@ def test_hybrid_react_uses_gemma_reasoning_qwen_action_and_gemma_finalization() 
     assert result.assistance_domain == "application"
     assert result.evidence[0]["observation"]["cpu_percent"] == 388.2
     assert len(finalizer.calls) == 1
-    assert "Gemma operational reasoning summaries" in str(finalizer.calls[0])
+    assert "Operational reasoning summaries" in str(finalizer.calls[0])
 
     actions = [item["action"] for item in traces]
     assert actions == ["react_started", "reason", "select_tool", "observe", "reason", "diagnosis"]
@@ -225,7 +226,7 @@ def test_langchain_tool_adapter_executes_existing_spade_mcp_tool() -> None:
 def test_qwen_selection_failure_is_bounded() -> None:
     executor = _executor(
         reasoning=[GATHER],
-        selector_calls=[None, None],
+        selector_calls=[None, None, None],
         max_steps=1,
     )
 
@@ -244,8 +245,8 @@ def test_confirmed_diagnosis_stops_without_peer_request() -> None:
     assert result.assistance_domain is None
 
 
-def test_non_confirmed_finalization_cannot_silently_stop_without_peer_assistance() -> None:
-    invalid = {
+def test_inconclusive_finalization_can_stop_without_artificial_peer_request() -> None:
+    inconclusive = {
         **FINAL_RESULT,
         "diagnosis_status": "inconclusive",
         "root_cause": None,
@@ -253,15 +254,15 @@ def test_non_confirmed_finalization_cannot_silently_stop_without_peer_assistance
         "assistance_required": False,
         "assistance_domain": None,
     }
-    finalizer = FakeFinalizer([invalid, invalid])
+    finalizer = FakeFinalizer([inconclusive])
 
-    with pytest.raises(
-        ReActInvestigationError,
-        match="probable or inconclusive diagnosis must request an assistance domain",
-    ):
-        asyncio.run(_investigate(_executor(finalizer=finalizer)))
+    result = asyncio.run(_investigate(_executor(finalizer=finalizer)))
 
-    assert len(finalizer.calls) == 2
+    assert result.diagnosis_status == "inconclusive"
+    assert result.root_cause is None
+    assert result.assistance_required is False
+    assert result.assistance_domain is None
+    assert len(finalizer.calls) == 1
 
 
 def test_search_knowledge_is_traced_as_rag_retrieval() -> None:
