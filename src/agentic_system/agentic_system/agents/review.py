@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+from pydantic import BaseModel
 from spade_llm.context import ContextManager
 from spade_llm.providers.base_provider import BaseLLMProvider
 
@@ -13,6 +14,20 @@ LOGGER = logging.getLogger("agentic_system.agents.review")
 _ALLOWED_DECISIONS = {"resolve", "operator_action_required", "request_support"}
 _ALLOWED_SUPPORT_DOMAINS = {"system", "network", "application", "software"}
 _MAX_REVIEW_ATTEMPTS = 3
+
+
+class _TechnicalLeadReviewOutput(BaseModel):
+    """Schema requested from Ollama/LiteLLM for the TL critic response."""
+
+    decision: str
+    confidence: float
+    diagnosis_summary: str
+    root_cause: str
+    rationale: str
+    remediation_summary: str
+    remediation_steps: list[str]
+    support_domain: str | None = None
+    support_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,10 +142,10 @@ network, application, software. support_reason must be null unless support is re
                 context,
                 tools=None,
                 conversation_id=conversation_id,
+                output_schema=_TechnicalLeadReviewOutput,
             )
-            text = str(response.get("text") or "").strip()
             try:
-                assessment = self._parse_response(text)
+                assessment = self._assessment_from_response(response)
             except RuntimeError as exc:
                 last_error = exc
                 if attempt >= self.max_attempts:
@@ -168,8 +183,25 @@ network, application, software. support_reason must be null unless support is re
 
         raise last_error or RuntimeError("Technical Lead review reasoning failed")
 
-    @staticmethod
-    def _parse_response(raw_text: str) -> TechnicalLeadReviewAssessment:
+    @classmethod
+    def _assessment_from_response(cls, response: dict[str, Any]) -> TechnicalLeadReviewAssessment:
+        structured = response.get("structured")
+        if structured is not None:
+            if isinstance(structured, BaseModel):
+                payload = structured.model_dump()
+            elif isinstance(structured, dict):
+                payload = dict(structured)
+            else:
+                raise RuntimeError(
+                    "Technical Lead structured review returned an unsupported object"
+                )
+            return cls._parse_payload(payload)
+
+        text = str(response.get("text") or "").strip()
+        return cls._parse_response(text)
+
+    @classmethod
+    def _parse_response(cls, raw_text: str) -> TechnicalLeadReviewAssessment:
         text = raw_text.strip()
         if text.startswith("```"):
             lines = text.splitlines()
@@ -187,7 +219,10 @@ network, application, software. support_reason must be null unless support is re
             ) from exc
         if not isinstance(payload, dict):
             raise RuntimeError("Technical Lead review response must be a JSON object")
+        return cls._parse_payload(payload)
 
+    @staticmethod
+    def _parse_payload(payload: dict[str, Any]) -> TechnicalLeadReviewAssessment:
         decision = str(payload.get("decision") or "").strip().lower()
         if decision not in _ALLOWED_DECISIONS:
             raise RuntimeError(f"Technical Lead review returned invalid decision: {decision!r}")
