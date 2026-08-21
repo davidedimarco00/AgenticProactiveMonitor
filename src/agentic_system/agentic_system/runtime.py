@@ -286,6 +286,19 @@ class AgentRuntime:
                 raise RuntimeError(f"Specialist result {name} must be an array")
             return tuple(str(item).strip() for item in value if str(item).strip())
 
+        diagnosis_status = str(payload.get("diagnosis_status") or "").strip().lower()
+        if diagnosis_status not in {"confirmed", "probable", "inconclusive"}:
+            raise RuntimeError(
+                f"Specialist result diagnosis_status is invalid: {diagnosis_status!r}"
+            )
+        root_cause_raw = payload.get("root_cause")
+        root_cause = (
+            str(root_cause_raw).strip() if root_cause_raw is not None else None
+        )
+        if root_cause in {"", "none", "null", "unknown", "unconfirmed"}:
+            root_cause = None
+        causal_chain = strings("causal_chain")
+
         evidence_raw = payload.get("evidence") or []
         if not isinstance(evidence_raw, list):
             raise RuntimeError("Specialist result evidence must be an array")
@@ -295,6 +308,36 @@ class AgentRuntime:
         if react_steps <= 0:
             raise RuntimeError("Specialist result react_steps must be greater than zero")
 
+        assistance_required = payload.get("assistance_required", False)
+        if not isinstance(assistance_required, bool):
+            raise RuntimeError("Specialist result assistance_required must be boolean")
+        assistance_domain = (
+            str(payload.get("assistance_domain")).strip().lower()
+            if payload.get("assistance_domain") is not None
+            else None
+        )
+        if assistance_domain in {"", "none", "null"}:
+            assistance_domain = None
+
+        if diagnosis_status in {"confirmed", "probable"}:
+            if not root_cause:
+                raise RuntimeError(
+                    f"Specialist {diagnosis_status} result requires root_cause"
+                )
+            if not causal_chain:
+                raise RuntimeError(
+                    f"Specialist {diagnosis_status} result requires causal_chain"
+                )
+        if diagnosis_status == "confirmed":
+            if assistance_required or assistance_domain is not None:
+                raise RuntimeError(
+                    "Confirmed specialist diagnosis cannot request diagnostic assistance"
+                )
+        elif not assistance_required or assistance_domain is None:
+            raise RuntimeError(
+                "Probable or inconclusive specialist diagnosis must request assistance"
+            )
+
         return InvestigationTaskResultReceipt(
             task_id=task_id,
             incident_id=incident_id,
@@ -303,17 +346,16 @@ class AgentRuntime:
             correlation_id=message.correlation_id,
             succeeded=True,
             summary=str(payload.get("summary") or "").strip(),
+            diagnosis_status=diagnosis_status,
+            root_cause=root_cause,
+            causal_chain=causal_chain,
             confidence=confidence,
             findings=strings("findings"),
             evidence=evidence,
             hypotheses=strings("hypotheses"),
             recommended_next_steps=strings("recommended_next_steps"),
-            assistance_required=bool(payload.get("assistance_required", False)),
-            assistance_domain=(
-                str(payload.get("assistance_domain")).strip().lower()
-                if payload.get("assistance_domain") is not None
-                else None
-            ),
+            assistance_required=assistance_required,
+            assistance_domain=assistance_domain,
             react_steps=react_steps,
             tools_used=strings("tools_used"),
             conversation_id=str(payload.get("conversation_id") or "").strip() or None,
