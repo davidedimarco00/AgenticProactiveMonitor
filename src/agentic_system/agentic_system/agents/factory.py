@@ -8,6 +8,7 @@ from .application_engineer import ApplicationEngineerAgent
 from .base import BaseAgent
 from .network_engineer import NetworkEngineerAgent
 from .software_developer import SoftwareDeveloperAgent
+from .specialist import SpecialistAgent
 from .system_engineer import SystemEngineerAgent
 from .technical_lead import TechnicalLeadAgent
 
@@ -55,7 +56,7 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
         else:
             # Every specialist owns an independent AgentSpeak runtime instance.
             # The common plan defines the BDI lifecycle; role-specific expertise
-            # remains in each agent's prompt and later ReAct execution.
+            # remains in each agent's prompt and operational ReAct execution.
             common_kwargs.update(
                 {
                     "agentspeak_specialist_asl": config.agentspeak_specialist_asl,
@@ -64,14 +65,18 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
                 }
             )
 
-        agents.append(
-            constructor(
-                spec.jid,
-                spec.password,
-                spec.display_name,
-                spec.health_port,
-                **common_kwargs,
-            )
+        agent = constructor(
+            spec.jid,
+            spec.password,
+            spec.display_name,
+            spec.health_port,
+            **common_kwargs,
         )
+        if isinstance(agent, SpecialistAgent):
+            agent.configure_react(
+                max_steps=config.react_max_steps,
+                tool_timeout_seconds=config.react_tool_timeout_seconds,
+            )
+        agents.append(agent)
 
     return agents
