@@ -1,8 +1,11 @@
 from .bdi import (
     AgentSpeakBDIRuntime,
+    BDIReviewAssessment,
+    BDIReviewResult,
     BDISpecialistTaskResult,
     BDITriageAssessment,
     BDITriageResult,
+    TechnicalLeadReviewBDIRuntime,
 )
 from .langchain_agent import (
     ReActEvidence,
@@ -11,11 +14,6 @@ from .langchain_agent import (
     SpecialistReActExecutor,
 )
 from .models import RoleLLMProvider, SharedInferenceGate
-from .review_bdi import (
-    BDIReviewAssessment,
-    BDIReviewResult,
-    TechnicalLeadReviewBDIRuntime,
-)
 
 __all__ = [
     "AgentSpeakBDIRuntime",
