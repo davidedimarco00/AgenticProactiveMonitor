@@ -22,6 +22,7 @@ ROLE_CONSTRUCTORS: dict[str, type[BaseAgent]] = {
 }
 
 MCP_SERVER_NAME = "apm_mcp"
+MIN_DIAGNOSTIC_REACT_STEPS = 10
 
 
 def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
@@ -73,8 +74,11 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
             **common_kwargs,
         )
         if isinstance(agent, SpecialistAgent):
+            # Diagnostic closure now requires hypothesis testing, not only evidence
+            # collection. Keep a ten-step minimum while still allowing operators to
+            # configure a larger bounded budget through AGENT_REACT_MAX_STEPS.
             agent.configure_react(
-                max_steps=config.react_max_steps,
+                max_steps=max(config.react_max_steps, MIN_DIAGNOSTIC_REACT_STEPS),
                 tool_timeout_seconds=config.react_tool_timeout_seconds,
             )
         agents.append(agent)
