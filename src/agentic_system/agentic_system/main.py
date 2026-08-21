@@ -19,6 +19,7 @@ from .incidents import (
     IncidentCorrelationPolicy,
     IncidentWorkflow,
     IncidentWorkflowResult,
+    ReActIncidentCoordinator,
 )
 from .integrations import IncidentRepository, MongoAnomalyInbox, OpenSearchDetectorCatalog
 from .runtime import AgentRuntime
@@ -218,7 +219,7 @@ async def _run_backend() -> None:
     task_workflow = AgentTaskWorkflow(repository)
     runtime = AgentRuntime(config)
     runtime.anomaly_intake.anomaly_inbox = anomaly_inbox
-    incident_coordinator = IncidentCoordinator(
+    incident_coordinator = ReActIncidentCoordinator(
         incident_workflow,
         runtime,
         detector_context,
