@@ -58,7 +58,10 @@ class RuntimeConfig:
     max_llm_concurrency: int = 1
     react_max_steps: int = 10
     react_tool_timeout_seconds: float = 30.0
-    enable_test_anomaly_injection: bool = False
+    # Synthetic anomaly injection is a first-class local/E2E test capability.
+    # Production-like deployments can explicitly disable it with
+    # ENABLE_TEST_ANOMALY_INJECTION=false, which removes the route entirely.
+    enable_test_anomaly_injection: bool = True
     enable_opensearch_anomaly_watcher: bool = True
 
 
@@ -182,7 +185,7 @@ def load_runtime_config() -> RuntimeConfig:
     max_llm_concurrency = int(os.getenv("AGENT_MAX_LLM_CONCURRENCY", "1"))
     react_max_steps = int(os.getenv("AGENT_REACT_MAX_STEPS", "10"))
     react_tool_timeout_seconds = float(os.getenv("AGENT_REACT_TOOL_TIMEOUT_SECONDS", "30"))
-    enable_test_anomaly_injection = _env_bool("ENABLE_TEST_ANOMALY_INJECTION", False)
+    enable_test_anomaly_injection = _env_bool("ENABLE_TEST_ANOMALY_INJECTION", True)
     enable_opensearch_anomaly_watcher = _env_bool("ENABLE_OPENSEARCH_ANOMALY_WATCHER", True)
     ollama_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").strip()
     reasoning_model = os.getenv("OLLAMA_REASONING_MODEL", "gemma4:e2b").strip()
