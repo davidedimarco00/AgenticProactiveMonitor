@@ -53,12 +53,12 @@ class FakeAsyncClient:
         return FakeResponse()
 
 
-def test_native_ollama_finalizer_disables_thinking_and_sends_json_schema(
+def test_native_ollama_finalizer_uses_gemma_without_thinking_and_sends_json_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(langchain_agent.httpx, "AsyncClient", FakeAsyncClient)
     finalizer = _OllamaSchemaFinalizer(
-        model="qwen3.5:4b",
+        model="gemma4:e2b",
         base_url="http://127.0.0.1:11434",
         timeout_seconds=120.0,
     )
@@ -74,7 +74,7 @@ def test_native_ollama_finalizer_disables_thinking_and_sends_json_schema(
 
     payload = FakeAsyncClient.captured["json"]
     assert FakeAsyncClient.captured["url"] == "http://127.0.0.1:11434/api/chat"
-    assert payload["model"] == "qwen3.5:4b"
+    assert payload["model"] == "gemma4:e2b"
     assert payload["stream"] is False
     assert payload["think"] is False
     assert payload["options"]["temperature"] == 0
@@ -98,7 +98,7 @@ def test_native_ollama_finalizer_rejects_empty_final_content(
 
     monkeypatch.setattr(langchain_agent.httpx, "AsyncClient", EmptyClient)
     finalizer = _OllamaSchemaFinalizer(
-        model="qwen3.5:4b",
+        model="gemma4:e2b",
         base_url="http://127.0.0.1:11434",
         timeout_seconds=120.0,
     )
