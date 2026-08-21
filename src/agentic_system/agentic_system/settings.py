@@ -56,6 +56,8 @@ class RuntimeConfig:
     agentspeak_bdi_max_concurrency: int = 2
     task_dispatch_timeout_seconds: float = 10.0
     max_llm_concurrency: int = 1
+    react_max_steps: int = 6
+    react_tool_timeout_seconds: float = 30.0
     enable_test_anomaly_injection: bool = False
     enable_opensearch_anomaly_watcher: bool = True
 
@@ -178,6 +180,8 @@ def load_runtime_config() -> RuntimeConfig:
         os.getenv("AGENT_TASK_DISPATCH_TIMEOUT_SECONDS", "10")
     )
     max_llm_concurrency = int(os.getenv("AGENT_MAX_LLM_CONCURRENCY", "1"))
+    react_max_steps = int(os.getenv("AGENT_REACT_MAX_STEPS", "6"))
+    react_tool_timeout_seconds = float(os.getenv("AGENT_REACT_TOOL_TIMEOUT_SECONDS", "30"))
     enable_test_anomaly_injection = _env_bool("ENABLE_TEST_ANOMALY_INJECTION", False)
     enable_opensearch_anomaly_watcher = _env_bool("ENABLE_OPENSEARCH_ANOMALY_WATCHER", True)
     ollama_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").strip()
@@ -228,6 +232,10 @@ def load_runtime_config() -> RuntimeConfig:
         raise RuntimeError("AGENT_TASK_DISPATCH_TIMEOUT_SECONDS must be greater than zero")
     if max_llm_concurrency <= 0:
         raise RuntimeError("AGENT_MAX_LLM_CONCURRENCY must be greater than zero")
+    if react_max_steps <= 0:
+        raise RuntimeError("AGENT_REACT_MAX_STEPS must be greater than zero")
+    if react_tool_timeout_seconds <= 0:
+        raise RuntimeError("AGENT_REACT_TOOL_TIMEOUT_SECONDS must be greater than zero")
 
     return RuntimeConfig(
         agents=tuple(agents),
@@ -257,6 +265,8 @@ def load_runtime_config() -> RuntimeConfig:
         agentspeak_bdi_max_concurrency=agentspeak_bdi_max_concurrency,
         task_dispatch_timeout_seconds=task_dispatch_timeout_seconds,
         max_llm_concurrency=max_llm_concurrency,
+        react_max_steps=react_max_steps,
+        react_tool_timeout_seconds=react_tool_timeout_seconds,
         enable_test_anomaly_injection=enable_test_anomaly_injection,
         enable_opensearch_anomaly_watcher=enable_opensearch_anomaly_watcher,
     )
