@@ -154,7 +154,12 @@ def test_react_executes_tool_and_challenges_early_stop_before_final_result() -> 
     assert len(result.evidence) == 1
     assert result.evidence[0]["success"] is True
     assert result.evidence[0]["observation"]["cpu_percent"] == 388.2
-    assert "diagnostic closure check" in provider.calls[2]["prompt"]
+    closure_prompt = provider.calls[2]["prompt"]
+    assert any(
+        "diagnostic closure check" in str(message.get("content") or "")
+        for message in closure_prompt
+        if isinstance(message, dict)
+    )
     assert provider.calls[-1]["output_schema"] is not None
     assert result.conversation_id == "react:system_engineer:INC-REACT-001:TASK-REACT-001"
 
