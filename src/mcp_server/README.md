@@ -45,6 +45,19 @@ http://127.0.0.1:8000/mcp
 - `get_disk_usage()` retrieves filesystem, inode and writable-layer usage.
 - `get_network_connections()` retrieves TCP/UDP sockets and active connections.
 
+### Controlled Diagnostic Execution
+
+The diagnostic execution layer allows a specialist to collect additional live evidence instead of merely recommending that an operator run a diagnostic command later.
+
+- `get_process_threads()` inspects threads of one process and their CPU/memory usage.
+- `inspect_process()` reads selected `/proc/<pid>` status, command-line and I/O information.
+- `get_process_tree()` returns parent/child process relationships with resource usage.
+- `resolve_service_dns()` resolves one allow-listed monitored service from another monitored service.
+- `test_tcp_connection()` performs one bounded TCP connect test between allow-listed monitored services.
+- `check_http_endpoint()` performs one read-only HTTP GET between allow-listed monitored services.
+
+These tools are intentionally **not** a generic shell. Their commands, protocols and target space are fixed or validated by the implementation. They are intended for autonomous diagnosis, not autonomous remediation.
+
 ### Knowledge Base / RAG
 
 `search_knowledge(query, limit=5)` embeds the query using Ollama and retrieves relevant chunks from the single shared Qdrant collection:
@@ -59,7 +72,7 @@ There are no role-specific knowledge collections. General Linux, networking, app
 
 The knowledge tool is read-only. Retrieved documents provide system-specific context; live OpenSearch, Docker and other runtime observations remain the evidence used by the agents to formulate a diagnosis.
 
-## Allowed Monitored Targets
+## Safety Boundary
 
 Docker access is restricted to the five containers of the standalone monitored system:
 
@@ -71,7 +84,7 @@ data-service
 worker-service
 ```
 
-The MCP server does not expose a generic shell. Diagnostic commands are fixed in the implementation and the current tools are read-only.
+The MCP server does not expose `run_shell`, `docker_exec`, `ssh_exec` or another arbitrary command primitive. Diagnostic actions are bounded and read-only. Actions that change service state, terminate processes, restart containers, change configuration or deploy code remain operator-facing remediation recommendations produced by the Technical Lead.
 
 ## Docker Integration
 
