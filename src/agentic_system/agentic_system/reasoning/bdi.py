@@ -19,6 +19,7 @@ _ALLOWED_ROLES = {
     "software_developer",
 }
 _ALLOWED_DOMAINS = {"system", "network", "application", "software"}
+_ALLOWED_REVIEW_DECISIONS = {"resolve", "operator_action_required", "request_support"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,36 @@ class BDITriageResult:
 
 
 @dataclass(frozen=True, slots=True)
+class BDIReviewAssessment:
+    decision: str
+    confidence: float
+    diagnosis_summary: str
+    root_cause: str
+    rationale: str
+    remediation_summary: str
+    remediation_steps: tuple[str, ...]
+    support_domain: str | None = None
+    support_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BDIReviewResult:
+    incident_id: str
+    goal: str
+    review_intention: str
+    decision_intention: str
+    decision: str
+    confidence: float
+    diagnosis_summary: str
+    root_cause: str
+    rationale: str
+    remediation_summary: str
+    remediation_steps: tuple[str, ...]
+    support_domain: str | None
+    support_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class BDISpecialistTaskResult:
     """Specialist BDI decision after receiving one durable investigation task."""
 
@@ -54,14 +85,17 @@ class BDISpecialistTaskResult:
 
 
 TriageCallback = Callable[[], Awaitable[BDITriageAssessment]]
+ReviewCallback = Callable[[], Awaitable[BDIReviewAssessment]]
 
 
 class AgentSpeakBDIRuntime:
-    """In-process AgentSpeak runtime used by the SPADE agents.
+    """Single AgentSpeak bridge used by both Technical Lead and specialists.
 
-    Each SPADE agent owns its own instance of this bridge. AgentSpeak owns
-    beliefs, goals, plan selection and intentions; Python only hosts the
-    interpreter and exposes narrow bridge actions to the asynchronous runtime.
+    A Technical Lead instance loads one AgentSpeak policy containing triage,
+    specialist selection and post-investigation review plans. A specialist
+    instance loads the specialist policy. Python only hosts the interpreter and
+    exposes narrow bridge actions; beliefs, goals and intentions remain explicit
+    AgentSpeak constructs.
     """
 
     def __init__(
@@ -114,7 +148,6 @@ class AgentSpeakBDIRuntime:
 
         available = self._validate_available_agents(available_agents)
         event_loop = asyncio.get_running_loop()
-
         async with self._semaphore:
             return await asyncio.to_thread(
                 self._run_technical_lead,
@@ -123,6 +156,29 @@ class AgentSpeakBDIRuntime:
                 available,
                 event_loop,
                 triage_callback,
+            )
+
+    async def review_specialist_result(
+        self,
+        *,
+        incident_id: str,
+        review_callback: ReviewCallback,
+    ) -> BDIReviewResult:
+        """Run the Technical Lead critic goal through the same BDI runtime."""
+
+        if self._technical_lead_plan is None:
+            raise RuntimeError("Technical Lead AgentSpeak plan is not configured")
+        normalized = incident_id.strip()
+        if not normalized:
+            raise ValueError("Technical Lead review BDI requires incident_id")
+
+        event_loop = asyncio.get_running_loop()
+        async with self._semaphore:
+            return await asyncio.to_thread(
+                self._run_review,
+                normalized,
+                event_loop,
+                review_callback,
             )
 
     async def accept_specialist_task(
@@ -134,14 +190,7 @@ class AgentSpeakBDIRuntime:
         task_type: str,
         peer_role: str | None = None,
     ) -> BDISpecialistTaskResult:
-        """Deliberate a received specialist task before operational ReAct starts.
-
-        A normal task produces an `investigate_incident` intention. When an
-        authorized peer context has already been received over XMPP, AgentSpeak
-        also receives a `peer_context_available` belief and commits the distinct
-        `investigate_with_peer` intention. ReAct executes either intention using
-        operational MCP/RAG evidence.
-        """
+        """Deliberate a received specialist task before operational ReAct starts."""
 
         if self._specialist_plan is None:
             raise RuntimeError("Specialist AgentSpeak plan is not configured")
@@ -189,7 +238,6 @@ class AgentSpeakBDIRuntime:
             "assessment": None,
             "primary_investigator": None,
         }
-
         actions = agentspeak.Actions(agentspeak.stdlib.actions)
 
         @actions.add_procedure(
@@ -210,7 +258,6 @@ class AgentSpeakBDIRuntime:
 
             normalized = self._validate_assessment(assessment, available_agents)
             state["assessment"] = normalized
-
             self._add_belief(agent, "triage_complete", incident_id)
             self._add_belief(
                 agent,
@@ -224,12 +271,7 @@ class AgentSpeakBDIRuntime:
                 incident_id,
                 agentspeak.Literal(normalized.recommended_agent),
             )
-            self._add_belief(
-                agent,
-                "triage_confidence",
-                incident_id,
-                normalized.confidence,
-            )
+            self._add_belief(agent, "triage_confidence", incident_id, normalized.confidence)
             self._add_belief(agent, "triage_rationale", incident_id, normalized.rationale)
 
         @actions.add_procedure(
@@ -284,6 +326,93 @@ class AgentSpeakBDIRuntime:
             primary_investigator=primary,
             confidence=assessment.confidence,
             rationale=assessment.rationale,
+        )
+
+    def _run_review(
+        self,
+        incident_id: str,
+        event_loop: asyncio.AbstractEventLoop,
+        review_callback: ReviewCallback,
+    ) -> BDIReviewResult:
+        state: dict[str, object] = {
+            "review_intention": None,
+            "decision_intention": None,
+            "assessment": None,
+            "decision": None,
+        }
+        actions = agentspeak.Actions(agentspeak.stdlib.actions)
+
+        @actions.add_procedure(
+            ".run_tl_review",
+            (agentspeak.runtime.Agent, agentspeak.asl_str),
+        )
+        def run_tl_review(agent: agentspeak.runtime.Agent, action_incident_id: str) -> None:
+            if action_incident_id != incident_id:
+                raise RuntimeError("AgentSpeak review action received a different incident_id")
+            state["review_intention"] = "review_specialist_result"
+            future = asyncio.run_coroutine_threadsafe(review_callback(), event_loop)
+            try:
+                assessment = future.result(timeout=self.action_timeout_seconds)
+            except FutureTimeoutError:
+                future.cancel()
+                raise RuntimeError("Technical Lead review reasoning timed out") from None
+            if assessment.decision not in _ALLOWED_REVIEW_DECISIONS:
+                raise RuntimeError(
+                    f"Unsupported Technical Lead review decision: {assessment.decision}"
+                )
+            state["assessment"] = assessment
+            self._add_belief(agent, "review_complete", incident_id)
+            self._add_belief(
+                agent,
+                "review_decision",
+                incident_id,
+                agentspeak.Literal(assessment.decision),
+            )
+
+        @actions.add_procedure(
+            ".commit_tl_review_decision",
+            (agentspeak.asl_str, agentspeak.asl_str),
+        )
+        def commit_tl_review_decision(action_incident_id: str, decision: str) -> None:
+            if action_incident_id != incident_id:
+                raise RuntimeError("AgentSpeak review commit received a different incident_id")
+            if decision not in _ALLOWED_REVIEW_DECISIONS:
+                raise RuntimeError(f"AgentSpeak committed invalid review decision: {decision}")
+            state["decision_intention"] = "commit_review_decision"
+            state["decision"] = decision
+
+        source = agentspeak.StringSource(
+            "technical_lead_review_runtime.asl",
+            self._build_review_program(incident_id),
+        )
+        environment = agentspeak.runtime.Environment()
+        agent = environment.build_agent(source, actions, name="technical_lead_review_bdi")
+        environment.run_agent(agent)
+
+        assessment = state["assessment"]
+        if not isinstance(assessment, BDIReviewAssessment):
+            raise RuntimeError("AgentSpeak did not execute Technical Lead review reasoning")
+        if state["review_intention"] != "review_specialist_result":
+            raise RuntimeError("AgentSpeak did not commit to review_specialist_result")
+        if state["decision_intention"] != "commit_review_decision":
+            raise RuntimeError("AgentSpeak did not commit the review decision")
+        if state["decision"] != assessment.decision:
+            raise RuntimeError("AgentSpeak review decision differs from the critic assessment")
+
+        return BDIReviewResult(
+            incident_id=incident_id,
+            goal="review_investigation",
+            review_intention="review_specialist_result",
+            decision_intention="commit_review_decision",
+            decision=assessment.decision,
+            confidence=assessment.confidence,
+            diagnosis_summary=assessment.diagnosis_summary,
+            root_cause=assessment.root_cause,
+            rationale=assessment.rationale,
+            remediation_summary=assessment.remediation_summary,
+            remediation_steps=assessment.remediation_steps,
+            support_domain=assessment.support_domain,
+            support_reason=assessment.support_reason,
         )
 
     def _run_specialist(
@@ -411,10 +540,29 @@ class AgentSpeakBDIRuntime:
         for available_role in available_agents:
             lines.append(f"agent_available({available_role}).")
 
-        lines.append(f"!manage_incident({incident}).")
-        lines.append("")
-        lines.append(self._technical_lead_plan)
+        lines.extend(
+            [
+                f"!manage_incident({incident}).",
+                "",
+                self._technical_lead_plan,
+            ]
+        )
         return "\n".join(lines)
+
+    def _build_review_program(self, incident_id: str) -> str:
+        if self._technical_lead_plan is None:
+            raise RuntimeError("Technical Lead AgentSpeak plan is not configured")
+        incident = json.dumps(incident_id)
+        return "\n".join(
+            [
+                f"incident({incident}).",
+                f"incident_status({incident}, under_analysis).",
+                f"specialist_result_received({incident}).",
+                f"!review_investigation_result({incident}).",
+                "",
+                self._technical_lead_plan,
+            ]
+        )
 
     def _build_specialist_program(
         self,
@@ -499,3 +647,8 @@ class AgentSpeakBDIRuntime:
             confidence=confidence,
             rationale=rationale,
         )
+
+
+# Backward-compatible public name for callers/tests that used the dedicated
+# review runtime. It now resolves to the same unified Technical Lead BDI bridge.
+TechnicalLeadReviewBDIRuntime = AgentSpeakBDIRuntime
