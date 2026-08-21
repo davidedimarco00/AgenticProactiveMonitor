@@ -6,7 +6,7 @@ from typing import Any
 from spade.behaviour import CyclicBehaviour, OneShotBehaviour
 from spade.template import Template
 from spade_llm.mcp import MCPServerConfig
-from spade_llm.providers import LLMProvider
+from spade_llm.providers.base_provider import BaseLLMProvider
 
 from ..reasoning import (
     AgentSpeakBDIRuntime,
@@ -44,7 +44,7 @@ INVESTIGATION_TASK_EXECUTION_FAILED_TYPE = "investigation_task_execution_failed"
 
 
 class SpecialistAgent(BaseAgent):
-    """Shared BDI + ReAct base for the four specialist SPADE-LLM agents."""
+    """Shared BDI + hybrid ReAct base for the four specialist SPADE agents."""
 
     class HealthProbeRequestBehaviour(CyclicBehaviour):
         async def run(self) -> None:
@@ -207,6 +207,15 @@ class SpecialistAgent(BaseAgent):
                 )
             except Exception as exc:
                 self.agent.last_react_error = str(exc)
+                self.agent.record_trace(
+                    {
+                        "action": "react_failed",
+                        "reason": "Hybrid specialist execution failed; durable task retry policy decides whether to retry.",
+                        "incident_id": assignment.incident_id,
+                        "task_id": assignment.task_id,
+                        "outcome": str(exc),
+                    }
+                )
                 self.agent.set_activity(
                     "IDLE",
                     incident_id=assignment.incident_id,
@@ -266,14 +275,7 @@ class SpecialistAgent(BaseAgent):
                         f"not {self.agent.role}"
                     )
 
-                # Peer context is deliberately delivered before the TL dispatches
-                # a support task. Therefore it is available as an explicit BDI
-                # belief at deliberation time, not merely as an LLM prompt later.
                 peer_context = self.agent._peer_context_by_task.get(assignment.task_id)
-
-                # Duplicate delivery is expected with at-least-once dispatch.
-                # BDI acceptance is idempotent and ReAct execution is guarded by
-                # task_id so a retry cannot start two investigations locally.
                 deliberation = self.agent._accepted_tasks.get(assignment.task_id)
                 if deliberation is None:
                     self.agent.set_activity(
@@ -298,6 +300,21 @@ class SpecialistAgent(BaseAgent):
                 self.agent.last_task_assignment = assignment
                 self.agent.last_bdi_task_result = deliberation
                 self.agent.last_request_error = None
+                self.agent.record_trace(
+                    {
+                        "action": "bdi_intention",
+                        "reason": (
+                            f"AgentSpeak accepted goal {deliberation.goal} and committed "
+                            f"intention {deliberation.investigation_intention}."
+                        ),
+                        "incident_id": assignment.incident_id,
+                        "task_id": assignment.task_id,
+                        "outcome": (
+                            f"acceptance={deliberation.acceptance_intention}; "
+                            f"peer={peer_context['peer_role'] if peer_context is not None else 'none'}"
+                        ),
+                    }
+                )
                 self.agent.set_activity(
                     "WORKING",
                     incident_id=assignment.incident_id,
@@ -389,7 +406,8 @@ class SpecialistAgent(BaseAgent):
         *,
         role: str,
         system_prompt: str,
-        provider: LLMProvider,
+        provider: BaseLLMProvider,
+        tool_provider: BaseLLMProvider,
         mcp_servers: list[MCPServerConfig],
         interaction_memory_path: str,
         agentspeak_specialist_asl: str,
@@ -402,10 +420,15 @@ class SpecialistAgent(BaseAgent):
             role=role,
             display_name=display_name,
             health_port=health_port,
-            provider=provider,
+            provider=provider,  # type: ignore[arg-type]
             mcp_servers=mcp_servers,
             system_prompt=system_prompt,
             interaction_memory_path=interaction_memory_path,
+        )
+        self._tool_provider = tool_provider
+        self.set_model_roles(
+            reasoning=str(provider.model),
+            tool_selection=str(tool_provider.model),
         )
         self._bdi_runtime = AgentSpeakBDIRuntime(
             specialist_asl=agentspeak_specialist_asl,
@@ -453,10 +476,12 @@ class SpecialistAgent(BaseAgent):
 
         self._react_executor = SpecialistReActExecutor(
             provider=self.provider,
+            tool_provider=self._tool_provider,
             context=self.context,
             tools=list(self.tools),
             max_steps=self._react_max_steps,
             tool_timeout_seconds=self._react_tool_timeout_seconds,
+            trace_sink=self.record_trace,
         )
 
         health_template = Template()
