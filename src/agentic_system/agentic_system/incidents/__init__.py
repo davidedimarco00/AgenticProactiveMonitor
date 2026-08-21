@@ -9,6 +9,7 @@ from .contracts import (
     IncidentTriageReceipt,
     InvestigationTaskDispatchReceipt,
     InvestigationTaskResultReceipt,
+    TechnicalLeadReviewReceipt,
 )
 from .coordinator import IncidentCoordinator as BaseIncidentCoordinator
 from .ingestion import AnomalyIntake
@@ -25,9 +26,6 @@ from .tasks import (
 )
 from .workflow import IncidentWorkflow
 
-# The ReAct branch keeps the existing import surface stable: application code and
-# tests that import IncidentCoordinator receive the ReAct-aware extension, while
-# BaseIncidentCoordinator remains available for isolated state-machine tests.
 IncidentCoordinator = ReActIncidentCoordinator
 
 __all__ = [
@@ -48,6 +46,7 @@ __all__ = [
     "IncidentTriageReceipt",
     "InvestigationTaskDispatchReceipt",
     "InvestigationTaskResultReceipt",
+    "TechnicalLeadReviewReceipt",
     "IncidentWorkflow",
     "IncidentWorkflowResult",
     "InvalidTaskTransition",
