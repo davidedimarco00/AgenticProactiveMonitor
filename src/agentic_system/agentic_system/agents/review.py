@@ -20,13 +20,14 @@ _SUPPORT_ROLE_BY_DOMAIN = {
     "software": "software_developer",
 }
 _MAX_REVIEW_ATTEMPTS = 3
+_MAX_SUPPORT_ROUNDS = 1
 
 ReviewDecision = Literal["resolve", "operator_action_required", "request_support"]
 SupportDomain = Literal["system", "network", "application", "software"]
 
 
 class _TechnicalLeadReviewOutput(BaseModel):
-    """Schema requested from Ollama/LiteLLM for the TL critic response."""
+    """Structured critic decision returned by the Technical Lead model."""
 
     decision: ReviewDecision
     confidence: float = Field(ge=0.0, le=1.0)
@@ -70,53 +71,34 @@ class TechnicalLeadReviewDecision:
 
 
 class TechnicalLeadReviewReasoner:
-    """Gemma-only critic that reviews a completed specialist diagnostic result."""
+    """Gemma critic with a bounded, evidence-driven collaboration policy."""
 
     SYSTEM_PROMPT = """You are the Technical Lead of an IT monitoring multi-agent team.
-A specialist has completed an evidence-gathering ReAct investigation. Critically review
-only the supplied evidence and decide what the autonomous workflow should do next.
+Review only the supplied specialist evidence and choose the next workflow action.
 
-The specialist result now contains an explicit diagnostic closure:
-- diagnosis_status: confirmed, probable, or inconclusive
-- root_cause: the specialist's evidence-backed causal explanation, or null
-- causal_chain: cause -> mechanism -> observed anomaly
-- recommended_next_steps: remaining DIAGNOSTIC checks, not remediation
+Decisions:
+- resolve: accept a confirmed evidence-backed diagnosis when no human corrective action is
+  immediately required.
+- operator_action_required: use when a confirmed diagnosis needs human corrective action OR
+  when the bounded autonomous investigation budget has been exhausted and a human diagnostic
+  review is required.
+- request_support: ask exactly one new specialist domain only when the current specialist
+  explicitly needs cross-domain diagnostic evidence and the support budget is still available.
 
-Choose exactly one decision:
-- resolve: use only when diagnosis_status=confirmed and the evidence supports a root cause,
-  while no immediate human corrective action is required.
-- operator_action_required: use only when diagnosis_status=confirmed, the root cause is
-  sufficiently supported, and the required corrective change must be performed by a human.
-- request_support: use when the diagnosis is probable/inconclusive, when remaining diagnostic
-  steps require another technical domain, or when another specialist must validate the causal
-  explanation before the diagnosis can be accepted.
+Important rules:
+- A confirmed diagnosis with assistance_required=false is terminal for autonomous diagnosis.
+  Do NOT request another specialist merely to re-check or validate an already confirmed result.
+- Collaboration is bounded to one cross-domain support round. Never walk through all available
+  specialists. If support_budget_exhausted=true, request_support is forbidden.
+- When support is allowed, support_domain must be one of eligible_support_domains. Prefer the
+  specialist_requested_domain when it is eligible.
+- Never invent evidence, measurements, commands, or a root cause.
+- Remediation is advisory only and must not contain unresolved diagnostic checks.
 
-Do NOT escalate to the operator merely because more investigation is needed. Investigation
-belongs to the agents. If the specialist still recommends actions such as inspect logs,
-query metrics, examine connections, validate service behaviour, or collect another domain's
-evidence, select request_support rather than presenting those diagnostic actions as remediation.
-
-The input contains `support_policy` with `specialists_already_involved`,
-`eligible_support_domains`, and the specialist's requested assistance domain. When requesting
-support, support_domain MUST be chosen from eligible_support_domains. NEVER request a domain
-whose specialist already participated in the incident. If assistance_required=true and the
-specialist's assistance_domain is still eligible, treat it as strong evidence for that domain;
-you may choose another eligible domain only when the supplied evidence clearly justifies it.
-The support specialist will receive the current specialist's evidence directly over XMPP and
-correlate it with its own MCP/RAG observations.
-
-Do not invent evidence, commands, measurements, or a root cause that the specialist did
-not support. Keep remediation advisory only. Remediation must describe what should be done
-AFTER the diagnosis; do not copy unresolved diagnostic checks into remediation_steps.
-Return only one JSON object with fields: decision, confidence, diagnosis_summary,
-root_cause, rationale, remediation_summary, remediation_steps, support_domain,
-support_reason.
-
-The `decision` field MUST be exactly one of: resolve, operator_action_required,
-request_support. confidence must be 0..1. remediation_steps must be an array of concise
-strings. support_domain must be null unless decision=request_support, otherwise one of
-system, network, application, software AND it must be present in eligible_support_domains.
-support_reason must be null unless support is requested."""
+Return only one JSON object with: decision, confidence, diagnosis_summary, root_cause,
+rationale, remediation_summary, remediation_steps, support_domain, support_reason.
+confidence must be 0..1. support_domain and support_reason must be null unless the decision
+is request_support."""
 
     def __init__(
         self,
@@ -139,6 +121,7 @@ support_reason must be null unless support is requested."""
         if not incident_id:
             raise ValueError("Technical Lead review requires incident_id")
 
+        support_policy = self._support_policy(specialist_result)
         conversation_id = f"technical-lead-review:{incident_id}"
         context = ContextManager(system_prompt=self.SYSTEM_PROMPT)
         context.add_message_dict(
@@ -155,7 +138,7 @@ support_reason must be null unless support is requested."""
                             "triage": incident.get("agentic") or {},
                         },
                         "specialist_result": specialist_result,
-                        "support_policy": self._support_policy(specialist_result),
+                        "support_policy": support_policy,
                     },
                     separators=(",", ":"),
                     sort_keys=True,
@@ -166,35 +149,27 @@ support_reason must be null unless support is requested."""
 
         last_error: RuntimeError | None = None
         for attempt in range(1, self.max_attempts + 1):
-            try:
-                response = await self.provider.get_llm_response(
-                    context,
-                    tools=None,
-                    conversation_id=conversation_id,
-                    output_schema=_TechnicalLeadReviewOutput,
-                )
-            except Exception as structured_error:
-                LOGGER.warning(
-                    "Technical Lead structured output transport failed; falling back to "
-                    "plain JSON generation for this attempt: incident=%s attempt=%d/%d error=%s",
-                    incident_id,
-                    attempt,
-                    self.max_attempts,
-                    structured_error,
-                )
-                response = await self.provider.get_llm_response(
-                    context,
-                    tools=None,
-                    conversation_id=conversation_id,
-                    output_schema=None,
-                )
-
+            response = await self._request_review(
+                context,
+                conversation_id=conversation_id,
+                incident_id=incident_id,
+                attempt=attempt,
+            )
             try:
                 assessment = self._assessment_from_response(response)
                 self._validate_decision_against_specialist_result(
                     assessment,
                     specialist_result=specialist_result,
                 )
+                if attempt > 1:
+                    LOGGER.warning(
+                        "Technical Lead review reasoning recovered after retry: "
+                        "incident=%s attempt=%d/%d",
+                        incident_id,
+                        attempt,
+                        self.max_attempts,
+                    )
+                return assessment
             except RuntimeError as exc:
                 last_error = exc
                 if attempt >= self.max_attempts:
@@ -207,54 +182,77 @@ support_reason must be null unless support is requested."""
                     self.max_attempts,
                     exc,
                 )
-                support_policy = self._support_policy(specialist_result)
                 context.add_message_dict(
                     {
                         "role": "user",
-                        "content": (
-                            "The previous review decision was invalid for the diagnostic state. "
-                            f"Validation error: {exc}. Return ONLY the required JSON object. "
-                            "Terminal decisions require diagnosis_status=confirmed. If the "
-                            "specialist diagnosis is probable or inconclusive, request support "
-                            "from a useful specialist domain rather than assigning diagnostic "
-                            "work to the human operator. For request_support, choose ONLY from "
-                            f"eligible_support_domains={support_policy['eligible_support_domains']}. "
-                            f"The specialist requested assistance_domain="
-                            f"{support_policy['specialist_requested_domain']!r}."
-                        ),
+                        "content": self._retry_instruction(exc, support_policy),
                     },
                     conversation_id,
                 )
-                continue
-
-            if attempt > 1:
-                LOGGER.warning(
-                    "Technical Lead review reasoning recovered after retry: "
-                    "incident=%s attempt=%d/%d",
-                    incident_id,
-                    attempt,
-                    self.max_attempts,
-                )
-            return assessment
 
         raise last_error or RuntimeError("Technical Lead review reasoning failed")
+
+    async def _request_review(
+        self,
+        context: ContextManager,
+        *,
+        conversation_id: str,
+        incident_id: str,
+        attempt: int,
+    ) -> dict[str, Any]:
+        try:
+            return await self.provider.get_llm_response(
+                context,
+                tools=None,
+                conversation_id=conversation_id,
+                output_schema=_TechnicalLeadReviewOutput,
+            )
+        except Exception as structured_error:
+            LOGGER.warning(
+                "Technical Lead structured output transport failed; falling back to "
+                "plain JSON generation: incident=%s attempt=%d/%d error=%s",
+                incident_id,
+                attempt,
+                self.max_attempts,
+                structured_error,
+            )
+            return await self.provider.get_llm_response(
+                context,
+                tools=None,
+                conversation_id=conversation_id,
+                output_schema=None,
+            )
+
+    @staticmethod
+    def _retry_instruction(error: RuntimeError, support_policy: dict[str, Any]) -> str:
+        if support_policy["support_budget_exhausted"]:
+            next_rule = (
+                "The support budget is exhausted. Do not request another specialist. "
+                "Choose resolve only for a confirmed diagnosis that needs no human action; "
+                "otherwise choose operator_action_required."
+            )
+        else:
+            next_rule = (
+                "If cross-domain evidence is still required, request support only from "
+                f"eligible_support_domains={support_policy['eligible_support_domains']} and "
+                f"prefer specialist_requested_domain="
+                f"{support_policy['specialist_requested_domain']!r}."
+            )
+        return (
+            "The previous review decision violated the deterministic collaboration policy. "
+            f"Validation error: {error}. {next_rule} Return ONLY the required JSON object."
+        )
 
     @classmethod
     def _assessment_from_response(cls, response: dict[str, Any]) -> TechnicalLeadReviewAssessment:
         structured = response.get("structured")
         if structured is not None:
             if isinstance(structured, BaseModel):
-                payload = structured.model_dump()
-            elif isinstance(structured, dict):
-                payload = dict(structured)
-            else:
-                raise RuntimeError(
-                    "Technical Lead structured review returned an unsupported object"
-                )
-            return cls._parse_payload(payload)
-
-        text = str(response.get("text") or "").strip()
-        return cls._parse_response(text)
+                return cls._parse_payload(structured.model_dump())
+            if isinstance(structured, dict):
+                return cls._parse_payload(dict(structured))
+            raise RuntimeError("Technical Lead structured review returned an unsupported object")
+        return cls._parse_response(str(response.get("text") or "").strip())
 
     @classmethod
     def _parse_response(cls, raw_text: str) -> TechnicalLeadReviewAssessment:
@@ -266,7 +264,6 @@ support_reason must be null unless support is requested."""
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
-
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
@@ -282,7 +279,6 @@ support_reason must be null unless support is requested."""
         decision = str(payload.get("decision") or "").strip().lower()
         if decision not in _ALLOWED_DECISIONS:
             raise RuntimeError(f"Technical Lead review returned invalid decision: {decision!r}")
-
         try:
             confidence = float(payload.get("confidence"))
         except (TypeError, ValueError) as exc:
@@ -300,9 +296,7 @@ support_reason must be null unless support is requested."""
         steps_raw = payload.get("remediation_steps") or []
         if not isinstance(steps_raw, list):
             raise RuntimeError("Technical Lead remediation_steps must be an array")
-        remediation_steps = tuple(
-            str(item).strip() for item in steps_raw if str(item).strip()
-        )
+        remediation_steps = tuple(str(item).strip() for item in steps_raw if str(item).strip())
 
         support_domain_raw = payload.get("support_domain")
         support_domain = (
@@ -314,7 +308,6 @@ support_reason must be null unless support is requested."""
         support_reason = (
             str(support_reason_raw).strip() if support_reason_raw is not None else None
         )
-
         if decision == "request_support":
             if support_domain not in _ALLOWED_SUPPORT_DOMAINS:
                 raise RuntimeError("Technical Lead support request requires a valid domain")
@@ -338,13 +331,15 @@ support_reason must be null unless support is requested."""
 
     @staticmethod
     def _support_policy(specialist_result: dict[str, Any]) -> dict[str, Any]:
-        involved = []
+        involved: list[str] = []
         for raw_role in specialist_result.get("specialists_already_involved") or []:
             role = str(raw_role).strip().lower()
             if role and role not in involved:
                 involved.append(role)
 
-        eligible_domains = [
+        support_round = max(len(involved) - 1, 0)
+        support_budget_exhausted = support_round >= _MAX_SUPPORT_ROUNDS
+        eligible_domains = [] if support_budget_exhausted else [
             domain
             for domain, role in _SUPPORT_ROLE_BY_DOMAIN.items()
             if role not in involved
@@ -357,6 +352,9 @@ support_reason must be null unless support is requested."""
 
         return {
             "specialists_already_involved": involved,
+            "support_round": support_round,
+            "max_support_rounds": _MAX_SUPPORT_ROUNDS,
+            "support_budget_exhausted": support_budget_exhausted,
             "eligible_support_domains": eligible_domains,
             "specialist_requested_domain": requested_domain or None,
         }
@@ -373,52 +371,59 @@ support_reason must be null unless support is requested."""
         root_cause = str(specialist_result.get("root_cause") or "").strip()
         causal_chain = specialist_result.get("causal_chain") or []
         assistance_required = bool(specialist_result.get("assistance_required", False))
+        support_policy = TechnicalLeadReviewReasoner._support_policy(specialist_result)
+        support_budget_exhausted = bool(support_policy["support_budget_exhausted"])
 
         if diagnosis_status not in {"confirmed", "probable", "inconclusive"}:
             raise RuntimeError(
                 f"Specialist returned unsupported diagnosis_status: {diagnosis_status!r}"
             )
 
-        if diagnosis_status != "confirmed" and assessment.decision != "request_support":
-            raise RuntimeError(
-                f"{diagnosis_status} specialist diagnosis requires request_support; "
-                f"got {assessment.decision}"
-            )
-
-        if assessment.decision in {"resolve", "operator_action_required"}:
-            if diagnosis_status != "confirmed":
-                raise RuntimeError("Terminal TL decision requires confirmed diagnosis")
+        if diagnosis_status == "confirmed":
             if not root_cause or not isinstance(causal_chain, list) or not causal_chain:
                 raise RuntimeError(
                     "Terminal TL decision requires specialist root_cause and causal_chain"
                 )
             if assistance_required:
                 raise RuntimeError(
-                    "Terminal TL decision is inconsistent with specialist assistance request"
+                    "Confirmed specialist diagnosis cannot request diagnostic assistance"
                 )
+            if assessment.decision == "request_support":
+                raise RuntimeError(
+                    "Confirmed diagnosis without assistance must terminate autonomous "
+                    "investigation; additional specialist support is not allowed"
+                )
+            return
 
-        if assistance_required and assessment.decision != "request_support":
+        if support_budget_exhausted:
+            if assessment.decision != "operator_action_required":
+                raise RuntimeError(
+                    "Cross-domain support budget exhausted; unresolved autonomous diagnosis "
+                    "must escalate to operator review"
+                )
+            return
+
+        if not assistance_required:
             raise RuntimeError(
-                "Specialist requested diagnostic assistance, so TL must request support"
+                f"{diagnosis_status} diagnosis must explicitly identify a cross-domain "
+                "assistance need before another specialist can be added"
+            )
+        if assessment.decision != "request_support":
+            raise RuntimeError(
+                f"{diagnosis_status} diagnosis with explicit assistance requires one "
+                "bounded support round"
             )
 
-        if assessment.decision == "request_support":
-            support_policy = TechnicalLeadReviewReasoner._support_policy(specialist_result)
-            support_domain = str(assessment.support_domain or "").strip().lower()
-            support_role = _SUPPORT_ROLE_BY_DOMAIN.get(support_domain)
-            involved = set(support_policy["specialists_already_involved"])
-            eligible_domains = list(support_policy["eligible_support_domains"])
-            if support_role is None:
-                raise RuntimeError(
-                    f"Technical Lead requested unsupported support domain: {support_domain!r}"
-                )
-            if support_role in involved:
-                raise RuntimeError(
-                    f"support_domain={support_domain!r} maps to already-involved specialist "
-                    f"{support_role!r}; eligible support domains are {eligible_domains}"
-                )
-            if support_domain not in eligible_domains:
-                raise RuntimeError(
-                    f"support_domain={support_domain!r} is not eligible; "
-                    f"eligible support domains are {eligible_domains}"
-                )
+        support_domain = str(assessment.support_domain or "").strip().lower()
+        eligible_domains = list(support_policy["eligible_support_domains"])
+        requested_domain = support_policy["specialist_requested_domain"]
+        if support_domain not in eligible_domains:
+            raise RuntimeError(
+                f"support_domain={support_domain!r} is not eligible; "
+                f"eligible support domains are {eligible_domains}"
+            )
+        if requested_domain and requested_domain in eligible_domains and support_domain != requested_domain:
+            raise RuntimeError(
+                f"Specialist requested support_domain={requested_domain!r}; TL cannot redirect "
+                f"to {support_domain!r} without a new evidence-backed reason"
+            )
