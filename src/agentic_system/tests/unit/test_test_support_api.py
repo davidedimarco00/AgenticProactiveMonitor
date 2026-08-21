@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 from fastapi import FastAPI
@@ -78,9 +77,11 @@ class FakeRepository:
 class FakeTaskWorkflow:
     def __init__(self, repository: FakeRepository) -> None:
         self.repository = repository
+        self.completed_calls = 0
 
     async def mark_completed(self, task_id: str, *, outcome=None):
         assert task_id == self.repository.task["task_id"]
+        self.completed_calls += 1
         self.repository.task["state"] = "COMPLETED"
         self.repository.task["outcome"] = dict(outcome or {})
         return dict(self.repository.task)
@@ -90,6 +91,7 @@ def _client():
     app = FastAPI()
     runtime = FakeRuntime()
     repository = FakeRepository()
+    task_workflow = FakeTaskWorkflow(repository)
     runtime.agents = [
         FakeAgent("technical_lead", "INC-TEST-001"),
         FakeAgent("system_engineer", "INC-TEST-001"),
@@ -98,13 +100,13 @@ def _client():
         app,
         runtime=runtime,  # type: ignore[arg-type]
         repository=repository,  # type: ignore[arg-type]
-        task_workflow=FakeTaskWorkflow(repository),  # type: ignore[arg-type]
+        task_workflow=task_workflow,  # type: ignore[arg-type]
     )
-    return TestClient(app), runtime, repository
+    return TestClient(app), runtime, repository, task_workflow
 
 
 def test_test_anomaly_injection_enters_normal_runtime_intake() -> None:
-    client, runtime, _repository = _client()
+    client, runtime, _repository, _workflow = _client()
 
     response = client.post(
         "/internal/v1/test/anomalies",
@@ -128,25 +130,47 @@ def test_test_anomaly_injection_enters_normal_runtime_intake() -> None:
     assert observation.result_index == "agentic-test-anomaly-results"
 
 
-def test_test_completion_marks_running_task_and_incident_terminal() -> None:
-    client, runtime, repository = _client()
+def test_test_completion_can_close_legacy_running_task() -> None:
+    client, runtime, repository, workflow = _client()
 
     response = client.post(
         "/internal/v1/test/incidents/INC-TEST-001/complete",
-        json={"summary": "Synthetic diagnosis for FIFO release test."},
+        json={"summary": "Synthetic TL acceptance for FIFO release test."},
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "resolved"
     assert repository.task["state"] == "COMPLETED"
+    assert workflow.completed_calls == 1
     assert repository.incident["status"] == "RESOLVED"
-    assert repository.events[-1]["event_type"] == "TEST_WORKFLOW_COMPLETED"
+    assert repository.events[-1]["event_type"] == "TEST_TECHNICAL_LEAD_ACCEPTED"
     assert all(agent.activity_state == "IDLE" for agent in runtime.agents)
 
 
-def test_test_completion_refuses_non_running_task() -> None:
-    client, _runtime, repository = _client()
+def test_test_completion_accepts_already_completed_react_task_without_retransition() -> None:
+    client, _runtime, repository, workflow = _client()
+    repository.incident["status"] = "UNDER_ANALYSIS"
+    repository.task["state"] = "COMPLETED"
+    repository.task["outcome"] = {
+        "status": "completed",
+        "summary": "Real ReAct result already persisted.",
+    }
+
+    response = client.post(
+        "/internal/v1/test/incidents/INC-TEST-001/complete",
+        json={"summary": "TL accepts the real ReAct result for this test."},
+    )
+
+    assert response.status_code == 200
+    assert repository.incident["status"] == "RESOLVED"
+    assert repository.task["state"] == "COMPLETED"
+    assert workflow.completed_calls == 0
+    assert repository.events[-1]["event_type"] == "TEST_TECHNICAL_LEAD_ACCEPTED"
+
+
+def test_test_completion_refuses_non_running_non_completed_task() -> None:
+    client, _runtime, repository, _workflow = _client()
     repository.task["state"] = "PENDING"
 
     response = client.post(
@@ -155,4 +179,4 @@ def test_test_completion_refuses_non_running_task() -> None:
     )
 
     assert response.status_code == 409
-    assert "RUNNING" in response.json()["detail"]
+    assert "COMPLETED" in response.json()["detail"]
