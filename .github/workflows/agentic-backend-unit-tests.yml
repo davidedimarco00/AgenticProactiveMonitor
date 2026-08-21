@@ -6,6 +6,7 @@ on:
       - feature/agentic-system-backend
       - feature/agentic-system-backend-fault-tolerance
       - feature/agentic-dispatch-bdi
+      - agent-react
     paths:
       - "src/agentic_system/**"
       - ".github/workflows/agentic-backend-unit-tests.yml"
