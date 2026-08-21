@@ -36,10 +36,10 @@ def test_feature_packages_are_the_canonical_implementations() -> None:
     assert build_incident_report.__module__ == "agentic_system.incidents.reporting"
 
 
-def test_obsolete_specialist_and_reasoning_wrapper_files_are_removed() -> None:
+def test_obsolete_wrapper_files_are_removed() -> None:
     package_root = Path(__file__).parents[2] / "agentic_system"
-    agent_files = package_root / "agents"
-    reasoning_files = package_root / "reasoning"
+    agents = package_root / "agents"
+    reasoning = package_root / "reasoning"
 
     for filename in (
         "system_engineer.py",
@@ -47,7 +47,9 @@ def test_obsolete_specialist_and_reasoning_wrapper_files_are_removed() -> None:
         "application_engineer.py",
         "software_developer.py",
     ):
-        assert not (agent_files / filename).exists()
+        assert not (agents / filename).exists()
 
-    for filename in ("react.py", "llm.py"):
-        assert not (reasoning_files / filename).exists()
+    for filename in ("react.py", "llm.py", "review_bdi.py"):
+        assert not (reasoning / filename).exists()
+
+    assert not (reasoning / "plans" / "technical_lead_review.asl").exists()
