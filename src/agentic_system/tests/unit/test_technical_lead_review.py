@@ -218,6 +218,48 @@ def test_review_rejects_terminal_decision_for_probable_diagnosis_and_requests_su
     assert result.support_domain == "application"
 
 
+def test_review_retries_when_support_domain_already_participated() -> None:
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_llm_response(
+            self,
+            context,
+            tools=None,
+            conversation_id=None,
+            output_schema=None,
+        ):
+            self.calls += 1
+            payload = _valid_review_payload(decision="request_support")
+            if self.calls == 1:
+                payload["support_domain"] = "network"
+                payload["support_reason"] = "Ask the network specialist to inspect again."
+            else:
+                payload["support_domain"] = "system"
+                payload["support_reason"] = "System evidence can test the remaining hypothesis."
+            if output_schema is not None:
+                return {"text": None, "structured": output_schema(**payload)}
+            return {"text": json.dumps(payload), "structured": None}
+
+    provider = FakeProvider()
+    reasoner = TechnicalLeadReviewReasoner(provider, max_attempts=3)  # type: ignore[arg-type]
+    specialist_result = _specialist_result(diagnosis_status="probable")
+    specialist_result["specialists_already_involved"] = ["network_engineer"]
+    specialist_result["assistance_domain"] = "system"
+
+    result = asyncio.run(
+        reasoner.assess(
+            incident=_incident(),
+            specialist_result=specialist_result,
+        )
+    )
+
+    assert provider.calls == 2
+    assert result.decision == "request_support"
+    assert result.support_domain == "system"
+
+
 def test_terminal_review_validation_requires_confirmed_root_cause_and_causal_chain() -> None:
     assessment = TechnicalLeadReviewReasoner._parse_response(_valid_review_json())
     incomplete = _specialist_result()
