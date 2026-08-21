@@ -27,7 +27,7 @@ class TestAnomalyRequest(BaseModel):
 
 
 class TestCompletionRequest(BaseModel):
-    summary: str = "Synthetic specialist investigation completed successfully."
+    summary: str = "Synthetic Technical Lead acceptance used to release the test workflow."
 
 
 def attach_test_support_api(
@@ -42,7 +42,8 @@ def attach_test_support_api(
     These endpoints are mounted only when ENABLE_TEST_ANOMALY_INJECTION=1. They
     bypass OpenSearch detection latency but do not bypass MongoDB persistence,
     global FIFO admission, incident creation, Technical Lead BDI, XMPP dispatch,
-    specialist BDI or durable task state transitions.
+    specialist BDI or ReAct execution. The completion hook only substitutes the
+    future Technical Lead critic/terminal decision that follows a specialist result.
     """
 
     @app.post("/internal/v1/test/anomalies", tags=["Testing"])
@@ -91,7 +92,7 @@ def attach_test_support_api(
         incident_id: str,
         payload: TestCompletionRequest,
     ) -> dict[str, Any]:
-        """Simulate the not-yet-implemented ReAct result and release the FIFO."""
+        """Simulate Technical Lead terminal acceptance and release the FIFO."""
 
         incident = await repository.get_incident(incident_id)
         if incident is None:
@@ -116,23 +117,28 @@ def attach_test_support_api(
         if task is None:
             raise HTTPException(status_code=409, detail="Incident task was not found")
         task_state = normalize_task_state(task.get("state") or "")
-        if task_state != AgentTaskState.RUNNING:
+        if task_state not in {AgentTaskState.RUNNING, AgentTaskState.COMPLETED}:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Synthetic completion requires the selected specialist to own a RUNNING task; "
-                    f"current state is {task_state.value}."
+                    "Test terminal acceptance requires a RUNNING legacy test task or a "
+                    "COMPLETED ReAct task; current state is "
+                    f"{task_state.value}."
                 ),
             )
 
-        completed_task = await task_workflow.mark_completed(
-            task_id,
-            outcome={
-                "synthetic": True,
-                "source": "test_completion_hook",
-                "summary": payload.summary,
-            },
-        )
+        if task_state == AgentTaskState.RUNNING:
+            completed_task = await task_workflow.mark_completed(
+                task_id,
+                outcome={
+                    "status": "completed",
+                    "summary": payload.summary,
+                    "result_ref": "test_completion_hook",
+                },
+            )
+        else:
+            completed_task = task
+
         resolved = await repository.update_incident(
             incident_id,
             {
@@ -140,39 +146,36 @@ def attach_test_support_api(
                 "diagnosis": {
                     "summary": payload.summary,
                     "confidence": 1.0,
-                    "source": "test_completion_hook",
                 },
                 "agentic": {
                     "current_agent": "technical_lead",
                     "active_agents": [],
+                    "task_state": "COMPLETED",
                 },
             },
         )
         if resolved is None:
             raise HTTPException(
                 status_code=409,
-                detail="Incident disappeared during synthetic completion.",
+                detail="Incident disappeared during synthetic terminal acceptance.",
             )
 
         await repository.add_event(
             incident_id,
             {
-                "event_type": "TEST_WORKFLOW_COMPLETED",
+                "event_type": "TEST_TECHNICAL_LEAD_ACCEPTED",
                 "agent_role": "technical_lead",
-                "action": "simulate_terminal_specialist_result",
+                "action": "simulate_terminal_critic_acceptance",
                 "reason": (
-                    "Development-only completion hook simulated the future ReAct result "
-                    "to validate terminal workflow release and FIFO progression."
+                    "Development-only hook simulated the future Technical Lead critic "
+                    "accepting the specialist result so terminal FIFO release can be tested."
                 ),
                 "status": "RESOLVED",
                 "task_id": task_id,
-                "task_state": completed_task.get("state"),
                 "outcome": payload.summary,
             },
         )
 
-        # Agent activity is runtime observability rather than durable task state.
-        # Release only agents that currently advertise this incident as context.
         for agent in runtime.agents:
             if agent.activity_incident_id == incident_id:
                 agent.set_activity("IDLE", detail="test_workflow_completed")
@@ -182,7 +185,7 @@ def attach_test_support_api(
             "incident": resolved,
             "task": completed_task,
             "note": (
-                "The exclusive FIFO worker will observe RESOLVED and advance to the "
-                "next durable WAITING anomaly on its normal polling cycle."
+                "Only the future Technical Lead terminal critic decision was simulated. "
+                "The exclusive FIFO worker will observe RESOLVED and advance normally."
             ),
         }
