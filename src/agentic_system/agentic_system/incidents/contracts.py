@@ -86,7 +86,7 @@ class InvestigationTaskDispatchReceipt:
 
 @dataclass(frozen=True, slots=True)
 class InvestigationTaskResultReceipt:
-    """Structured ReAct outcome delivered by a specialist to the Technical Lead."""
+    """Structured ReAct diagnostic outcome delivered by a specialist to the TL."""
 
     task_id: str
     incident_id: str
@@ -95,6 +95,9 @@ class InvestigationTaskResultReceipt:
     correlation_id: str
     succeeded: bool
     summary: str = ""
+    diagnosis_status: str = "inconclusive"
+    root_cause: str | None = None
+    causal_chain: tuple[str, ...] = ()
     confidence: float = 0.0
     findings: tuple[str, ...] = ()
     evidence: tuple[dict[str, Any], ...] = ()
@@ -112,6 +115,9 @@ class InvestigationTaskResultReceipt:
         return {
             "status": "completed" if self.succeeded else "failed",
             "summary": self.summary,
+            "diagnosis_status": self.diagnosis_status,
+            "root_cause": self.root_cause,
+            "causal_chain": list(self.causal_chain),
             "confidence": self.confidence,
             "agent_role": self.agent_role,
             "findings": list(self.findings),
