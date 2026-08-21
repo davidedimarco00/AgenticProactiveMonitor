@@ -15,11 +15,12 @@ MIN_DIAGNOSTIC_REACT_STEPS = 10
 
 
 def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
-    """Build one TL plus four configured specialists with explicit model roles.
+    """Build one TL plus four specialists with explicit cognitive model roles.
 
-    Gemma is reserved for Technical Lead triage/review. Qwen is assigned directly
-    to specialists, where LangChain owns the operational ReAct/tool loop. Both
-    providers share the same embedding model and backend-wide Ollama gate.
+    Gemma performs Technical Lead reasoning and specialist diagnostic reasoning.
+    Qwen is restricted to specialist tool selection/argument generation. All model
+    calls share one backend-wide Ollama concurrency gate and the same embedding
+    provider for SPADE-LLM memory.
     """
 
     gate = SharedInferenceGate(config.max_llm_concurrency)
@@ -29,7 +30,13 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
         embedding_model=config.embedding_model,
         gate=gate,
     )
-    specialist_provider = RoleLLMProvider(
+    specialist_reasoning_provider = RoleLLMProvider(
+        model=config.reasoning_model,
+        base_url=config.ollama_url,
+        embedding_model=config.embedding_model,
+        gate=gate,
+    )
+    specialist_tool_provider = RoleLLMProvider(
         model=config.tool_model,
         base_url=config.ollama_url,
         embedding_model=config.embedding_model,
@@ -60,6 +67,7 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
                 agentspeak_bdi_max_concurrency=config.agentspeak_bdi_max_concurrency,
                 **common_kwargs,
             )
+            agent.set_model_roles(reasoning=str(technical_lead_provider.model))
         else:
             specialist = SpecialistAgent(
                 spec.jid,
@@ -68,7 +76,8 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
                 spec.health_port,
                 role=spec.role,
                 system_prompt=specialist_system_prompt(spec.role),
-                provider=specialist_provider,
+                provider=specialist_reasoning_provider,
+                tool_provider=specialist_tool_provider,
                 agentspeak_specialist_asl=config.agentspeak_specialist_asl,
                 agentspeak_action_timeout_seconds=config.agentspeak_action_timeout_seconds,
                 agentspeak_bdi_max_concurrency=config.agentspeak_bdi_max_concurrency,
