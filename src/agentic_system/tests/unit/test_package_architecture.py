@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from agentic_system.agents import (
     ApplicationEngineerAgent,
     NetworkEngineerAgent,
@@ -32,3 +34,20 @@ def test_feature_packages_are_the_canonical_implementations() -> None:
         "agentic_system.reasoning.langchain_agent"
     )
     assert build_incident_report.__module__ == "agentic_system.incidents.reporting"
+
+
+def test_obsolete_specialist_and_reasoning_wrapper_files_are_removed() -> None:
+    package_root = Path(__file__).parents[2] / "agentic_system"
+    agent_files = package_root / "agents"
+    reasoning_files = package_root / "reasoning"
+
+    for filename in (
+        "system_engineer.py",
+        "network_engineer.py",
+        "application_engineer.py",
+        "software_developer.py",
+    ):
+        assert not (agent_files / filename).exists()
+
+    for filename in ("react.py", "llm.py"):
+        assert not (reasoning_files / filename).exists()
