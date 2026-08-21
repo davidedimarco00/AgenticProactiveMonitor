@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from typing import Any
 
 from spade_llm.context import ContextManager
 from spade_llm.providers.base_provider import BaseLLMProvider
 
 
+LOGGER = logging.getLogger("agentic_system.agents.review")
 _ALLOWED_DECISIONS = {"resolve", "operator_action_required", "request_support"}
 _ALLOWED_SUPPORT_DOMAINS = {"system", "network", "application", "software"}
+REVIEW_REASONING_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +46,14 @@ class TechnicalLeadReviewDecision:
 
 
 class TechnicalLeadReviewReasoner:
-    """Gemma-only critic that reviews a completed specialist ReAct result."""
+    """Gemma-only critic that reviews a completed specialist ReAct result.
+
+    The local reasoning model may occasionally return an empty or malformed answer
+    even though the inference request itself succeeded. A single transient model
+    response must not immediately turn a successfully investigated incident into
+    OPERATOR_ACTION_REQUIRED, so this critic performs a small bounded retry before
+    surfacing a review failure to the workflow coordinator.
+    """
 
     SYSTEM_PROMPT = """You are the Technical Lead of an IT monitoring multi-agent team.
 A specialist has completed an evidence-gathering ReAct investigation. Critically review
@@ -67,8 +77,16 @@ confidence must be 0..1. remediation_steps must be an array of concise strings.
 support_domain must be null unless decision=request_support, otherwise one of system,
 network, application, software. support_reason must be null unless support is requested."""
 
-    def __init__(self, provider: BaseLLMProvider) -> None:
+    def __init__(
+        self,
+        provider: BaseLLMProvider,
+        *,
+        max_attempts: int = REVIEW_REASONING_MAX_ATTEMPTS,
+    ) -> None:
+        if max_attempts <= 0:
+            raise ValueError("Technical Lead review max_attempts must be greater than zero")
         self.provider = provider
+        self.max_attempts = max_attempts
 
     async def assess(
         self,
@@ -103,12 +121,57 @@ network, application, software. support_reason must be null unless support is re
             },
             conversation_id,
         )
-        response = await self.provider.get_llm_response(
-            context,
-            tools=None,
-            conversation_id=conversation_id,
-        )
-        return self._parse_response(str(response.get("text") or "").strip())
+
+        last_error: RuntimeError | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            response = await self.provider.get_llm_response(
+                context,
+                tools=None,
+                conversation_id=conversation_id,
+            )
+            raw_text = str(response.get("text") or "").strip()
+            try:
+                assessment = self._parse_response(raw_text)
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt >= self.max_attempts:
+                    break
+
+                LOGGER.warning(
+                    "Technical Lead review response rejected; retrying inference: "
+                    "incident=%s attempt=%d/%d error=%s",
+                    incident_id,
+                    attempt,
+                    self.max_attempts,
+                    exc,
+                )
+                context.add_message_dict(
+                    {
+                        "role": "user",
+                        "content": (
+                            "The previous review response was empty or invalid. "
+                            "Return ONLY the required JSON object, with every required field "
+                            "present and no markdown or explanatory text."
+                        ),
+                    },
+                    conversation_id,
+                )
+                continue
+
+            if attempt > 1:
+                LOGGER.info(
+                    "Technical Lead review reasoning recovered after retry: "
+                    "incident=%s attempt=%d/%d",
+                    incident_id,
+                    attempt,
+                    self.max_attempts,
+                )
+            return assessment
+
+        raise RuntimeError(
+            "Technical Lead review reasoning failed after "
+            f"{self.max_attempts} attempts: {last_error}"
+        ) from last_error
 
     @staticmethod
     def _parse_response(raw_text: str) -> TechnicalLeadReviewAssessment:
