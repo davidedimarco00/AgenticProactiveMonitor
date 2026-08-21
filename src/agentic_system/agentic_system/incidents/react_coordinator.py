@@ -140,6 +140,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         task_id = str(task["task_id"])
         incident_id = str(incident["incident_id"])
         outcome = receipt.task_outcome()
+        involved_roles = await self._involved_specialist_roles(incident_id)
 
         completed = await self.task_workflow.mark_completed(
             task_id,
@@ -155,8 +156,10 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 "status": "UNDER_ANALYSIS",
                 "agentic": {
                     "current_agent": "technical_lead",
-                    "active_agents": ["technical_lead"],
+                    "active_agents": ["technical_lead", *involved_roles],
                     "task_state": completed.get("state"),
+                    "review_state": "PENDING",
+                    "collaboration_roles": involved_roles,
                 },
             },
         )
@@ -173,8 +176,8 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 "agent_jid": receipt.agent_jid,
                 "action": "return_react_investigation_result",
                 "reason": (
-                    "The specialist completed its BDI investigate_incident intention "
-                    "through a bounded ReAct loop and returned evidence to the Technical Lead."
+                    "The specialist completed its BDI investigation intention through a "
+                    "bounded ReAct loop and returned structured evidence for team review."
                 ),
                 "status": "UNDER_ANALYSIS",
                 "task_id": task_id,
@@ -238,26 +241,29 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         incident: dict[str, Any],
         receipt: Any,
     ) -> Any:
+        incident_id = str(incident["incident_id"])
         result_payload = receipt.task_outcome()
         result_payload["specialists_already_involved"] = await self._involved_specialist_roles(
-            str(incident["incident_id"])
+            incident_id
         )
+        collaboration_history = await self._collaboration_history(
+            incident_id,
+            exclude_task_id=receipt.task_id,
+        )
+        if collaboration_history:
+            result_payload["collaboration_history"] = collaboration_history
 
         reviewer = getattr(self.assignee, "review_investigation_result", None)
-        if callable(reviewer):
-            # Runtime currently accepts the typed receipt. Keep that public path
-            # for compatibility; its Technical Lead reasoner already receives the
-            # incident and the current specialist outcome.
-            return await reviewer(incident, receipt)
-
         technical_lead_getter = getattr(self.assignee, "_technical_lead", None)
-        if not callable(technical_lead_getter):
-            raise RuntimeError("Technical Lead review capability is not available")
-        technical_lead = technical_lead_getter()
-        return await technical_lead.review_specialist_result(
-            incident,
-            specialist_result=result_payload,
-        )
+        if callable(technical_lead_getter):
+            technical_lead = technical_lead_getter()
+            return await technical_lead.review_specialist_result(
+                incident,
+                specialist_result=result_payload,
+            )
+        if callable(reviewer):
+            return await reviewer(incident, receipt)
+        raise RuntimeError("Technical Lead review capability is not available")
 
     async def _persist_technical_lead_review(
         self,
@@ -272,11 +278,11 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         if decision not in {"resolve", "operator_action_required", "request_support"}:
             raise RuntimeError(f"Unsupported Technical Lead review decision: {decision}")
 
-        evidence = [
-            str(item).strip()
-            for item in specialist_receipt.findings
-            if str(item).strip()
-        ]
+        involved_roles = await self._involved_specialist_roles(incident_id)
+        evidence = await self._combined_findings(
+            incident_id,
+            current_findings=specialist_receipt.findings,
+        )
         diagnosis = {
             "summary": review.diagnosis_summary,
             "root_cause": review.root_cause,
@@ -294,21 +300,23 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             validation = {
                 "status": "EVIDENCE_REVIEWED",
                 "summary": (
-                    "The Technical Lead accepted the specialist evidence and determined "
-                    "that no immediate operator action is required."
+                    "The Technical Lead accepted the combined specialist evidence and "
+                    "determined that no immediate operator action is required."
                 ),
             }
             active_agents: list[str] = []
+            peer_state = "COMPLETED"
         elif decision == "operator_action_required":
             status = "OPERATOR_ACTION_REQUIRED"
             validation = {
                 "status": "OPERATOR_ACTION_PENDING",
                 "summary": (
-                    "The Technical Lead accepted the diagnosis, but remediation requires "
-                    "human operator action."
+                    "The Technical Lead accepted the combined diagnosis, but remediation "
+                    "requires human operator action."
                 ),
             }
             active_agents = []
+            peer_state = "COMPLETED"
         else:
             status = "UNDER_ANALYSIS"
             validation = {
@@ -318,7 +326,8 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "incident and exchange evidence directly with the current specialist."
                 ),
             }
-            active_agents = ["technical_lead", specialist_receipt.agent_role]
+            active_agents = ["technical_lead", *involved_roles]
+            peer_state = "REQUESTED"
 
         updated = await self.repository.update_incident(
             incident_id,
@@ -330,6 +339,19 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 "agentic": {
                     "current_agent": "technical_lead",
                     "active_agents": active_agents,
+                    "review_state": "COMPLETED",
+                    "review_decision": decision,
+                    "review_confidence": review.confidence,
+                    "review_rationale": review.rationale,
+                    "bdi_review_goal": review.bdi_goal,
+                    "bdi_review_intention": review.bdi_review_intention,
+                    "bdi_review_decision_intention": review.bdi_decision_intention,
+                    "support_requested": decision == "request_support",
+                    "support_domain": review.support_domain,
+                    "support_reason": review.support_reason,
+                    "collaboration_roles": involved_roles,
+                    "collaboration_round": max(len(involved_roles) - 1, 0),
+                    "peer_collaboration_state": peer_state,
                 },
             },
         )
@@ -352,6 +374,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "confidence": review.confidence,
                     "diagnosis_summary": review.diagnosis_summary,
                     "support_domain": review.support_domain,
+                    "specialists_involved": involved_roles,
                 },
             },
         )
@@ -360,11 +383,12 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             self._apply_agent_activity(incident_id, decision=decision)
         LOGGER.warning(
             "Technical Lead BDI review persisted: incident=%s decision=%s status=%s "
-            "confidence=%.3f",
+            "confidence=%.3f specialists=%s",
             incident_id,
             decision,
             status,
             review.confidence,
+            ",".join(involved_roles) or "none",
         )
 
     async def _start_peer_support_round(
@@ -410,6 +434,8 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         )
         support_task_id = str(support_task["task_id"])
 
+        # The TL authorizes participation, but the evidence transfer itself is a
+        # direct specialist-to-specialist XMPP exchange.
         acknowledgement = await peer.share_peer_context(
             receiver=str(support.jid),
             incident_id=incident_id,
@@ -421,22 +447,25 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             timeout=10.0,
         )
 
+        collaboration_roles = [*involved, support_role]
         updated = await self.repository.update_incident(
             incident_id,
             {
                 "status": "UNDER_ANALYSIS",
                 "agentic": {
                     "current_agent": support_role,
-                    "active_agents": [
-                        "technical_lead",
-                        specialist_receipt.agent_role,
-                        support_role,
-                    ],
-                    # The pointer always identifies the one durable task that is
-                    # currently allowed to advance. Older completed tasks remain
-                    # available in agent_tasks as the incident collaboration history.
+                    "active_agents": ["technical_lead", *collaboration_roles],
+                    # This pointer identifies the one durable task currently
+                    # advancing. Older completed tasks stay in agent_tasks and
+                    # form the durable collaboration history for the incident.
                     "investigation_task_id": support_task_id,
                     "task_state": support_task.get("state"),
+                    "support_requested": True,
+                    "support_domain": support_domain,
+                    "support_reason": support_reason,
+                    "collaboration_roles": collaboration_roles,
+                    "collaboration_round": max(len(collaboration_roles) - 1, 1),
+                    "peer_collaboration_state": "ACTIVE",
                 },
             },
         )
@@ -460,6 +489,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "support_domain": support_domain,
                     "completed_task_id": completed_task_id,
                     "peer_correlation_id": acknowledgement.correlation_id,
+                    "collaboration_roles": collaboration_roles,
                 },
             },
         )
@@ -488,6 +518,40 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         )
         await self._advance_investigation_task(updated)
 
+    async def _advance_investigation_task(
+        self,
+        incident: dict[str, Any],
+    ) -> dict[str, Any]:
+        updated = await super()._advance_investigation_task(incident)
+        if str(updated.get("status") or "").upper() != "UNDER_ANALYSIS":
+            return updated
+
+        agentic = dict(updated.get("agentic") or {})
+        if str(agentic.get("peer_collaboration_state") or "").upper() != "ACTIVE":
+            return updated
+
+        roles = await self._involved_specialist_roles(str(updated["incident_id"]))
+        task_id = str(agentic.get("investigation_task_id") or "").strip()
+        task = await self.repository.get_task(task_id) if task_id else None
+        current_agent = (
+            str((task or {}).get("assigned_to") or agentic.get("current_agent") or "technical_lead")
+            .strip()
+            .lower()
+        )
+        synchronized = await self.repository.update_incident(
+            str(updated["incident_id"]),
+            {
+                "agentic": {
+                    "current_agent": current_agent,
+                    "active_agents": ["technical_lead", *roles],
+                    "collaboration_roles": roles,
+                    "collaboration_round": max(len(roles) - 1, 1),
+                    "peer_collaboration_state": "ACTIVE",
+                }
+            },
+        )
+        return dict(synchronized or updated)
+
     async def _involved_specialist_roles(self, incident_id: str) -> list[str]:
         tasks = await self.task_workflow.repository.list_tasks(
             incident_id=incident_id,
@@ -499,6 +563,61 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             if role and role not in roles:
                 roles.append(role)
         return roles
+
+    async def _collaboration_history(
+        self,
+        incident_id: str,
+        *,
+        exclude_task_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        list_events = getattr(self.repository, "list_events", None)
+        if not callable(list_events):
+            return []
+        events = await list_events(
+            incident_id=incident_id,
+            limit=200,
+            ascending=True,
+        )
+        history: list[dict[str, Any]] = []
+        for event in events:
+            if str(event.get("event_type") or "").upper() != "SPECIALIST_INVESTIGATION_COMPLETED":
+                continue
+            task_id = str(event.get("task_id") or "").strip()
+            if exclude_task_id and task_id == exclude_task_id:
+                continue
+            outcome = event.get("outcome") or {}
+            if not isinstance(outcome, dict):
+                continue
+            history.append(
+                {
+                    "task_id": task_id,
+                    "agent_role": str(event.get("agent_role") or "").strip().lower(),
+                    "summary": str(outcome.get("summary") or "").strip(),
+                    "confidence": outcome.get("confidence"),
+                    "findings": list(outcome.get("findings") or []),
+                    "hypotheses": list(outcome.get("hypotheses") or []),
+                    "tools_used": list(outcome.get("tools_used") or []),
+                }
+            )
+        return history[-4:]
+
+    async def _combined_findings(
+        self,
+        incident_id: str,
+        *,
+        current_findings: Any,
+    ) -> list[str]:
+        combined: list[str] = []
+        for entry in await self._collaboration_history(incident_id):
+            for raw in entry.get("findings") or []:
+                finding = str(raw).strip()
+                if finding and finding not in combined:
+                    combined.append(finding)
+        for raw in current_findings:
+            finding = str(raw).strip()
+            if finding and finding not in combined:
+                combined.append(finding)
+        return combined
 
     async def _persist_technical_lead_review_failure(
         self,
@@ -528,6 +647,9 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 "agentic": {
                     "current_agent": "technical_lead",
                     "active_agents": [],
+                    "review_state": "FAILED",
+                    "support_requested": False,
+                    "peer_collaboration_state": "FAILED",
                 },
             },
         )
@@ -572,6 +694,8 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 "agentic": {
                     "current_agent": "technical_lead",
                     "active_agents": [],
+                    "support_requested": False,
+                    "peer_collaboration_state": "FAILED",
                 },
             },
         )
@@ -619,12 +743,14 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             message=receipt.error or "Specialist ReAct execution failed.",
             retryable=receipt.retryable,
         )
+        involved = await self._involved_specialist_roles(incident_id)
+        collaborative = str(incident.get("status") or "").upper() == "UNDER_ANALYSIS"
         await self.repository.update_incident(
             incident_id,
             {
                 "agentic": {
                     "current_agent": "technical_lead",
-                    "active_agents": ["technical_lead"],
+                    "active_agents": ["technical_lead", *involved] if collaborative else ["technical_lead"],
                     "task_state": failed.get("state"),
                 }
             },
@@ -670,12 +796,14 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             message=str(error),
             retryable=True,
         )
+        involved = await self._involved_specialist_roles(incident_id)
+        collaborative = str(incident.get("status") or "").upper() == "UNDER_ANALYSIS"
         await self.repository.update_incident(
             incident_id,
             {
                 "agentic": {
                     "current_agent": "technical_lead",
-                    "active_agents": ["technical_lead"],
+                    "active_agents": ["technical_lead", *involved] if collaborative else ["technical_lead"],
                     "task_state": failed.get("state"),
                 }
             },
