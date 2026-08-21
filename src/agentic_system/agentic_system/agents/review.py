@@ -13,6 +13,12 @@ from spade_llm.providers.base_provider import BaseLLMProvider
 LOGGER = logging.getLogger("agentic_system.agents.review")
 _ALLOWED_DECISIONS = {"resolve", "operator_action_required", "request_support"}
 _ALLOWED_SUPPORT_DOMAINS = {"system", "network", "application", "software"}
+_SUPPORT_ROLE_BY_DOMAIN = {
+    "system": "system_engineer",
+    "network": "network_engineer",
+    "application": "application_engineer",
+    "software": "software_developer",
+}
 _MAX_REVIEW_ATTEMPTS = 3
 
 ReviewDecision = Literal["resolve", "operator_action_required", "request_support"]
@@ -90,12 +96,14 @@ belongs to the agents. If the specialist still recommends actions such as inspec
 query metrics, examine connections, validate service behaviour, or collect another domain's
 evidence, select request_support rather than presenting those diagnostic actions as remediation.
 
-The specialist result may contain `specialists_already_involved`. When requesting support,
-prefer a technical domain whose specialist has not already participated in this incident.
-If the specialist explicitly sets assistance_required=true and provides assistance_domain,
-treat that as strong evidence that another domain is needed, while still checking whether
-that domain has already participated. The support specialist will receive the current
-specialist's evidence directly over XMPP and correlate it with its own MCP/RAG observations.
+The input contains `support_policy` with `specialists_already_involved`,
+`eligible_support_domains`, and the specialist's requested assistance domain. When requesting
+support, support_domain MUST be chosen from eligible_support_domains. NEVER request a domain
+whose specialist already participated in the incident. If assistance_required=true and the
+specialist's assistance_domain is still eligible, treat it as strong evidence for that domain;
+you may choose another eligible domain only when the supplied evidence clearly justifies it.
+The support specialist will receive the current specialist's evidence directly over XMPP and
+correlate it with its own MCP/RAG observations.
 
 Do not invent evidence, commands, measurements, or a root cause that the specialist did
 not support. Keep remediation advisory only. Remediation must describe what should be done
@@ -107,7 +115,8 @@ support_reason.
 The `decision` field MUST be exactly one of: resolve, operator_action_required,
 request_support. confidence must be 0..1. remediation_steps must be an array of concise
 strings. support_domain must be null unless decision=request_support, otherwise one of
-system, network, application, software. support_reason must be null unless support is requested."""
+system, network, application, software AND it must be present in eligible_support_domains.
+support_reason must be null unless support is requested."""
 
     def __init__(
         self,
@@ -146,6 +155,7 @@ system, network, application, software. support_reason must be null unless suppo
                             "triage": incident.get("agentic") or {},
                         },
                         "specialist_result": specialist_result,
+                        "support_policy": self._support_policy(specialist_result),
                     },
                     separators=(",", ":"),
                     sort_keys=True,
@@ -197,6 +207,7 @@ system, network, application, software. support_reason must be null unless suppo
                     self.max_attempts,
                     exc,
                 )
+                support_policy = self._support_policy(specialist_result)
                 context.add_message_dict(
                     {
                         "role": "user",
@@ -206,7 +217,10 @@ system, network, application, software. support_reason must be null unless suppo
                             "Terminal decisions require diagnosis_status=confirmed. If the "
                             "specialist diagnosis is probable or inconclusive, request support "
                             "from a useful specialist domain rather than assigning diagnostic "
-                            "work to the human operator."
+                            "work to the human operator. For request_support, choose ONLY from "
+                            f"eligible_support_domains={support_policy['eligible_support_domains']}. "
+                            f"The specialist requested assistance_domain="
+                            f"{support_policy['specialist_requested_domain']!r}."
                         ),
                     },
                     conversation_id,
@@ -323,6 +337,31 @@ system, network, application, software. support_reason must be null unless suppo
         )
 
     @staticmethod
+    def _support_policy(specialist_result: dict[str, Any]) -> dict[str, Any]:
+        involved = []
+        for raw_role in specialist_result.get("specialists_already_involved") or []:
+            role = str(raw_role).strip().lower()
+            if role and role not in involved:
+                involved.append(role)
+
+        eligible_domains = [
+            domain
+            for domain, role in _SUPPORT_ROLE_BY_DOMAIN.items()
+            if role not in involved
+        ]
+        requested_domain = str(
+            specialist_result.get("assistance_domain") or ""
+        ).strip().lower()
+        if requested_domain not in _ALLOWED_SUPPORT_DOMAINS:
+            requested_domain = ""
+
+        return {
+            "specialists_already_involved": involved,
+            "eligible_support_domains": eligible_domains,
+            "specialist_requested_domain": requested_domain or None,
+        }
+
+    @staticmethod
     def _validate_decision_against_specialist_result(
         assessment: TechnicalLeadReviewAssessment,
         *,
@@ -362,3 +401,24 @@ system, network, application, software. support_reason must be null unless suppo
             raise RuntimeError(
                 "Specialist requested diagnostic assistance, so TL must request support"
             )
+
+        if assessment.decision == "request_support":
+            support_policy = TechnicalLeadReviewReasoner._support_policy(specialist_result)
+            support_domain = str(assessment.support_domain or "").strip().lower()
+            support_role = _SUPPORT_ROLE_BY_DOMAIN.get(support_domain)
+            involved = set(support_policy["specialists_already_involved"])
+            eligible_domains = list(support_policy["eligible_support_domains"])
+            if support_role is None:
+                raise RuntimeError(
+                    f"Technical Lead requested unsupported support domain: {support_domain!r}"
+                )
+            if support_role in involved:
+                raise RuntimeError(
+                    f"support_domain={support_domain!r} maps to already-involved specialist "
+                    f"{support_role!r}; eligible support domains are {eligible_domains}"
+                )
+            if support_domain not in eligible_domains:
+                raise RuntimeError(
+                    f"support_domain={support_domain!r} is not eligible; "
+                    f"eligible support domains are {eligible_domains}"
+                )
