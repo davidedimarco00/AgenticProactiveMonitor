@@ -132,14 +132,15 @@ class AgentSpeakBDIRuntime:
         incident_id: str,
         role: str,
         task_type: str,
+        peer_role: str | None = None,
     ) -> BDISpecialistTaskResult:
         """Deliberate a received specialist task before operational ReAct starts.
 
-        This stage intentionally does not diagnose or call tools. It gives every
-        specialist its own explicit BDI state: the task becomes a belief, the
-        desire is to investigate the incident, and the selected intention is to
-        start the specialist investigation. ReAct will later execute that
-        intention.
+        A normal task produces an `investigate_incident` intention. When an
+        authorized peer context has already been received over XMPP, AgentSpeak
+        also receives a `peer_context_available` belief and commits the distinct
+        `investigate_with_peer` intention. ReAct executes either intention using
+        operational MCP/RAG evidence.
         """
 
         if self._specialist_plan is None:
@@ -149,6 +150,7 @@ class AgentSpeakBDIRuntime:
         normalized_incident = incident_id.strip()
         normalized_role = role.strip().lower()
         normalized_type = task_type.strip().upper()
+        normalized_peer = peer_role.strip().lower() if peer_role else None
         if not normalized_task:
             raise ValueError("Specialist BDI requires task_id")
         if not normalized_incident:
@@ -157,6 +159,11 @@ class AgentSpeakBDIRuntime:
             raise ValueError(f"Unsupported specialist role: {role!r}")
         if normalized_type != "INVESTIGATE_INCIDENT":
             raise ValueError(f"Unsupported specialist task type: {task_type!r}")
+        if normalized_peer is not None:
+            if normalized_peer not in _ALLOWED_ROLES:
+                raise ValueError(f"Unsupported peer specialist role: {peer_role!r}")
+            if normalized_peer == normalized_role:
+                raise ValueError("A specialist cannot collaborate with itself")
 
         async with self._semaphore:
             return await asyncio.to_thread(
@@ -165,6 +172,7 @@ class AgentSpeakBDIRuntime:
                 normalized_incident,
                 normalized_role,
                 normalized_type,
+                normalized_peer,
             )
 
     def _run_technical_lead(
@@ -284,6 +292,7 @@ class AgentSpeakBDIRuntime:
         incident_id: str,
         role: str,
         task_type: str,
+        peer_role: str | None,
     ) -> BDISpecialistTaskResult:
         state: dict[str, object] = {
             "acceptance_intention": None,
@@ -325,9 +334,30 @@ class AgentSpeakBDIRuntime:
                 raise RuntimeError("Specialist AgentSpeak committed a different task identity")
             state["investigation_intention"] = "investigate_incident"
 
+        @actions.add_procedure(
+            ".commit_collaborative_investigation",
+            (agentspeak.asl_str, agentspeak.asl_str, agentspeak.asl_str),
+        )
+        def commit_collaborative_investigation(
+            action_task_id: str,
+            action_incident_id: str,
+            action_peer_role: str,
+        ) -> None:
+            if action_task_id != task_id or action_incident_id != incident_id:
+                raise RuntimeError("Collaborative AgentSpeak intention used a different task")
+            if peer_role is None or action_peer_role != peer_role:
+                raise RuntimeError("Collaborative AgentSpeak intention used an unexpected peer")
+            state["investigation_intention"] = "investigate_with_peer"
+
         source = agentspeak.StringSource(
             "specialist_runtime.asl",
-            self._build_specialist_program(task_id, incident_id, role, task_type),
+            self._build_specialist_program(
+                task_id,
+                incident_id,
+                role,
+                task_type,
+                peer_role,
+            ),
         )
         environment = agentspeak.runtime.Environment()
         agent = environment.build_agent(source, actions, name=f"{role}_bdi")
@@ -335,8 +365,11 @@ class AgentSpeakBDIRuntime:
 
         if state["acceptance_intention"] != "accept_task":
             raise RuntimeError("Specialist AgentSpeak did not commit to accept_task")
-        if state["investigation_intention"] != "investigate_incident":
-            raise RuntimeError("Specialist AgentSpeak did not commit to investigate_incident")
+        expected_intention = "investigate_with_peer" if peer_role else "investigate_incident"
+        if state["investigation_intention"] != expected_intention:
+            raise RuntimeError(
+                f"Specialist AgentSpeak did not commit to {expected_intention}"
+            )
 
         return BDISpecialistTaskResult(
             task_id=task_id,
@@ -344,7 +377,7 @@ class AgentSpeakBDIRuntime:
             role=role,
             goal="handle_investigation_task",
             acceptance_intention="accept_task",
-            investigation_intention="investigate_incident",
+            investigation_intention=expected_intention,
         )
 
     def _build_technical_lead_program(
@@ -389,6 +422,7 @@ class AgentSpeakBDIRuntime:
         incident_id: str,
         role: str,
         task_type: str,
+        peer_role: str | None,
     ) -> str:
         if self._specialist_plan is None:
             raise RuntimeError("Specialist AgentSpeak plan is not configured")
@@ -402,10 +436,16 @@ class AgentSpeakBDIRuntime:
             f"root_cause_unknown({incident}).",
             f"assigned_to({task}, {role}).",
             f"self_role({role}).",
-            f"!handle_investigation_task({task}, {incident}).",
-            "",
-            self._specialist_plan,
         ]
+        if peer_role:
+            lines.append(f"peer_context_available({task}, {peer_role}).")
+        lines.extend(
+            [
+                f"!handle_investigation_task({task}, {incident}).",
+                "",
+                self._specialist_plan,
+            ]
+        )
         return "\n".join(lines)
 
     @staticmethod
