@@ -62,10 +62,135 @@ class OllamaToolCallingProvider(BaseLLMProvider):
             },
         }
 
+    @staticmethod
+    def _format_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Translate SPADE-LLM/OpenAI-style tool history to Ollama native messages.
+
+        SPADE-LLM stores assistant tool calls using OpenAI-compatible ``id`` and
+        stringified ``function.arguments`` fields, followed by tool results that
+        reference ``tool_call_id``. Ollama's native ``/api/chat`` conversation
+        format instead expects object-valued arguments in assistant tool calls and
+        ``tool_name`` on each tool-result message. The first tool-selection turn
+        contains no tool history and therefore works without this translation;
+        subsequent ReAct turns require it.
+        """
+
+        formatted: list[dict[str, Any]] = []
+        tool_names_by_call_id: dict[str, str] = {}
+        pending_tool_names: list[str] = []
+
+        for raw_message in messages:
+            if not isinstance(raw_message, dict):
+                raise ValueError("Ollama chat history contains a non-object message")
+
+            role = str(raw_message.get("role") or "").strip()
+            if role not in {"system", "user", "assistant", "tool"}:
+                raise ValueError(f"Unsupported Ollama chat role: {role!r}")
+
+            content = raw_message.get("content")
+
+            if role == "assistant" and raw_message.get("tool_calls"):
+                raw_calls = raw_message.get("tool_calls")
+                if not isinstance(raw_calls, list):
+                    raise ValueError("Assistant tool_calls must be a list")
+
+                native_calls: list[dict[str, Any]] = []
+                for index, raw_call in enumerate(raw_calls):
+                    if not isinstance(raw_call, dict):
+                        raise ValueError("Assistant tool call must be an object")
+                    function = raw_call.get("function") or {}
+                    if not isinstance(function, dict):
+                        raise ValueError("Assistant tool call function must be an object")
+
+                    tool_name = str(function.get("name") or "").strip()
+                    if not tool_name:
+                        raise ValueError("Assistant tool call is missing function name")
+
+                    arguments = function.get("arguments", {})
+                    if isinstance(arguments, str):
+                        if arguments.strip():
+                            try:
+                                arguments = json.loads(arguments)
+                            except json.JSONDecodeError as exc:
+                                raise ValueError(
+                                    f"Assistant tool call arguments for {tool_name} are not valid JSON"
+                                ) from exc
+                        else:
+                            arguments = {}
+                    if not isinstance(arguments, dict):
+                        raise ValueError(
+                            f"Assistant tool call arguments for {tool_name} must be an object"
+                        )
+
+                    call_id = str(raw_call.get("id") or "").strip()
+                    if call_id:
+                        tool_names_by_call_id[call_id] = tool_name
+                    pending_tool_names.append(tool_name)
+
+                    native_calls.append(
+                        {
+                            "type": "function",
+                            "function": {
+                                "index": index,
+                                "name": tool_name,
+                                "arguments": arguments,
+                            },
+                        }
+                    )
+
+                formatted.append(
+                    {
+                        "role": "assistant",
+                        "content": "" if content is None else str(content),
+                        "tool_calls": native_calls,
+                    }
+                )
+                continue
+
+            if role == "tool":
+                call_id = str(raw_message.get("tool_call_id") or "").strip()
+                tool_name = tool_names_by_call_id.pop(call_id, None) if call_id else None
+                if tool_name is None and pending_tool_names:
+                    tool_name = pending_tool_names[0]
+                if tool_name is None:
+                    raise ValueError(
+                        "Cannot translate SPADE-LLM tool result without its tool name"
+                    )
+                try:
+                    pending_tool_names.remove(tool_name)
+                except ValueError:
+                    pass
+
+                formatted.append(
+                    {
+                        "role": "tool",
+                        "tool_name": tool_name,
+                        "content": "" if content is None else str(content),
+                    }
+                )
+                continue
+
+            formatted.append(
+                {
+                    "role": role,
+                    "content": "" if content is None else str(content),
+                }
+            )
+
+        return formatted
+
     async def _post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(self.endpoint, json=payload)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                LOGGER.error(
+                    "Ollama native chat rejected request status=%s body=%s",
+                    response.status_code,
+                    response.text[:2000],
+                )
+                raise
             data = response.json()
 
         if not isinstance(data, dict):
@@ -84,7 +209,7 @@ class OllamaToolCallingProvider(BaseLLMProvider):
 
         payload: dict[str, Any] = {
             "model": self.ollama_model,
-            "messages": context.get_prompt(conversation_id),
+            "messages": self._format_messages(context.get_prompt(conversation_id)),
             "stream": False,
             "think": False,
             "options": {"temperature": 0},
