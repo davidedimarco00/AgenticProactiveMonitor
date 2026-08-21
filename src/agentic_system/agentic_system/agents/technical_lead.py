@@ -36,6 +36,8 @@ LOGGER = logging.getLogger("agentic_system.agents.technical_lead")
 INCIDENT_INBOX_MAXSIZE = 64
 TRIAGE_INBOX_MAXSIZE = 32
 REVIEW_INBOX_MAXSIZE = 32
+REVIEW_BDI_MAX_CYCLES = 3
+REVIEW_BDI_RETRY_DELAY_SECONDS = 2.0
 
 
 @dataclass(slots=True)
@@ -237,7 +239,7 @@ class TechnicalLeadAgent(BaseAgent):
                 self.agent._triage_inbox.task_done()
 
     class ReviewBehaviour(CyclicBehaviour):
-        """Critically review completed specialist evidence through a second BDI cycle."""
+        """Critically review completed specialist evidence through bounded BDI cycles."""
 
         async def run(self) -> None:
             try:
@@ -254,11 +256,6 @@ class TechnicalLeadAgent(BaseAgent):
                     raise RuntimeError(
                         "Technical Lead review requires an incident in UNDER_ANALYSIS state"
                     )
-                self.agent.set_activity(
-                    "WORKING",
-                    incident_id=incident_id,
-                    detail="reviewing_specialist_result",
-                )
 
                 async def reason_for_review() -> BDIReviewAssessment:
                     assessment = await self.agent._review_reasoner.assess(
@@ -277,10 +274,56 @@ class TechnicalLeadAgent(BaseAgent):
                         support_reason=assessment.support_reason,
                     )
 
-                deliberation = await self.agent._review_bdi_runtime.review_specialist_result(
-                    incident_id=incident_id or "",
-                    review_callback=reason_for_review,
-                )
+                deliberation = None
+                last_cycle_error: Exception | None = None
+                for cycle in range(1, REVIEW_BDI_MAX_CYCLES + 1):
+                    self.agent.set_activity(
+                        "WORKING",
+                        incident_id=incident_id,
+                        detail="reviewing_specialist_result",
+                    )
+                    try:
+                        deliberation = await self.agent._review_bdi_runtime.review_specialist_result(
+                            incident_id=incident_id or "",
+                            review_callback=reason_for_review,
+                        )
+                        if cycle > 1:
+                            LOGGER.warning(
+                                "Technical Lead BDI review recovered after retry cycle: "
+                                "incident=%s cycle=%d/%d",
+                                incident_id,
+                                cycle,
+                                REVIEW_BDI_MAX_CYCLES,
+                            )
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        last_cycle_error = exc
+                        self.agent.last_review_error = str(exc)
+                        if cycle >= REVIEW_BDI_MAX_CYCLES:
+                            raise
+                        self.agent.set_activity(
+                            "WAITING",
+                            incident_id=incident_id,
+                            detail="review_retrying",
+                        )
+                        LOGGER.warning(
+                            "Technical Lead BDI review cycle failed transiently; "
+                            "keeping incident UNDER_ANALYSIS and retrying without repeating "
+                            "specialist work: incident=%s cycle=%d/%d error=%s",
+                            incident_id,
+                            cycle,
+                            REVIEW_BDI_MAX_CYCLES,
+                            exc,
+                        )
+                        await asyncio.sleep(REVIEW_BDI_RETRY_DELAY_SECONDS)
+
+                if deliberation is None:
+                    raise last_cycle_error or RuntimeError(
+                        "Technical Lead BDI review did not produce a deliberation"
+                    )
+
                 decision = TechnicalLeadReviewDecision(
                     incident_id=deliberation.incident_id,
                     decision=deliberation.decision,
@@ -460,7 +503,7 @@ class TechnicalLeadAgent(BaseAgent):
         incident: dict[str, Any],
         *,
         specialist_result: dict[str, Any],
-        timeout: float = 120.0,
+        timeout: float = 360.0,
     ) -> TechnicalLeadReviewDecision:
         if self.lifecycle_state != "running":
             raise RuntimeError("Technical Lead is not running")
