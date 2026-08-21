@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from datetime import datetime, timezone
 import logging
 from typing import Any
@@ -16,6 +17,7 @@ from .messages import AgentMessage, Performative, build_spade_message
 
 LOGGER = logging.getLogger("agentic_system.agents")
 AGENT_ACTIVITY_STATES = {"IDLE", "WORKING", "WAITING"}
+AGENT_TRACE_MAX_EVENTS = 200
 
 
 def _utc_now() -> str:
@@ -25,9 +27,10 @@ def _utc_now() -> str:
 class BaseAgent(LLMAgent):
     """Common SPADE-LLM base class for every project agent.
 
-    SPADE-LLM owns the LLM provider, conversation context, interaction memory,
-    tool execution and MCP integration. This project layer only adds role
-    metadata, XMPP observability and health endpoints.
+    SPADE-LLM owns identity, XMPP, interaction memory and MCP discovery. This
+    project layer adds role metadata, live activity, bounded operator traces and
+    health endpoints. Traces contain concise operational decisions and observed
+    evidence, never private model chain-of-thought.
     """
 
     class LifecycleBehaviour(CyclicBehaviour):
@@ -114,6 +117,9 @@ class BaseAgent(LLMAgent):
         self.last_communication_at: str | None = None
         self._tools_before_mcp = len(self.tools)
         self.mcp_tool_count = 0
+        self.model_roles: dict[str, str] = {"reasoning": str(self.provider.model)}
+        self._trace_sequence = 0
+        self._activity_trace: deque[dict[str, Any]] = deque(maxlen=AGENT_TRACE_MAX_EVENTS)
 
     async def setup(self) -> None:
         # LLMAgent.setup() registers the SPADE-LLM behaviour and discovers MCP
@@ -219,6 +225,38 @@ class BaseAgent(LLMAgent):
         self.activity_detail = detail
         self.activity_updated_at = _utc_now()
 
+    def set_model_roles(self, **roles: str) -> None:
+        for name, model in roles.items():
+            normalized = str(model or "").strip()
+            if normalized:
+                self.model_roles[str(name)] = normalized
+
+    def record_trace(self, event: dict[str, Any]) -> None:
+        """Record one bounded, operator-safe execution trace event in memory."""
+
+        self._trace_sequence += 1
+        normalized = {
+            "trace_id": f"{self.role}:{self._trace_sequence}",
+            "event_type": "AGENT_EXECUTION_TRACE",
+            "agent_role": self.role,
+            "agent_jid": str(self.jid),
+            "called_by": self.role,
+            "timestamp": _utc_now(),
+            "status": "LIVE",
+            "action": str(event.get("action") or "agent_activity"),
+            "reason": str(event.get("reason") or "").strip(),
+            "incident_id": str(event.get("incident_id") or "").strip() or None,
+            "task_id": str(event.get("task_id") or "").strip() or None,
+            "tool": str(event.get("tool") or "").strip() or None,
+            "outcome": str(event.get("outcome") or "").strip(),
+            "details": dict(event.get("details") or {}),
+        }
+        self._activity_trace.append(normalized)
+
+    def trace_snapshot(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        bounded = min(max(int(limit), 1), AGENT_TRACE_MAX_EVENTS)
+        return [dict(item) for item in list(reversed(self._activity_trace))[:bounded]]
+
     def mark_message_sent(self) -> None:
         self.messages_sent += 1
         self.last_message_at = _utc_now()
@@ -271,11 +309,14 @@ class BaseAgent(LLMAgent):
             "framework": "SPADE-LLM",
             "llm_agent": True,
             "provider_model": self.provider.model,
+            "model_roles": dict(self.model_roles),
             "context_enabled": self.context is not None,
             "interaction_memory_enabled": self.interaction_memory is not None,
             "mcp_server_count": len(self.mcp_servers),
             "mcp_tool_count": self.mcp_tool_count,
             "tool_names": [tool.name for tool in self.tools],
+            "trace_event_count": len(self._activity_trace),
+            "trace_tail": self.trace_snapshot(limit=25),
             "started_at": self.started_at,
             "last_heartbeat_at": self.last_heartbeat_at,
             "last_xmpp_connected_at": self.last_xmpp_connected_at,
@@ -300,11 +341,13 @@ class BaseAgent(LLMAgent):
             "framework": "SPADE-LLM",
             "llm_agent": True,
             "provider_model": self.provider.model,
+            "model_roles": dict(self.model_roles),
             "context_enabled": self.context is not None,
             "interaction_memory_enabled": self.interaction_memory is not None,
             "mcp_server_count": len(self.mcp_servers),
             "mcp_tool_count": self.mcp_tool_count,
             "tool_names": [tool.name for tool in self.tools],
+            "trace_event_count": len(self._activity_trace),
             "started_at": self.started_at,
             "last_heartbeat_at": self.last_heartbeat_at,
             "messages_sent": self.messages_sent,
