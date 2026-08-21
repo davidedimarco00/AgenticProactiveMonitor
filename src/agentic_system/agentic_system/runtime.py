@@ -6,11 +6,17 @@ from typing import Any, Awaitable, Callable
 
 from .agents.base import BaseAgent
 from .agents.factory import build_agents
+from .agents.investigation_results import (
+    install_investigation_result_inbox,
+    pop_investigation_result,
+)
 from .agents.messages import Performative
 from .agents.roles import SystemEngineerAgent, TechnicalLeadAgent
 from .agents.specialist import (
     INVESTIGATION_TASK_ACCEPTED_TYPE,
+    INVESTIGATION_TASK_EXECUTION_FAILED_TYPE,
     INVESTIGATION_TASK_MESSAGE_TYPE,
+    INVESTIGATION_TASK_RESULT_TYPE,
     SpecialistAgent,
 )
 from .incidents import (
@@ -19,6 +25,7 @@ from .incidents import (
     IncidentAssigneeReceipt,
     IncidentTriageReceipt,
     InvestigationTaskDispatchReceipt,
+    InvestigationTaskResultReceipt,
 )
 from .integrations import OpenSearchAnomalyWatcher
 from .settings import RuntimeConfig
@@ -212,6 +219,107 @@ class AgentRuntime:
             ),
         )
 
+    async def collect_investigation_result(
+        self,
+        incident: dict[str, Any],
+        task: dict[str, Any],
+    ) -> InvestigationTaskResultReceipt | None:
+        """Collect one asynchronous specialist ReAct outcome from the TL inbox."""
+
+        task_id = str(task.get("task_id") or "").strip()
+        incident_id = str(task.get("incident_id") or "").strip()
+        assigned_to = str(task.get("assigned_to") or "").strip().lower()
+        if not task_id or not incident_id or not assigned_to:
+            raise ValueError("Task result collection requires durable task identity")
+        if incident_id != str(incident.get("incident_id") or "").strip():
+            raise RuntimeError("Task result incident_id does not match current incident")
+
+        technical_lead = self._technical_lead()
+        message = pop_investigation_result(technical_lead, task_id)
+        if message is None:
+            return None
+
+        specialist = self._specialist_by_role(assigned_to)
+        payload = dict(message.payload)
+        valid_identity = (
+            message.sender == str(specialist.jid)
+            and message.receiver == str(technical_lead.jid)
+            and str(payload.get("task_id") or "") == task_id
+            and str(payload.get("incident_id") or "") == incident_id
+        )
+        if not valid_identity:
+            raise RuntimeError(
+                f"Specialist {assigned_to} returned an invalid investigation result identity"
+            )
+
+        if message.type == INVESTIGATION_TASK_EXECUTION_FAILED_TYPE:
+            return InvestigationTaskResultReceipt(
+                task_id=task_id,
+                incident_id=incident_id,
+                agent_role=assigned_to,
+                agent_jid=str(specialist.jid),
+                correlation_id=message.correlation_id,
+                succeeded=False,
+                error=str(payload.get("error") or "Specialist ReAct execution failed."),
+                retryable=bool(payload.get("retryable", True)),
+            )
+
+        if message.type != INVESTIGATION_TASK_RESULT_TYPE:
+            raise RuntimeError(f"Unsupported specialist result type: {message.type}")
+
+        result_role = str(payload.get("agent_role") or "").strip().lower()
+        if result_role != assigned_to:
+            raise RuntimeError(
+                f"Specialist result role mismatch: expected {assigned_to}, got {result_role}"
+            )
+
+        try:
+            confidence = float(payload.get("confidence"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Specialist result confidence is invalid") from exc
+        if not 0.0 <= confidence <= 1.0:
+            raise RuntimeError("Specialist result confidence must be between 0 and 1")
+
+        def strings(name: str) -> tuple[str, ...]:
+            value = payload.get(name) or []
+            if not isinstance(value, list):
+                raise RuntimeError(f"Specialist result {name} must be an array")
+            return tuple(str(item).strip() for item in value if str(item).strip())
+
+        evidence_raw = payload.get("evidence") or []
+        if not isinstance(evidence_raw, list):
+            raise RuntimeError("Specialist result evidence must be an array")
+        evidence = tuple(dict(item) for item in evidence_raw if isinstance(item, dict))
+
+        react_steps = int(payload.get("react_steps") or 0)
+        if react_steps <= 0:
+            raise RuntimeError("Specialist result react_steps must be greater than zero")
+
+        return InvestigationTaskResultReceipt(
+            task_id=task_id,
+            incident_id=incident_id,
+            agent_role=assigned_to,
+            agent_jid=str(specialist.jid),
+            correlation_id=message.correlation_id,
+            succeeded=True,
+            summary=str(payload.get("summary") or "").strip(),
+            confidence=confidence,
+            findings=strings("findings"),
+            evidence=evidence,
+            hypotheses=strings("hypotheses"),
+            recommended_next_steps=strings("recommended_next_steps"),
+            assistance_required=bool(payload.get("assistance_required", False)),
+            assistance_domain=(
+                str(payload.get("assistance_domain")).strip().lower()
+                if payload.get("assistance_domain") is not None
+                else None
+            ),
+            react_steps=react_steps,
+            tools_used=strings("tools_used"),
+            conversation_id=str(payload.get("conversation_id") or "").strip() or None,
+            retryable=False,
+        )
+
     async def start(self, *, start_observation_pipeline: bool = True) -> None:
         LOGGER.info("Starting %d SPADE-LLM agents", len(self.agents))
 
@@ -235,6 +343,11 @@ class AgentRuntime:
             )
 
         LOGGER.info("All %d SPADE-LLM agents are connected", len(self.agents))
+
+        # Specialist results are asynchronous INFORM/FAILURE messages that arrive
+        # after the initial task AGREE. Install the TL result inbox before any
+        # incident can be dispatched so no outcome can race ahead of collection.
+        install_investigation_result_inbox(self._technical_lead())
 
         try:
             self.communication_probe = await self._run_communication_probe()
@@ -262,12 +375,15 @@ class AgentRuntime:
                 self.anomaly_intake.run(),
                 name="anomaly-intake-worker",
             )
-        if self._anomaly_watcher_task is None:
+        if self.config.enable_opensearch_anomaly_watcher and self._anomaly_watcher_task is None:
             self._anomaly_watcher_task = asyncio.create_task(
                 self.anomaly_watcher.run(),
                 name="opensearch-anomaly-watcher",
             )
-        LOGGER.info("Global FIFO anomaly pipeline started with concurrency=1")
+        LOGGER.info(
+            "Global FIFO anomaly pipeline started with concurrency=1; OpenSearch watcher=%s",
+            "enabled" if self.config.enable_opensearch_anomaly_watcher else "disabled",
+        )
 
     @property
     def anomalies_received(self) -> int:
