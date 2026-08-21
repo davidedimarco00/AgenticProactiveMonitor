@@ -162,10 +162,10 @@ class SpecialistAgent(BaseAgent):
                 else:
                     result = cached
 
-                # The data plane is peer-to-peer: an approved support specialist
-                # returns its evidence directly to the specialist that requested
-                # help. The TL still receives the durable task result separately
-                # as coordination/control-plane information.
+                # The collaboration data plane is peer-to-peer. The support
+                # specialist sends its evidence to its peer directly while the
+                # TL separately receives the durable task result as control-plane
+                # information for coordination and final review.
                 if peer_context is not None:
                     await send_peer_result(
                         self.agent,
@@ -266,6 +266,11 @@ class SpecialistAgent(BaseAgent):
                         f"not {self.agent.role}"
                     )
 
+                # Peer context is deliberately delivered before the TL dispatches
+                # a support task. Therefore it is available as an explicit BDI
+                # belief at deliberation time, not merely as an LLM prompt later.
+                peer_context = self.agent._peer_context_by_task.get(assignment.task_id)
+
                 # Duplicate delivery is expected with at-least-once dispatch.
                 # BDI acceptance is idempotent and ReAct execution is guarded by
                 # task_id so a retry cannot start two investigations locally.
@@ -281,6 +286,11 @@ class SpecialistAgent(BaseAgent):
                         incident_id=assignment.incident_id,
                         role=self.agent.role,
                         task_type=assignment.task_type,
+                        peer_role=(
+                            str(peer_context["peer_role"])
+                            if peer_context is not None
+                            else None
+                        ),
                     )
                     self.agent._accepted_tasks[assignment.task_id] = deliberation
                     self.agent.tasks_accepted += 1
@@ -288,7 +298,6 @@ class SpecialistAgent(BaseAgent):
                 self.agent.last_task_assignment = assignment
                 self.agent.last_bdi_task_result = deliberation
                 self.agent.last_request_error = None
-                peer_context = self.agent._peer_context_by_task.get(assignment.task_id)
                 self.agent.set_activity(
                     "WORKING",
                     incident_id=assignment.incident_id,
