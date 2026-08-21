@@ -7,7 +7,6 @@ import logging
 from typing import Any, Literal
 
 from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langchain_ollama import ChatOllama
@@ -144,11 +143,12 @@ class ReActInvestigationResult:
 
 
 class SpecialistReActExecutor:
-    """Execute a BDI intention through LangChain's tool-using agent loop.
+    """Execute a BDI intention with LangChain ReAct and native Ollama finalization.
 
-    SPADE-LLM remains responsible for identity, XMPP, MCP discovery and persistent
-    interaction memory. AgentSpeak commits the intention. LangChain is deliberately
-    limited to the operational Reason -> Act -> Observe loop.
+    SPADE-LLM owns identity, XMPP, MCP discovery and persistent interaction memory.
+    AgentSpeak commits the intention. LangChain owns the operational
+    Reason -> Act -> Observe loop. After tool use, the same Qwen model uses
+    Ollama's native JSON-schema output to encode the evidence-backed conclusion.
     """
 
     SYSTEM_POLICY = """
@@ -161,14 +161,30 @@ You MUST attempt at least one operational tool before concluding. Do not stop wh
 available tool in your own domain can materially test the leading hypothesis. Use the
 knowledge-base tool when project architecture, runbooks, or system-specific facts matter.
 
-Stop only when either:
-1. the root cause and causal chain are supported strongly enough for `confirmed`; or
-2. the remaining uncertainty requires another specialist domain. In that case return
-   `probable` or `inconclusive`, set assistance_required=true, and select that domain.
+Stop gathering evidence only when either:
+1. the root cause and causal chain are supported strongly enough for a confirmed diagnosis; or
+2. the remaining uncertainty requires another specialist domain.
 
-Never invent observations. Separate findings from hypotheses. Do not perform remediation;
-recommended_next_steps may contain only diagnostic verification that remains impossible in
-your current domain.
+Never invent observations. Separate findings from hypotheses. Do not perform remediation.
+A separate schema-finalization step will encode your conclusion after ReAct completes.
+""".strip()
+
+    FINALIZATION_POLICY = """
+Convert the completed investigation into the required diagnostic schema.
+
+Use only the supplied assignment, tool evidence, and working conclusion. Never invent
+observations or claim that a tool returned data that is not present in the evidence.
+
+Rules:
+- confirmed: root_cause and causal_chain are required; assistance_required must be false
+  and assistance_domain must be null.
+- probable: root_cause and causal_chain are required; assistance_required must be true
+  and assistance_domain must identify the specialist domain needed next.
+- inconclusive: assistance_required must be true and assistance_domain must identify the
+  specialist domain needed next. root_cause may be null.
+- findings contain observations supported by evidence.
+- hypotheses contain unresolved causal possibilities.
+- recommended_next_steps contain diagnostic verification only, never remediation.
 """.strip()
 
     def __init__(
@@ -181,6 +197,7 @@ your current domain.
         tool_timeout_seconds: float = 30.0,
         max_observation_chars: int = _DEFAULT_MAX_OBSERVATION_CHARS,
         agent: Any | None = None,
+        finalizer: Any | None = None,
     ) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be greater than zero")
@@ -200,33 +217,34 @@ your current domain.
         self.max_observation_chars = max_observation_chars
         self._tool_names = {tool.name for tool in self.tools}
         self._langchain_tools = [self._adapt_tool(tool) for tool in self.tools]
-        self._agent = agent or self._build_agent()
 
-    def _build_agent(self) -> Any:
+        model = None
+        if agent is None or finalizer is None:
+            model = self._build_model()
+        self._agent = agent or self._build_agent(model)
+        self._finalizer = finalizer or model.with_structured_output(
+            _SpecialistFinalOutput,
+            method="json_schema",
+        )
+
+    def _build_model(self) -> ChatOllama:
         model_name = self._ollama_model_name()
         base_url = str(getattr(self.provider, "base_url", "")).rstrip("/")
         if not base_url:
             raise ValueError("Specialist provider does not expose an Ollama base_url")
-
-        model = ChatOllama(
+        return ChatOllama(
             model=model_name,
             base_url=base_url,
             temperature=0,
         )
+
+    def _build_agent(self, model: Any) -> Any:
         role_prompt = self._system_prompt_from_spade_context()
         system_prompt = f"{role_prompt}\n\n{self.SYSTEM_POLICY}".strip()
         return create_agent(
             model=model,
             tools=self._langchain_tools,
             system_prompt=system_prompt,
-            response_format=ToolStrategy(
-                _SpecialistFinalOutput,
-                handle_errors=(
-                    "Return the required diagnostic schema. A confirmed diagnosis needs an "
-                    "evidence-backed root cause and causal chain and cannot request support. "
-                    "A probable or inconclusive diagnosis must request another specialist domain."
-                ),
-            ),
         )
 
     def _ollama_model_name(self) -> str:
@@ -317,7 +335,9 @@ your current domain.
         state = await self._invoke_agent(
             {"messages": [{"role": "user", "content": investigation_prompt}]}
         )
-        evidence, tools_used, react_steps = self._extract_execution(state.get("messages") or [])
+        evidence, tools_used, react_steps = self._extract_execution(
+            state.get("messages") or []
+        )
 
         if not evidence:
             retry_messages = list(state.get("messages") or [])
@@ -327,7 +347,7 @@ your current domain.
                     "content": (
                         "No live operational evidence has been collected. Continue the same "
                         "investigation and call at least one suitable MCP or RAG tool before "
-                        "producing the diagnostic result."
+                        "concluding."
                     ),
                 }
             )
@@ -345,19 +365,16 @@ your current domain.
                 f"LangChain ReAct exceeded the configured {self.max_steps} model steps"
             )
 
-        structured = state.get("structured_response")
-        if structured is None:
-            raise ReActInvestigationError("LangChain agent did not return structured_response")
-        try:
-            output = (
-                structured
-                if isinstance(structured, _SpecialistFinalOutput)
-                else _SpecialistFinalOutput.model_validate(structured)
-            )
-        except ValidationError as exc:
-            raise ReActInvestigationError(
-                f"LangChain specialist final result is invalid: {exc}"
-            ) from exc
+        output = await self._finalize(
+            task_id=task_id,
+            incident_id=incident_id,
+            agent_role=agent_role,
+            severity=severity,
+            entity=entity,
+            anomaly=anomaly,
+            evidence=evidence,
+            messages=state.get("messages") or [],
+        )
 
         self._sync_spade_context(
             messages=state.get("messages") or [],
@@ -390,13 +407,10 @@ your current domain.
 
     async def _invoke_agent(self, state: dict[str, Any]) -> dict[str, Any]:
         config = {"recursion_limit": max(10, self.max_steps * 2 + 4)}
-        slot = getattr(self.provider, "inference_slot", None)
         try:
-            if callable(slot):
-                async with slot():
-                    result = await self._agent.ainvoke(state, config=config)
-            else:
-                result = await self._agent.ainvoke(state, config=config)
+            result = await self._invoke_with_inference_slot(
+                self._agent.ainvoke(state, config=config)
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -404,6 +418,87 @@ your current domain.
         if not isinstance(result, dict):
             raise ReActInvestigationError("LangChain agent returned an invalid state")
         return result
+
+    async def _finalize(
+        self,
+        *,
+        task_id: str,
+        incident_id: str,
+        agent_role: str,
+        severity: str,
+        entity: str,
+        anomaly: dict[str, Any],
+        evidence: list[ReActEvidence],
+        messages: list[Any],
+    ) -> _SpecialistFinalOutput:
+        assignment = {
+            "task_id": task_id,
+            "incident_id": incident_id,
+            "agent_role": agent_role,
+            "severity": severity,
+            "entity": entity,
+            "anomaly": anomaly,
+        }
+        working_conclusion = self._last_ai_text(messages)
+        prompt = (
+            f"{self.FINALIZATION_POLICY}\n\n"
+            "Assignment:\n"
+            f"{json.dumps(assignment, default=str, ensure_ascii=False)}\n\n"
+            "Collected tool evidence:\n"
+            f"{json.dumps([item.to_dict() for item in evidence], default=str, ensure_ascii=False)}"
+        )
+        if working_conclusion:
+            prompt += f"\n\nWorking conclusion from the ReAct loop:\n{working_conclusion}"
+
+        last_error: Exception | None = None
+        for attempt in range(2):
+            final_prompt = prompt
+            if attempt:
+                final_prompt += (
+                    "\n\nThe previous schema finalization failed validation. Re-evaluate the "
+                    "same evidence and return a schema-valid diagnosis without adding facts."
+                )
+            try:
+                structured = await self._invoke_with_inference_slot(
+                    self._finalizer.ainvoke(
+                        [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are the structured finalization stage of an IT "
+                                    "diagnostic agent. Do not call tools."
+                                ),
+                            },
+                            {"role": "user", "content": final_prompt},
+                        ]
+                    )
+                )
+                return (
+                    structured
+                    if isinstance(structured, _SpecialistFinalOutput)
+                    else _SpecialistFinalOutput.model_validate(structured)
+                )
+            except asyncio.CancelledError:
+                raise
+            except ValidationError as exc:
+                last_error = exc
+            except Exception as exc:
+                last_error = exc
+
+        if isinstance(last_error, ValidationError):
+            raise ReActInvestigationError(
+                self._validation_error_message(last_error)
+            ) from last_error
+        raise ReActInvestigationError(
+            f"Ollama structured finalization failed: {last_error}"
+        ) from last_error
+
+    async def _invoke_with_inference_slot(self, awaitable: Any) -> Any:
+        slot = getattr(self.provider, "inference_slot", None)
+        if callable(slot):
+            async with slot():
+                return await awaitable
+        return await awaitable
 
     def _extract_execution(
         self,
@@ -502,36 +597,32 @@ your current domain.
                 result = wrapper.get("observation") if wrapper.get("success") else wrapper
                 self.context.add_tool_result(name, result, call_id, conversation_id)
 
-    @classmethod
-    def _parse_final_payload(cls, value: str | dict[str, Any]) -> dict[str, Any]:
-        if isinstance(value, str):
-            candidate = value.strip()
-            if candidate.startswith("```"):
-                lines = candidate.splitlines()
-                if lines and lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                candidate = "\n".join(lines).strip()
-            try:
-                value = json.loads(candidate)
-            except json.JSONDecodeError as exc:
-                raise ReActInvestigationError("Final specialist result is not valid JSON") from exc
-        try:
-            return _SpecialistFinalOutput.model_validate(value).model_dump()
-        except ValidationError as exc:
-            message = str(exc)
-            for expected in (
-                "probable or inconclusive diagnosis must request an assistance domain",
-                "confirmed diagnosis cannot request diagnostic peer assistance",
-                "confirmed diagnosis requires a root_cause",
-                "confirmed diagnosis requires a causal_chain",
-                "probable diagnosis requires a root_cause",
-                "probable diagnosis requires a causal_chain",
-            ):
-                if expected in message:
-                    raise ReActInvestigationError(expected) from exc
-            raise ReActInvestigationError(f"Invalid specialist result: {exc}") from exc
+    @staticmethod
+    def _last_ai_text(messages: list[Any]) -> str:
+        for message in reversed(messages):
+            if not isinstance(message, AIMessage):
+                continue
+            content = message.content
+            if isinstance(content, str):
+                return content.strip()
+            if content:
+                return json.dumps(content, default=str, ensure_ascii=False)
+        return ""
+
+    @staticmethod
+    def _validation_error_message(exc: ValidationError) -> str:
+        message = str(exc)
+        for expected in (
+            "probable or inconclusive diagnosis must request an assistance domain",
+            "confirmed diagnosis cannot request diagnostic peer assistance",
+            "confirmed diagnosis requires a root_cause",
+            "confirmed diagnosis requires a causal_chain",
+            "probable diagnosis requires a root_cause",
+            "probable diagnosis requires a causal_chain",
+        ):
+            if expected in message:
+                return expected
+        return f"Structured specialist result is invalid: {exc}"
 
     def _normalize_observation(self, value: Any) -> Any:
         try:
@@ -579,7 +670,8 @@ your current domain.
         }
         return (
             "Investigate the following BDI-committed incident task. Use live MCP/RAG "
-            "evidence to test causal hypotheses and return the structured diagnostic result.\n\n"
+            "evidence to test causal hypotheses. The final schema will be generated after "
+            "the ReAct loop from the evidence you collect.\n\n"
             "Investigation assignment:\n"
             + json.dumps(assignment, separators=(",", ":"), sort_keys=True)
         )
