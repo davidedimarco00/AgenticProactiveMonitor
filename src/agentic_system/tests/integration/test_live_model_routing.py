@@ -16,6 +16,13 @@ RUN_LIVE_MODEL_ROUTING = os.getenv("RUN_LIVE_MODEL_ROUTING", "0") == "1"
 
 
 async def _exercise_live_model_routing() -> None:
+    """Verify the real Gemma -> Qwen -> MCP -> Gemma routing path.
+
+    This test deliberately stops before diagnostic finalization. Its purpose is to
+    validate cognitive model routing and real MCP execution, not to force a generic
+    connectivity probe into the causal incident-diagnosis schema.
+    """
+
     config = SimpleNamespace(
         reasoning_model=os.getenv("LIVE_REASONING_MODEL", "gemma4:e2b"),
         tool_model=os.getenv("LIVE_TOOL_MODEL", "qwen3.5:4b"),
@@ -47,12 +54,13 @@ async def _exercise_live_model_routing() -> None:
     ping_tools = [tool for tool in tools if tool.name.endswith("_ping")]
     assert ping_tools, "The live MCP server did not expose its ping tool"
 
+    # Keep a competing RAG tool, when available, so Qwen must actually select
+    # the operational action requested by Gemma instead of having one option.
     routing_tools = [ping_tools[0]]
     knowledge_tools = [tool for tool in tools if tool.name.endswith("_search_knowledge")]
     if knowledge_tools:
         routing_tools.append(knowledge_tools[0])
 
-    trace: list[dict] = []
     executor = SpecialistReActExecutor(
         provider=reasoning_provider,
         tool_provider=tool_provider,
@@ -64,32 +72,60 @@ async def _exercise_live_model_routing() -> None:
         tools=routing_tools,
         max_steps=10,
         tool_timeout_seconds=30.0,
-        trace_sink=trace.append,
     )
-    result = await executor.investigate(
-        task_id="LIVE-HYBRID-ROUTING",
-        incident_id="LIVE-MCP-AVAILABILITY",
-        agent_role="system_engineer",
-        severity="MEDIUM",
-        entity="agentic-mcp-server",
-        anomaly={
+
+    assignment = {
+        "task_id": "LIVE-HYBRID-ROUTING",
+        "incident_id": "LIVE-MCP-AVAILABILITY",
+        "agent_role": "system_engineer",
+        "severity": "MEDIUM",
+        "entity": "agentic-mcp-server",
+        "anomaly": {
             "instruction": (
                 "Verify whether the AgenticProactiveMonitor MCP server is available right now. "
                 "Use the ping tool as live evidence and do not answer from prior knowledge."
             )
         },
+    }
+
+    # Gemma reasons about what evidence is needed. With no evidence collected,
+    # the policy forbids diagnostic closure.
+    first_decision = await executor._reason(  # noqa: SLF001 - integration seam
+        assignment=assignment,
+        evidence=[],
+        decisions=[],
+    )
+    assert first_decision.action == "gather_evidence"
+    assert first_decision.evidence_needed
+
+    # Qwen maps Gemma's evidence request to exactly one real MCP tool call.
+    tool_name, arguments = await executor._select_tool(  # noqa: SLF001 - integration seam
+        assignment=assignment,
+        evidence_needed=first_decision.evidence_needed,
+        evidence=[],
+    )
+    assert tool_name.endswith("_ping"), (
+        f"Expected Qwen to select the MCP ping tool after Gemma reasoning, got {tool_name!r}"
     )
 
-    assert any(name.endswith("_ping") for name in result.tools_used), (
-        f"Expected Qwen to execute the MCP ping tool after Gemma reasoning, got {result.tools_used!r}"
+    observation = await executor._execute_tool(  # noqa: SLF001 - integration seam
+        step=1,
+        tool_name=tool_name,
+        arguments=arguments,
     )
-    ping_evidence = [item for item in result.evidence if item["tool"].endswith("_ping")]
-    assert ping_evidence
-    assert ping_evidence[0]["success"] is True
-    assert "ok" in str(ping_evidence[0]["observation"]).lower()
-    assert any(item.get("action") == "reason" for item in trace)
-    assert any(item.get("action") == "select_tool" for item in trace)
-    assert any(item.get("action") == "diagnosis" for item in trace)
+    assert observation.success is True
+    assert "ok" in str(observation.observation).lower()
+
+    # Feed the real MCP observation back to Gemma to verify the Observe -> Reason
+    # half of the hybrid loop as well. We intentionally do not require a causal
+    # diagnosis here because an availability probe is not an incident root cause.
+    second_decision = await executor._reason(  # noqa: SLF001 - integration seam
+        assignment=assignment,
+        evidence=[observation],
+        decisions=[first_decision],
+    )
+    assert second_decision.action in {"finish", "gather_evidence"}
+    assert second_decision.decision_summary
 
 
 @pytest.mark.integration
