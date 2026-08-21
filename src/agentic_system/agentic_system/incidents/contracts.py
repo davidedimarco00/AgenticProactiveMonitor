@@ -86,7 +86,12 @@ class InvestigationTaskDispatchReceipt:
 
 @dataclass(frozen=True, slots=True)
 class InvestigationTaskResultReceipt:
-    """Structured ReAct diagnostic outcome delivered by a specialist to the TL."""
+    """Structured ReAct diagnostic outcome delivered by a specialist to the TL.
+
+    `diagnosis_status`, `root_cause` and `causal_chain` are explicit in the new
+    specialist contract. The temporary derivation below preserves compatibility
+    with the existing TL inbox transport until every caller supplies them directly.
+    """
 
     task_id: str
     incident_id: str
@@ -95,7 +100,7 @@ class InvestigationTaskResultReceipt:
     correlation_id: str
     succeeded: bool
     summary: str = ""
-    diagnosis_status: str = "inconclusive"
+    diagnosis_status: str = ""
     root_cause: str | None = None
     causal_chain: tuple[str, ...] = ()
     confidence: float = 0.0
@@ -111,13 +116,34 @@ class InvestigationTaskResultReceipt:
     error: str | None = None
     retryable: bool = True
 
+    def _diagnostic_view(self) -> tuple[str, str | None, tuple[str, ...]]:
+        status = self.diagnosis_status.strip().lower()
+        if status not in {"confirmed", "probable", "inconclusive"}:
+            if not self.succeeded:
+                status = "inconclusive"
+            elif self.assistance_required:
+                status = "probable" if self.hypotheses else "inconclusive"
+            else:
+                status = "confirmed"
+
+        root_cause = self.root_cause.strip() if isinstance(self.root_cause, str) else None
+        if not root_cause and status in {"confirmed", "probable"}:
+            root_cause = next(iter(self.hypotheses), None) or self.summary or None
+
+        causal_chain = self.causal_chain
+        if not causal_chain and status in {"confirmed", "probable"}:
+            causal_chain = self.findings
+
+        return status, root_cause, causal_chain
+
     def task_outcome(self) -> dict[str, Any]:
+        diagnosis_status, root_cause, causal_chain = self._diagnostic_view()
         return {
             "status": "completed" if self.succeeded else "failed",
             "summary": self.summary,
-            "diagnosis_status": self.diagnosis_status,
-            "root_cause": self.root_cause,
-            "causal_chain": list(self.causal_chain),
+            "diagnosis_status": diagnosis_status,
+            "root_cause": root_cause,
+            "causal_chain": list(causal_chain),
             "confidence": self.confidence,
             "agent_role": self.agent_role,
             "findings": list(self.findings),
