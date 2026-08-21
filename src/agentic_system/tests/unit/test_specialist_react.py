@@ -156,6 +156,45 @@ def test_react_repairs_invalid_final_json_once() -> None:
     assert len(provider.calls) == 4
 
 
+def test_react_retries_empty_finalization_without_repeating_tool_work() -> None:
+    tool = FakeTool()
+    provider = SequenceProvider(
+        [
+            {
+                "text": None,
+                "tool_calls": [
+                    {
+                        "id": "call-load-once",
+                        "name": "get_system_load",
+                        "arguments": {"service": "processing-service"},
+                    }
+                ],
+                "structured": None,
+            },
+            {"text": "Evidence is sufficient.", "tool_calls": [], "structured": None},
+            {"text": "", "tool_calls": [], "structured": None},
+            {"text": json.dumps(FINAL_RESULT), "tool_calls": [], "structured": None},
+        ]
+    )
+
+    result = asyncio.run(
+        _executor(provider, tool).investigate(
+            task_id="TASK-EMPTY-FINAL",
+            incident_id="INC-EMPTY-FINAL",
+            agent_role="system_engineer",
+            severity="MEDIUM",
+            entity="processing-service",
+            anomaly={},
+        )
+    )
+
+    assert result.summary == FINAL_RESULT["summary"]
+    assert tool.calls == [{"service": "processing-service"}]
+    assert len(provider.calls) == 4
+    assert provider.calls[2]["tools"] == []
+    assert provider.calls[3]["tools"] == []
+
+
 def test_react_refuses_to_conclude_without_any_operational_tool_attempt() -> None:
     tool = FakeTool()
     provider = SequenceProvider(
