@@ -2,12 +2,13 @@ from agentic_system.agents import (
     ApplicationEngineerAgent,
     NetworkEngineerAgent,
     SoftwareDeveloperAgent,
+    SpecialistAgent,
     SystemEngineerAgent,
     TechnicalLeadAgent,
 )
 from agentic_system.incidents import AnomalyObservation, build_incident_report
 from agentic_system.integrations import IncidentRepository, OpenSearchAnomalyWatcher
-from agentic_system.reasoning import HybridLLMProvider
+from agentic_system.reasoning import RoleLLMProvider, SpecialistReActExecutor
 from agentic_system.runtime import AgentRuntime
 from agentic_system.settings import RuntimeConfig
 
@@ -21,13 +22,13 @@ def test_feature_packages_are_the_canonical_implementations() -> None:
     )
     assert IncidentRepository.__module__ == "agentic_system.integrations.mongodb"
     assert TechnicalLeadAgent.__module__ == "agentic_system.agents.technical_lead"
-    assert SystemEngineerAgent.__module__ == "agentic_system.agents.system_engineer"
-    assert NetworkEngineerAgent.__module__ == "agentic_system.agents.network_engineer"
-    assert ApplicationEngineerAgent.__module__ == (
-        "agentic_system.agents.application_engineer"
+    assert SpecialistAgent.__module__ == "agentic_system.agents.specialist"
+    assert SystemEngineerAgent is SpecialistAgent
+    assert NetworkEngineerAgent is SpecialistAgent
+    assert ApplicationEngineerAgent is SpecialistAgent
+    assert SoftwareDeveloperAgent is SpecialistAgent
+    assert RoleLLMProvider.__module__ == "agentic_system.reasoning.models"
+    assert SpecialistReActExecutor.__module__ == (
+        "agentic_system.reasoning.langchain_agent"
     )
-    assert SoftwareDeveloperAgent.__module__ == (
-        "agentic_system.agents.software_developer"
-    )
-    assert HybridLLMProvider.__module__ == "agentic_system.reasoning.llm"
     assert build_incident_report.__module__ == "agentic_system.incidents.reporting"

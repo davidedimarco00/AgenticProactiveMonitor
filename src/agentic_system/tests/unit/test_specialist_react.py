@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 from spade_llm.context import ContextManager
 
 from agentic_system.reasoning import ReActInvestigationError, SpecialistReActExecutor
@@ -29,31 +30,21 @@ class FakeTool:
         }
 
 
-class SequenceProvider:
-    model = "fake/hybrid"
+class FakeProvider:
+    model = "ollama/qwen-test"
+    base_url = "http://127.0.0.1:11434"
 
-    def __init__(self, responses: list[dict[str, Any]]) -> None:
-        self.responses = list(responses)
+
+class FakeCompiledAgent:
+    def __init__(self, states: list[dict[str, Any]]) -> None:
+        self.states = list(states)
         self.calls: list[dict[str, Any]] = []
 
-    async def get_llm_response(
-        self,
-        context,
-        tools=None,
-        conversation_id=None,
-        output_schema=None,
-    ) -> dict[str, Any]:
-        self.calls.append(
-            {
-                "tools": [tool.name for tool in tools] if tools else [],
-                "conversation_id": conversation_id,
-                "prompt": context.get_prompt(conversation_id),
-                "output_schema": output_schema,
-            }
-        )
-        if not self.responses:
-            raise AssertionError("Provider received more calls than expected")
-        return self.responses.pop(0)
+    async def ainvoke(self, state: dict[str, Any], config=None) -> dict[str, Any]:
+        self.calls.append({"state": state, "config": config})
+        if not self.states:
+            raise AssertionError("LangChain agent received more calls than expected")
+        return self.states.pop(0)
 
 
 FINAL_RESULT = {
@@ -91,60 +82,75 @@ CONFIRMED_RESULT = {
 }
 
 
-def _executor(provider: SequenceProvider, tool: FakeTool, *, max_steps: int = 10):
-    return SpecialistReActExecutor(
-        provider=provider,  # type: ignore[arg-type]
-        context=ContextManager(system_prompt="You are a test specialist."),
-        tools=[tool],  # type: ignore[list-item]
-        max_steps=max_steps,
-        tool_timeout_seconds=1.0,
-    )
-
-
-def _tool_call(call_id: str = "call-load-1") -> dict[str, Any]:
-    return {
-        "text": None,
-        "tool_calls": [
+def _messages(*, success: bool = True) -> list[Any]:
+    call = AIMessage(
+        content="",
+        tool_calls=[
             {
-                "id": call_id,
+                "id": "call-load-1",
                 "name": "get_system_load",
-                "arguments": {"service": "processing-service"},
+                "args": {"service": "processing-service"},
+                "type": "tool_call",
             }
         ],
-        "structured": None,
-    }
-
-
-def _stop(text: str = "Evidence may be sufficient.") -> dict[str, Any]:
-    return {"text": text, "tool_calls": [], "structured": None}
-
-
-def test_react_executes_tool_and_challenges_early_stop_before_final_result() -> None:
-    tool = FakeTool()
-    provider = SequenceProvider(
-        [
-            _tool_call(),
-            _stop("I think the evidence is sufficient."),
-            _stop("No further in-domain evidence is required; peer correlation is needed."),
-            {"text": json.dumps(FINAL_RESULT), "tool_calls": [], "structured": None},
-        ]
     )
-
-    result = asyncio.run(
-        _executor(provider, tool).investigate(
-            task_id="TASK-REACT-001",
-            incident_id="INC-REACT-001",
-            agent_role="system_engineer",
-            severity="HIGH",
-            entity="CPU-processing-service",
-            anomaly={"detector_name": "CPU-processing-service", "grade": 1.0},
+    if success:
+        content = json.dumps(
+            {
+                "success": True,
+                "observation": {
+                    "service": "processing-service",
+                    "cpu_percent": 388.2,
+                    "source": "live_mcp_test",
+                },
+            }
         )
+    else:
+        content = json.dumps({"success": False, "error": "RuntimeError: MCP unavailable"})
+    result = ToolMessage(
+        content=content,
+        tool_call_id="call-load-1",
+        name="get_system_load",
+    )
+    return [call, result, AIMessage(content="Diagnostic closure ready.")]
+
+
+def _executor(
+    agent: FakeCompiledAgent,
+    tool: FakeTool | None = None,
+    *,
+    max_steps: int = 10,
+) -> SpecialistReActExecutor:
+    return SpecialistReActExecutor(
+        provider=FakeProvider(),  # type: ignore[arg-type]
+        context=ContextManager(system_prompt="You are a test system specialist."),
+        tools=[tool or FakeTool()],  # type: ignore[list-item]
+        max_steps=max_steps,
+        tool_timeout_seconds=1.0,
+        agent=agent,
     )
 
-    assert tool.calls == [{"service": "processing-service"}]
+
+def _investigate(executor: SpecialistReActExecutor):
+    return executor.investigate(
+        task_id="TASK-REACT-001",
+        incident_id="INC-REACT-001",
+        agent_role="system_engineer",
+        severity="HIGH",
+        entity="CPU-processing-service",
+        anomaly={"detector_name": "CPU-processing-service", "grade": 1.0},
+    )
+
+
+def test_langchain_react_preserves_tool_evidence_and_result_contract() -> None:
+    agent = FakeCompiledAgent(
+        [{"messages": _messages(), "structured_response": FINAL_RESULT}]
+    )
+    result = asyncio.run(_investigate(_executor(agent)))
+
     assert result.task_id == "TASK-REACT-001"
-    assert result.react_steps == 3
     assert result.tools_used == ("get_system_load",)
+    assert result.react_steps == 2
     assert result.diagnosis_status == "probable"
     assert result.root_cause == FINAL_RESULT["root_cause"]
     assert result.causal_chain == tuple(FINAL_RESULT["causal_chain"])
@@ -154,102 +160,40 @@ def test_react_executes_tool_and_challenges_early_stop_before_final_result() -> 
     assert len(result.evidence) == 1
     assert result.evidence[0]["success"] is True
     assert result.evidence[0]["observation"]["cpu_percent"] == 388.2
-    closure_prompt = provider.calls[2]["prompt"]
-    assert any(
-        "diagnostic closure check" in str(message.get("content") or "")
-        for message in closure_prompt
-        if isinstance(message, dict)
-    )
-    assert provider.calls[-1]["output_schema"] is not None
     assert result.conversation_id == "react:system_engineer:INC-REACT-001:TASK-REACT-001"
 
 
-def test_react_repairs_invalid_final_json_once() -> None:
+def test_langchain_adapter_executes_existing_spade_mcp_tool() -> None:
     tool = FakeTool()
-    provider = SequenceProvider(
-        [
-            _tool_call(),
-            _stop(),
-            _stop("Peer evidence is required before confirmation."),
-            {"text": "not-json", "tool_calls": [], "structured": None},
-            {"text": json.dumps(FINAL_RESULT), "tool_calls": [], "structured": None},
-        ]
+    agent = FakeCompiledAgent([])
+    executor = _executor(agent, tool)
+
+    raw = asyncio.run(
+        executor._langchain_tools[0].ainvoke({"service": "processing-service"})
     )
+    payload = json.loads(raw)
 
-    result = asyncio.run(
-        _executor(provider, tool).investigate(
-            task_id="TASK-REACT-REPAIR",
-            incident_id="INC-REACT-REPAIR",
-            agent_role="system_engineer",
-            severity="MEDIUM",
-            entity="processing-service",
-            anomaly={},
-        )
-    )
-
-    assert result.summary == FINAL_RESULT["summary"]
-    assert len(provider.calls) == 5
-
-
-def test_react_retries_empty_finalization_without_repeating_tool_work() -> None:
-    tool = FakeTool()
-    provider = SequenceProvider(
-        [
-            _tool_call("call-load-once"),
-            _stop(),
-            _stop("Another domain is required."),
-            {"text": "", "tool_calls": [], "structured": None},
-            {"text": json.dumps(FINAL_RESULT), "tool_calls": [], "structured": None},
-        ]
-    )
-
-    result = asyncio.run(
-        _executor(provider, tool).investigate(
-            task_id="TASK-EMPTY-FINAL",
-            incident_id="INC-EMPTY-FINAL",
-            agent_role="system_engineer",
-            severity="MEDIUM",
-            entity="processing-service",
-            anomaly={},
-        )
-    )
-
-    assert result.summary == FINAL_RESULT["summary"]
     assert tool.calls == [{"service": "processing-service"}]
-    assert len(provider.calls) == 5
-    assert provider.calls[3]["tools"] == []
-    assert provider.calls[4]["tools"] == []
+    assert payload["success"] is True
+    assert payload["observation"]["cpu_percent"] == 388.2
 
 
-def test_react_refuses_to_conclude_without_any_operational_tool_attempt() -> None:
-    tool = FakeTool()
-    provider = SequenceProvider(
-        [
-            _stop("I can answer directly."),
-            _stop("Still no tool."),
-        ]
-    )
+def test_react_retries_once_if_model_attempts_to_conclude_without_live_evidence() -> None:
+    no_evidence = {
+        "messages": [AIMessage(content="I can answer directly.")],
+        "structured_response": FINAL_RESULT,
+    }
+    agent = FakeCompiledAgent([no_evidence, no_evidence])
 
     with pytest.raises(ReActInvestigationError, match="No operational tool"):
-        asyncio.run(
-            _executor(provider, tool, max_steps=2).investigate(
-                task_id="TASK-NO-TOOL",
-                incident_id="INC-NO-TOOL",
-                agent_role="system_engineer",
-                severity="MEDIUM",
-                entity="processing-service",
-                anomaly={},
-            )
-        )
+        asyncio.run(_investigate(_executor(agent, max_steps=2)))
+
+    assert len(agent.calls) == 2
+    retry_messages = agent.calls[1]["state"]["messages"]
+    assert "No live operational evidence" in str(retry_messages[-1]["content"])
 
 
-def test_react_records_tool_failure_and_requests_diagnostic_assistance() -> None:
-    class FailingTool(FakeTool):
-        async def execute(self, **kwargs: Any) -> dict[str, Any]:
-            self.calls.append(dict(kwargs))
-            raise RuntimeError("MCP unavailable")
-
-    tool = FailingTool()
+def test_react_records_tool_failure_without_killing_investigation_contract() -> None:
     low_confidence = {
         "summary": "Live evidence collection failed, so no root cause can be established.",
         "diagnosis_status": "inconclusive",
@@ -262,25 +206,11 @@ def test_react_records_tool_failure_and_requests_diagnostic_assistance() -> None
         "assistance_required": True,
         "assistance_domain": "application",
     }
-    provider = SequenceProvider(
-        [
-            _tool_call("call-fail-1"),
-            _stop("No reliable conclusion yet."),
-            _stop("Peer evidence is required because the live system tool failed."),
-            {"text": json.dumps(low_confidence), "tool_calls": [], "structured": None},
-        ]
+    agent = FakeCompiledAgent(
+        [{"messages": _messages(success=False), "structured_response": low_confidence}]
     )
 
-    result = asyncio.run(
-        _executor(provider, tool).investigate(
-            task_id="TASK-FAIL-OBS",
-            incident_id="INC-FAIL-OBS",
-            agent_role="system_engineer",
-            severity="MEDIUM",
-            entity="processing-service",
-            anomaly={},
-        )
-    )
+    result = asyncio.run(_investigate(_executor(agent)))
 
     assert result.evidence[0]["success"] is False
     assert "MCP unavailable" in result.evidence[0]["observation"]["error"]

@@ -4,13 +4,13 @@ from .bdi import (
     BDITriageAssessment,
     BDITriageResult,
 )
-from .llm import HybridLLMProvider, OllamaToolCallingProvider
-from .react import (
+from .langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
     ReActInvestigationResult,
     SpecialistReActExecutor,
 )
+from .models import RoleLLMProvider, SharedInferenceGate
 from .review_bdi import (
     BDIReviewAssessment,
     BDIReviewResult,
@@ -24,11 +24,11 @@ __all__ = [
     "BDISpecialistTaskResult",
     "BDITriageAssessment",
     "BDITriageResult",
-    "HybridLLMProvider",
-    "OllamaToolCallingProvider",
     "ReActEvidence",
     "ReActInvestigationError",
     "ReActInvestigationResult",
+    "RoleLLMProvider",
+    "SharedInferenceGate",
     "SpecialistReActExecutor",
     "TechnicalLeadReviewBDIRuntime",
 ]

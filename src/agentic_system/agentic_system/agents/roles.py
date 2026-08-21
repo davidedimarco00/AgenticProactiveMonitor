@@ -1,10 +1,12 @@
-"""Role-specific SPADE-LLM agent exports."""
+"""Public role exports without one empty subclass per specialist domain."""
 
-from .application_engineer import ApplicationEngineerAgent
-from .network_engineer import NetworkEngineerAgent
-from .software_developer import SoftwareDeveloperAgent
-from .system_engineer import SystemEngineerAgent
+from .specialist import SpecialistAgent
 from .technical_lead import TechnicalLeadAgent
+
+SystemEngineerAgent = SpecialistAgent
+NetworkEngineerAgent = SpecialistAgent
+ApplicationEngineerAgent = SpecialistAgent
+SoftwareDeveloperAgent = SpecialistAgent
 
 __all__ = [
     "TechnicalLeadAgent",
