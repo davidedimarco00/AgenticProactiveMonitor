@@ -28,14 +28,22 @@ def _get_agent_health(port: int) -> dict[str, object]:
     return payload
 
 
-def _expected_provider_model(role: str, backend_health: dict[str, object]) -> str:
-    """Return the model assigned to the cognitive role in the simplified runtime."""
+def _assert_model_roles(
+    role: str,
+    payload: dict[str, object],
+    backend_health: dict[str, object],
+) -> None:
+    reasoning_model = str(backend_health["reasoning_model"])
+    tool_model = str(backend_health["tool_model"])
+    assert payload["provider_model"] == reasoning_model
 
-    key = "reasoning_model" if role == "technical_lead" else "tool_model"
-    model = str(backend_health[key])
-    if not model.startswith("ollama/"):
-        raise AssertionError(f"Expected Ollama model in {key}, got {model!r}")
-    return model
+    model_roles = payload.get("model_roles")
+    assert isinstance(model_roles, dict)
+    assert model_roles["reasoning"] == reasoning_model
+    if role == "technical_lead":
+        assert "tool_selection" not in model_roles
+    else:
+        assert model_roles["tool_selection"] == tool_model
 
 
 @pytest.mark.integration
@@ -48,6 +56,7 @@ def test_each_spade_llm_agent_exposes_its_own_health_port(
     assert backend_health["framework"] == "SPADE-LLM"
     assert str(backend_health["reasoning_model"]).startswith("ollama/")
     assert str(backend_health["tool_model"]).startswith("ollama/")
+    assert backend_health["reasoning_model"] != backend_health["tool_model"]
     assert backend_health["interaction_memory_enabled"] is True
 
     for role, (jid, port) in EXPECTED_AGENT_HEALTH.items():
@@ -62,11 +71,13 @@ def test_each_spade_llm_agent_exposes_its_own_health_port(
         assert payload["communication_ok"] is True
         assert payload["framework"] == "SPADE-LLM"
         assert payload["llm_agent"] is True
-        assert payload["provider_model"] == _expected_provider_model(role, backend_health)
+        _assert_model_roles(role, payload, backend_health)
         assert payload["context_enabled"] is True
         assert payload["interaction_memory_enabled"] is True
         assert payload["mcp_server_count"] == 1
         assert payload["mcp_tool_count"] > 0
+        assert isinstance(payload["trace_event_count"], int)
+        assert isinstance(payload["trace_tail"], list)
 
         tool_names = payload["tool_names"]
         assert isinstance(tool_names, list)
@@ -95,13 +106,14 @@ def test_global_backend_snapshot_reports_real_agent_communication_health(
         agent = by_role[role]
         assert agent["framework"] == "SPADE-LLM"
         assert agent["llm_agent"] is True
-        assert agent["provider_model"] == _expected_provider_model(role, backend_health)
+        _assert_model_roles(role, agent, backend_health)
         assert agent["context_enabled"] is True
         assert agent["interaction_memory_enabled"] is True
         assert agent["mcp_tool_count"] > 0
         assert agent["communication_ok"] is True
         assert agent["health_port"] == port
         assert agent["last_communication_at"]
+        assert isinstance(agent["trace_event_count"], int)
 
         tool_names = agent["tool_names"]
         assert isinstance(tool_names, list)
@@ -135,6 +147,6 @@ def test_each_agent_streams_health_over_websocket(
         assert payload["status"] == "ONLINE"
         assert payload["framework"] == "SPADE-LLM"
         assert payload["llm_agent"] is True
-        assert payload["provider_model"] == _expected_provider_model(role, backend_health)
+        _assert_model_roles(role, payload, backend_health)
         assert payload["xmpp_connected"] is True
         assert payload["communication_ok"] is True
