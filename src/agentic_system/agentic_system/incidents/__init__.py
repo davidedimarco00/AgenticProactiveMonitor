@@ -10,7 +10,7 @@ from .contracts import (
     InvestigationTaskDispatchReceipt,
     InvestigationTaskResultReceipt,
 )
-from .coordinator import IncidentCoordinator
+from .coordinator import IncidentCoordinator as BaseIncidentCoordinator
 from .ingestion import AnomalyIntake
 from .models import IncidentWorkflowResult
 from .policies import ACTIVE_INCIDENT_STATUSES, IncidentCorrelationPolicy
@@ -25,6 +25,11 @@ from .tasks import (
 )
 from .workflow import IncidentWorkflow
 
+# The ReAct branch keeps the existing import surface stable: application code and
+# tests that import IncidentCoordinator receive the ReAct-aware extension, while
+# BaseIncidentCoordinator remains available for isolated state-machine tests.
+IncidentCoordinator = ReActIncidentCoordinator
+
 __all__ = [
     "ACTIVE_INCIDENT_STATUSES",
     "AgentTaskRepositoryPort",
@@ -33,6 +38,7 @@ __all__ = [
     "AnomalyInboxPort",
     "AnomalyIntake",
     "AnomalyObservation",
+    "BaseIncidentCoordinator",
     "DetectorContextPort",
     "IncidentAssigneePort",
     "IncidentAssigneeReceipt",
