@@ -570,7 +570,7 @@ Rules:
         if callable(slot):
             async with slot():
                 return await awaitable
-        return awaitable
+        return await awaitable
 
     def _extract_execution(
         self,
