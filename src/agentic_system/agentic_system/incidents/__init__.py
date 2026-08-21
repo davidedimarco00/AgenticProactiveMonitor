@@ -8,6 +8,7 @@ from .contracts import (
     IncidentRepositoryPort,
     IncidentTriageReceipt,
     InvestigationTaskDispatchReceipt,
+    InvestigationTaskResultReceipt,
 )
 from .coordinator import IncidentCoordinator
 from .ingestion import AnomalyIntake
@@ -39,6 +40,7 @@ __all__ = [
     "IncidentRepositoryPort",
     "IncidentTriageReceipt",
     "InvestigationTaskDispatchReceipt",
+    "InvestigationTaskResultReceipt",
     "IncidentWorkflow",
     "IncidentWorkflowResult",
     "InvalidTaskTransition",
