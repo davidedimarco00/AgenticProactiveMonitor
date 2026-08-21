@@ -1,0 +1,38 @@
+.agent-log-table tr.live-agent-trace td {
+  vertical-align: top;
+}
+
+.agent-log-table tr.live-agent-trace td:first-child::after {
+  content: "LIVE";
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+}
+
+.agent-trace-details {
+  margin-top: 0.5rem;
+}
+
+.agent-trace-details summary {
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.agent-trace-details pre {
+  max-width: 38rem;
+  max-height: 18rem;
+  margin: 0.55rem 0 0;
+  padding: 0.7rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 0.55rem;
+  background: rgba(15, 23, 42, 0.035);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
