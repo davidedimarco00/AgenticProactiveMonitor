@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import logging
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from spade_llm.context import ContextManager
 from spade_llm.providers.base_provider import BaseLLMProvider
 
@@ -15,18 +15,21 @@ _ALLOWED_DECISIONS = {"resolve", "operator_action_required", "request_support"}
 _ALLOWED_SUPPORT_DOMAINS = {"system", "network", "application", "software"}
 _MAX_REVIEW_ATTEMPTS = 3
 
+ReviewDecision = Literal["resolve", "operator_action_required", "request_support"]
+SupportDomain = Literal["system", "network", "application", "software"]
+
 
 class _TechnicalLeadReviewOutput(BaseModel):
     """Schema requested from Ollama/LiteLLM for the TL critic response."""
 
-    decision: str
-    confidence: float
+    decision: ReviewDecision
+    confidence: float = Field(ge=0.0, le=1.0)
     diagnosis_summary: str
     root_cause: str
     rationale: str
     remediation_summary: str
     remediation_steps: list[str]
-    support_domain: str | None = None
+    support_domain: SupportDomain | None = None
     support_reason: str | None = None
 
 
@@ -87,6 +90,8 @@ not support. Keep remediation advisory only. Return only one JSON object with fi
 decision, confidence, diagnosis_summary, root_cause, rationale, remediation_summary,
 remediation_steps, support_domain, support_reason.
 
+The `decision` field MUST be exactly one of: resolve, operator_action_required,
+request_support. Do not place rationale, monitoring advice or remediation text in decision.
 confidence must be 0..1. remediation_steps must be an array of concise strings.
 support_domain must be null unless decision=request_support, otherwise one of system,
 network, application, software. support_reason must be null unless support is requested."""
@@ -181,7 +186,10 @@ network, application, software. support_reason must be null unless support is re
                         "content": (
                             "The previous review response was empty or invalid. Return ONLY "
                             "the required JSON object with every required field present. "
-                            "Do not call tools and do not add prose outside the JSON."
+                            "The decision field MUST be exactly resolve, "
+                            "operator_action_required, or request_support. Do not put advice "
+                            "or explanation in decision. Do not call tools and do not add "
+                            "prose outside the JSON."
                         ),
                     },
                     conversation_id,
