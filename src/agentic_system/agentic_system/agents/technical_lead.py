@@ -10,7 +10,12 @@ from spade.template import Template
 from spade_llm.mcp import MCPServerConfig
 from spade_llm.providers import LLMProvider
 
-from ..reasoning import AgentSpeakBDIRuntime, BDITriageAssessment
+from ..reasoning import (
+    AgentSpeakBDIRuntime,
+    BDIReviewAssessment,
+    BDITriageAssessment,
+    TechnicalLeadReviewBDIRuntime,
+)
 from .base import BaseAgent
 from .commands import IncidentAssignment
 from .messages import (
@@ -20,12 +25,17 @@ from .messages import (
     parse_spade_message,
 )
 from .prompts import TECHNICAL_LEAD_SYSTEM_PROMPT
+from .review import (
+    TechnicalLeadReviewDecision,
+    TechnicalLeadReviewReasoner,
+)
 from .triage import TechnicalLeadTriageDecision, TechnicalLeadTriageReasoner
 
 
 LOGGER = logging.getLogger("agentic_system.agents.technical_lead")
 INCIDENT_INBOX_MAXSIZE = 64
 TRIAGE_INBOX_MAXSIZE = 32
+REVIEW_INBOX_MAXSIZE = 32
 
 
 @dataclass(slots=True)
@@ -40,6 +50,13 @@ class _PendingTriage:
     detector_context: dict[str, Any]
     available_agents: list[str]
     completed: asyncio.Future[TechnicalLeadTriageDecision]
+
+
+@dataclass(slots=True)
+class _PendingReview:
+    incident: dict[str, Any]
+    specialist_result: dict[str, Any]
+    completed: asyncio.Future[TechnicalLeadReviewDecision]
 
 
 class TechnicalLeadAgent(BaseAgent):
@@ -59,8 +76,6 @@ class TechnicalLeadAgent(BaseAgent):
 
             self.agent.mark_message_received()
             self.agent.last_acknowledgement = envelope
-            # SPADE exposes message metadata through get_metadata(); _metadata is
-            # intentionally private and there is no public `metadata` property.
             performative = str(message.get_metadata("performative") or "").upper()
 
             pending = self.agent._pending_acknowledgements.get(envelope.correlation_id)
@@ -84,8 +99,6 @@ class TechnicalLeadAgent(BaseAgent):
             )
 
     class IncidentAssignmentBehaviour(CyclicBehaviour):
-        """Accept persisted incidents from the application ingress queue."""
-
         async def run(self) -> None:
             try:
                 pending = await asyncio.wait_for(
@@ -134,8 +147,6 @@ class TechnicalLeadAgent(BaseAgent):
                 self.agent._incident_inbox.task_done()
 
     class TriageBehaviour(CyclicBehaviour):
-        """Run one BDI-led triage cycle without diagnosing or delegating yet."""
-
         async def run(self) -> None:
             try:
                 pending = await asyncio.wait_for(
@@ -225,6 +236,102 @@ class TechnicalLeadAgent(BaseAgent):
             finally:
                 self.agent._triage_inbox.task_done()
 
+    class ReviewBehaviour(CyclicBehaviour):
+        """Critically review completed specialist evidence through a second BDI cycle."""
+
+        async def run(self) -> None:
+            try:
+                pending = await asyncio.wait_for(
+                    self.agent._review_inbox.get(),
+                    timeout=1.0,
+                )
+            except TimeoutError:
+                return
+
+            incident_id = str(pending.incident.get("incident_id") or "") or None
+            try:
+                if str(pending.incident.get("status") or "").upper() != "UNDER_ANALYSIS":
+                    raise RuntimeError(
+                        "Technical Lead review requires an incident in UNDER_ANALYSIS state"
+                    )
+                self.agent.set_activity(
+                    "WORKING",
+                    incident_id=incident_id,
+                    detail="reviewing_specialist_result",
+                )
+
+                async def reason_for_review() -> BDIReviewAssessment:
+                    assessment = await self.agent._review_reasoner.assess(
+                        incident=pending.incident,
+                        specialist_result=pending.specialist_result,
+                    )
+                    return BDIReviewAssessment(
+                        decision=assessment.decision,
+                        confidence=assessment.confidence,
+                        diagnosis_summary=assessment.diagnosis_summary,
+                        root_cause=assessment.root_cause,
+                        rationale=assessment.rationale,
+                        remediation_summary=assessment.remediation_summary,
+                        remediation_steps=assessment.remediation_steps,
+                        support_domain=assessment.support_domain,
+                        support_reason=assessment.support_reason,
+                    )
+
+                deliberation = await self.agent._review_bdi_runtime.review_specialist_result(
+                    incident_id=incident_id or "",
+                    review_callback=reason_for_review,
+                )
+                decision = TechnicalLeadReviewDecision(
+                    incident_id=deliberation.incident_id,
+                    decision=deliberation.decision,
+                    confidence=deliberation.confidence,
+                    diagnosis_summary=deliberation.diagnosis_summary,
+                    root_cause=deliberation.root_cause,
+                    rationale=deliberation.rationale,
+                    remediation_summary=deliberation.remediation_summary,
+                    remediation_steps=deliberation.remediation_steps,
+                    support_domain=deliberation.support_domain,
+                    support_reason=deliberation.support_reason,
+                    bdi_goal=deliberation.goal,
+                    bdi_review_intention=deliberation.review_intention,
+                    bdi_decision_intention=deliberation.decision_intention,
+                )
+                self.agent.reviews_completed += 1
+                self.agent.last_review_decision = decision
+                self.agent.last_review_error = None
+                self.agent.set_activity(
+                    "WAITING",
+                    incident_id=incident_id,
+                    detail=(
+                        "support_coordination_pending"
+                        if decision.decision == "request_support"
+                        else "review_decision_committed"
+                    ),
+                )
+                if not pending.completed.done():
+                    pending.completed.set_result(decision)
+                LOGGER.warning(
+                    "Technical Lead AgentSpeak review completed incident=%s goal=%s "
+                    "intention=%s decision=%s confidence=%.3f",
+                    decision.incident_id,
+                    decision.bdi_goal,
+                    decision.bdi_review_intention,
+                    decision.decision,
+                    decision.confidence,
+                )
+            except Exception as exc:
+                self.agent.last_review_error = str(exc)
+                self.agent.set_activity(
+                    "WAITING",
+                    incident_id=incident_id,
+                    detail="review_failed",
+                )
+                if not pending.completed.done():
+                    pending.completed.set_exception(exc)
+                LOGGER.exception("Technical Lead specialist-result review failed: %s", exc)
+            finally:
+                self.agent._review_inbox.task_done()
+
     def __init__(
         self,
         jid: str,
@@ -258,19 +365,30 @@ class TechnicalLeadAgent(BaseAgent):
         self._triage_inbox: asyncio.Queue[_PendingTriage] = asyncio.Queue(
             maxsize=TRIAGE_INBOX_MAXSIZE
         )
+        self._review_inbox: asyncio.Queue[_PendingReview] = asyncio.Queue(
+            maxsize=REVIEW_INBOX_MAXSIZE
+        )
         self._triage_reasoner = TechnicalLeadTriageReasoner(provider)
+        self._review_reasoner = TechnicalLeadReviewReasoner(provider)
         self._bdi_runtime = AgentSpeakBDIRuntime(
             technical_lead_asl=agentspeak_technical_lead_asl,
             action_timeout_seconds=agentspeak_action_timeout_seconds,
             max_concurrency=agentspeak_bdi_max_concurrency,
         )
+        self._review_bdi_runtime = TechnicalLeadReviewBDIRuntime(
+            technical_lead_asl=agentspeak_technical_lead_asl,
+            action_timeout_seconds=agentspeak_action_timeout_seconds,
+        )
         self.incidents_received = 0
         self.triages_completed = 0
+        self.reviews_completed = 0
         self.last_incident_id: str | None = None
         self.last_incident_assignment: IncidentAssignment | None = None
         self.last_assignment_error: str | None = None
         self.last_triage_decision: TechnicalLeadTriageDecision | None = None
         self.last_triage_error: str | None = None
+        self.last_review_decision: TechnicalLeadReviewDecision | None = None
+        self.last_review_error: str | None = None
 
     async def setup(self) -> None:
         await super().setup()
@@ -285,6 +403,7 @@ class TechnicalLeadAgent(BaseAgent):
             self.add_behaviour(self.AcknowledgementBehaviour(), template)
         self.add_behaviour(self.IncidentAssignmentBehaviour())
         self.add_behaviour(self.TriageBehaviour())
+        self.add_behaviour(self.ReviewBehaviour())
 
     async def submit_incident(
         self,
@@ -292,8 +411,6 @@ class TechnicalLeadAgent(BaseAgent):
         *,
         timeout: float = 5.0,
     ) -> IncidentAssignment:
-        """Deliver a persisted incident to the Technical Lead SPADE behaviour."""
-
         if self.lifecycle_state != "running":
             raise RuntimeError("Technical Lead is not running")
 
@@ -320,8 +437,6 @@ class TechnicalLeadAgent(BaseAgent):
         available_agents: list[str],
         timeout: float = 120.0,
     ) -> TechnicalLeadTriageDecision:
-        """Perform BDI-led first analysis without diagnosing the incident."""
-
         if self.lifecycle_state != "running":
             raise RuntimeError("Technical Lead is not running")
 
@@ -333,6 +448,29 @@ class TechnicalLeadAgent(BaseAgent):
                     incident=dict(incident),
                     detector_context=dict(detector_context),
                     available_agents=list(available_agents),
+                    completed=completed,
+                )
+            ),
+            timeout=timeout,
+        )
+        return await asyncio.wait_for(completed, timeout=timeout)
+
+    async def review_specialist_result(
+        self,
+        incident: dict[str, Any],
+        *,
+        specialist_result: dict[str, Any],
+        timeout: float = 120.0,
+    ) -> TechnicalLeadReviewDecision:
+        if self.lifecycle_state != "running":
+            raise RuntimeError("Technical Lead is not running")
+        loop = asyncio.get_running_loop()
+        completed: asyncio.Future[TechnicalLeadReviewDecision] = loop.create_future()
+        await asyncio.wait_for(
+            self._review_inbox.put(
+                _PendingReview(
+                    incident=dict(incident),
+                    specialist_result=dict(specialist_result),
                     completed=completed,
                 )
             ),
@@ -381,18 +519,34 @@ class TechnicalLeadAgent(BaseAgent):
                 "bdi_triage_intention": self.last_triage_decision.bdi_triage_intention,
                 "bdi_intention": self.last_triage_decision.bdi_intention,
             }
+        last_review = None
+        if self.last_review_decision is not None:
+            last_review = {
+                "incident_id": self.last_review_decision.incident_id,
+                "decision": self.last_review_decision.decision,
+                "confidence": self.last_review_decision.confidence,
+                "rationale": self.last_review_decision.rationale,
+                "bdi_goal": self.last_review_decision.bdi_goal,
+                "bdi_review_intention": self.last_review_decision.bdi_review_intention,
+                "bdi_decision_intention": self.last_review_decision.bdi_decision_intention,
+            }
         snapshot.update(
             {
                 "incident_inbox_depth": self._incident_inbox.qsize(),
                 "incident_inbox_maxsize": self._incident_inbox.maxsize,
                 "triage_inbox_depth": self._triage_inbox.qsize(),
                 "triage_inbox_maxsize": self._triage_inbox.maxsize,
+                "review_inbox_depth": self._review_inbox.qsize(),
+                "review_inbox_maxsize": self._review_inbox.maxsize,
                 "incidents_received": self.incidents_received,
                 "triages_completed": self.triages_completed,
+                "reviews_completed": self.reviews_completed,
                 "last_incident_id": self.last_incident_id,
                 "last_assignment_error": self.last_assignment_error,
                 "last_triage": last_triage,
                 "last_triage_error": self.last_triage_error,
+                "last_review": last_review,
+                "last_review_error": self.last_review_error,
             }
         )
         return snapshot
