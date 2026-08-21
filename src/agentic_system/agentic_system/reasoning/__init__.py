@@ -5,6 +5,12 @@ from .bdi import (
     BDITriageResult,
 )
 from .llm import HybridLLMProvider, OllamaToolCallingProvider
+from .react import (
+    ReActEvidence,
+    ReActInvestigationError,
+    ReActInvestigationResult,
+    SpecialistReActExecutor,
+)
 
 __all__ = [
     "AgentSpeakBDIRuntime",
@@ -13,4 +19,8 @@ __all__ = [
     "BDITriageResult",
     "HybridLLMProvider",
     "OllamaToolCallingProvider",
+    "ReActEvidence",
+    "ReActInvestigationError",
+    "ReActInvestigationResult",
+    "SpecialistReActExecutor",
 ]
