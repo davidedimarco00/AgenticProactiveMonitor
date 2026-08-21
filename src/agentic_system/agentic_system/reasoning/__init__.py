@@ -11,8 +11,8 @@ from .langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
     ReActInvestigationResult,
-    SpecialistReActExecutor,
 )
+from .diagnostic_react import SpecialistReActExecutor
 from .models import RoleLLMProvider, SharedInferenceGate
 
 __all__ = [
