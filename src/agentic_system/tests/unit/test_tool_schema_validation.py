@@ -16,7 +16,7 @@ class ToolWithJsonSchema:
 
 
 def test_json_schema_validation_rejects_out_of_range_tool_argument() -> None:
-    with pytest.raises(ValueError, match="less than or equal to 100"):
+    with pytest.raises(ValueError, match="maximum of 100"):
         SpecialistReActExecutor._validate_tool_args(
             ToolWithJsonSchema(),
             {"host_id": "processing-service", "limit": 500},
