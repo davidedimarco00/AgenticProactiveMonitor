@@ -188,19 +188,36 @@ class FakeAssignee:
         return self.specialists[role]
 
     async def review_investigation_result(self, incident, result):
+        support = self.decision == "request_support"
         return TechnicalLeadReviewReceipt(
             incident_id=str(incident["incident_id"]),
             decision=self.decision,
             confidence=0.9,
-            diagnosis_summary="Specialist evidence was reviewed by the Technical Lead.",
-            root_cause="The available evidence supports a transient resource anomaly.",
-            rationale="The critic accepted the evidence gathered by the specialist.",
-            remediation_summary="No autonomous corrective change is required.",
+            diagnosis_summary=(
+                "The probable diagnosis still requires application-domain validation."
+                if support
+                else "The specialist established an evidence-backed CPU root cause."
+            ),
+            root_cause=(
+                "A CPU-bound workload is probably saturating the service."
+                if support
+                else "A CPU-bound workload saturated processing-service."
+            ),
+            rationale=(
+                "The current diagnosis is not yet confirmed across the required domain."
+                if support
+                else "The critic accepted the confirmed causal chain."
+            ),
+            remediation_summary=(
+                "Do not remediate until the diagnosis is confirmed."
+                if support
+                else "No autonomous corrective change is required."
+            ),
             remediation_steps=(),
-            support_domain="application" if self.decision == "request_support" else None,
+            support_domain="application" if support else None,
             support_reason=(
-                "Application evidence is still required."
-                if self.decision == "request_support"
+                "Application evidence is still required to confirm the probable root cause."
+                if support
                 else None
             ),
             bdi_goal="review_investigation",
@@ -237,7 +254,7 @@ def _coordinator(repository: FakeRepository, *, decision: str) -> ReActIncidentC
     )
 
 
-def _success_receipt() -> InvestigationTaskResultReceipt:
+def _probable_receipt() -> InvestigationTaskResultReceipt:
     return InvestigationTaskResultReceipt(
         task_id="TASK-REACT-001",
         incident_id="INC-REACT-001",
@@ -245,7 +262,14 @@ def _success_receipt() -> InvestigationTaskResultReceipt:
         agent_jid="system-engineer@xmpp",
         correlation_id="corr-react-001",
         succeeded=True,
-        summary="CPU saturation is supported by live metrics.",
+        summary="CPU saturation is supported, but its workload cause needs application correlation.",
+        diagnosis_status="probable",
+        root_cause="A CPU-bound application workload is probably saturating processing-service.",
+        causal_chain=(
+            "A CPU-bound workload executes on processing-service.",
+            "CPU remains above the expected range.",
+            "The CPU detector observes the resource anomaly.",
+        ),
         confidence=0.86,
         findings=("CPU remained above the expected range.",),
         evidence=(
@@ -257,11 +281,41 @@ def _success_receipt() -> InvestigationTaskResultReceipt:
                 "success": True,
             },
         ),
-        hypotheses=("A CPU-bound workload is saturating the service.",),
-        recommended_next_steps=("Correlate with application logs.",),
+        hypotheses=("An application workload may be driving the CPU saturation.",),
+        recommended_next_steps=("Correlate with application evidence.",),
         assistance_required=True,
         assistance_domain="application",
-        react_steps=2,
+        react_steps=3,
+        tools_used=("get_system_load",),
+        conversation_id="react:system_engineer:INC-REACT-001:TASK-REACT-001",
+        retryable=False,
+    )
+
+
+def _confirmed_receipt() -> InvestigationTaskResultReceipt:
+    return InvestigationTaskResultReceipt(
+        task_id="TASK-REACT-001",
+        incident_id="INC-REACT-001",
+        agent_role="system_engineer",
+        agent_jid="system-engineer@xmpp",
+        correlation_id="corr-react-confirmed",
+        succeeded=True,
+        summary="CPU saturation is explained by the observed CPU-bound workload.",
+        diagnosis_status="confirmed",
+        root_cause="A CPU-bound workload saturated processing-service.",
+        causal_chain=(
+            "The CPU-bound workload executes on processing-service.",
+            "Live CPU usage remains above the expected range.",
+            "The detector observes the resulting CPU anomaly.",
+        ),
+        confidence=0.94,
+        findings=("CPU remained above the expected range.",),
+        evidence=(),
+        hypotheses=(),
+        recommended_next_steps=(),
+        assistance_required=False,
+        assistance_domain=None,
+        react_steps=5,
         tools_used=("get_system_load",),
         conversation_id="react:system_engineer:INC-REACT-001:TASK-REACT-001",
         retryable=False,
@@ -276,7 +330,7 @@ def test_successful_react_result_authorizes_direct_peer_support() -> None:
         coordinator._persist_successful_react_result(
             deepcopy(repository.incident),
             deepcopy(repository.task),
-            _success_receipt(),
+            _probable_receipt(),
         )
     )
 
@@ -296,11 +350,15 @@ def test_successful_react_result_authorizes_direct_peer_support() -> None:
     assert len(primary.shared_contexts) == 1
     assert primary.shared_contexts[0]["target_role"] == "application_engineer"
     assert primary.shared_contexts[0]["support_task_id"] == support_task["task_id"]
+    shared_result = primary.shared_contexts[0]["specialist_result"]
+    assert shared_result["diagnosis_status"] == "probable"
+    assert shared_result["root_cause"] == _probable_receipt().root_cause
+    assert shared_result["causal_chain"] == list(_probable_receipt().causal_chain)
     assert any(event["event_type"] == "PEER_COLLABORATION_AUTHORIZED" for event in repository.events)
     assert coordinator.peer_collaborations_started_count == 1
 
 
-def test_successful_react_result_can_resolve_incident_after_tl_review() -> None:
+def test_confirmed_react_result_can_resolve_incident_after_tl_review() -> None:
     repository = FakeRepository()
     coordinator = _coordinator(repository, decision="resolve")
 
@@ -308,7 +366,7 @@ def test_successful_react_result_can_resolve_incident_after_tl_review() -> None:
         coordinator._persist_successful_react_result(
             deepcopy(repository.incident),
             deepcopy(repository.task),
-            _success_receipt(),
+            _confirmed_receipt(),
         )
     )
 
