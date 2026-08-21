@@ -4,7 +4,9 @@ import asyncio
 from copy import deepcopy
 from typing import Any
 
+from agentic_system.agents.messages import AgentMessage
 from agentic_system.incidents import (
+    InvestigationTaskDispatchReceipt,
     InvestigationTaskResultReceipt,
     ReActIncidentCoordinator,
     TechnicalLeadReviewReceipt,
@@ -17,25 +19,44 @@ class FakeRepository:
             "incident_id": "INC-REACT-001",
             "status": "TRIAGED",
             "agentic": {
+                "primary_investigator": "system_engineer",
                 "investigation_task_id": "TASK-REACT-001",
                 "current_agent": "system_engineer",
                 "active_agents": ["technical_lead", "system_engineer"],
             },
         }
-        self.task = {
-            "task_id": "TASK-REACT-001",
-            "incident_id": "INC-REACT-001",
-            "state": "RUNNING",
-            "attempt": 1,
-            "max_attempts": 3,
+        self.tasks: dict[str, dict[str, Any]] = {
+            "TASK-REACT-001": {
+                "task_id": "TASK-REACT-001",
+                "incident_id": "INC-REACT-001",
+                "task_type": "INVESTIGATE_INCIDENT",
+                "assigned_to": "system_engineer",
+                "state": "RUNNING",
+                "attempt": 1,
+                "max_attempts": 3,
+            }
         }
         self.events: list[dict[str, Any]] = []
+
+    @property
+    def task(self) -> dict[str, Any]:
+        return self.tasks["TASK-REACT-001"]
 
     async def get_incident(self, incident_id: str):
         return deepcopy(self.incident) if incident_id == self.incident["incident_id"] else None
 
     async def get_task(self, task_id: str):
-        return deepcopy(self.task) if task_id == self.task["task_id"] else None
+        task = self.tasks.get(task_id)
+        return deepcopy(task) if task is not None else None
+
+    async def list_tasks(self, *, states=None, incident_id=None, limit=200):
+        tasks = list(self.tasks.values())
+        if incident_id:
+            tasks = [task for task in tasks if task["incident_id"] == incident_id]
+        if states:
+            allowed = {str(state).upper() for state in states}
+            tasks = [task for task in tasks if str(task["state"]).upper() in allowed]
+        return deepcopy(tasks[:limit])
 
     async def update_incident(self, incident_id: str, patch: dict[str, Any]):
         if incident_id != self.incident["incident_id"]:
@@ -57,11 +78,45 @@ class FakeTaskWorkflow:
     def __init__(self, repository: FakeRepository) -> None:
         self.repository = repository
 
+    async def create_investigation_task(
+        self,
+        incident,
+        *,
+        primary_investigator,
+        created_by="technical_lead",
+    ):
+        task_id = f"TASK-SUPPORT-{primary_investigator.upper()}"
+        task = self.repository.tasks.get(task_id)
+        if task is None:
+            task = {
+                "task_id": task_id,
+                "incident_id": incident["incident_id"],
+                "task_type": "INVESTIGATE_INCIDENT",
+                "created_by": created_by,
+                "assigned_to": primary_investigator,
+                "state": "PENDING",
+                "attempt": 0,
+                "max_attempts": 3,
+            }
+            self.repository.tasks[task_id] = task
+        return deepcopy(task)
+
+    async def mark_dispatched(self, task_id: str):
+        task = self.repository.tasks[task_id]
+        task["state"] = "DISPATCHED"
+        task["attempt"] += 1
+        return deepcopy(task)
+
+    async def mark_running(self, task_id: str):
+        task = self.repository.tasks[task_id]
+        task["state"] = "RUNNING"
+        return deepcopy(task)
+
     async def mark_completed(self, task_id: str, *, outcome=None):
-        assert task_id == self.repository.task["task_id"]
-        self.repository.task["state"] = "COMPLETED"
-        self.repository.task["outcome"] = deepcopy(outcome)
-        return deepcopy(self.repository.task)
+        task = self.repository.tasks[task_id]
+        task["state"] = "COMPLETED"
+        task["outcome"] = deepcopy(outcome)
+        return deepcopy(task)
 
     async def mark_execution_failed(
         self,
@@ -71,20 +126,69 @@ class FakeTaskWorkflow:
         message: str,
         retryable: bool = True,
     ):
-        assert task_id == self.repository.task["task_id"]
-        self.repository.task["state"] = "RETRYING" if retryable else "FAILED"
-        self.repository.task["last_error"] = {
+        task = self.repository.tasks[task_id]
+        task["state"] = "RETRYING" if retryable else "FAILED"
+        task["last_error"] = {
             "type": error_type,
             "message": message,
             "retryable": retryable,
         }
-        return deepcopy(self.repository.task)
+        return deepcopy(task)
+
+
+class FakeAgent:
+    def __init__(self, role: str) -> None:
+        self.role = role
+        self.jid = role.replace("_", "-") + "@xmpp"
+        self.xmpp_connected = True
+        self.communication_ok = True
+        self.activity_incident_id: str | None = "INC-REACT-001"
+        self.activity_state = "WAITING"
+        self.activity_detail: str | None = None
+        self.shared_contexts: list[dict[str, Any]] = []
+
+    def set_activity(self, state, *, incident_id=None, detail=None):
+        self.activity_state = state
+        self.activity_incident_id = incident_id
+        self.activity_detail = detail
+
+    async def share_peer_context(self, **kwargs):
+        self.shared_contexts.append(deepcopy(kwargs))
+        target_role = kwargs["target_role"]
+        receiver = kwargs["receiver"]
+        return AgentMessage.create(
+            type="peer_collaboration_context_accepted",
+            sender=receiver,
+            receiver=self.jid,
+            correlation_id="peer-corr-001",
+            payload={
+                "accepted_by": target_role,
+                "incident_id": kwargs["incident_id"],
+                "support_task_id": kwargs["support_task_id"],
+            },
+        )
 
 
 class FakeAssignee:
     def __init__(self, decision: str) -> None:
         self.decision = decision
-        self.agents: list[Any] = []
+        self.technical_lead = FakeAgent("technical_lead")
+        self.specialists = {
+            role: FakeAgent(role)
+            for role in (
+                "system_engineer",
+                "network_engineer",
+                "application_engineer",
+                "software_developer",
+            )
+        }
+        self.agents: list[Any] = [self.technical_lead, *self.specialists.values()]
+
+    def _technical_lead(self):
+        return self.technical_lead
+
+    def _specialist_by_role(self, role):
+        return self.specialists[role]
 
     async def review_investigation_result(self, incident, result):
         return TechnicalLeadReviewReceipt(
@@ -105,6 +209,19 @@ class FakeAssignee:
             bdi_goal="review_investigation",
             bdi_review_intention="review_specialist_result",
             bdi_decision_intention="commit_review_decision",
+        )
+
+    async def dispatch_investigation_task(self, incident, task):
+        role = task["assigned_to"]
+        return InvestigationTaskDispatchReceipt(
+            task_id=task["task_id"],
+            incident_id=incident["incident_id"],
+            agent_role=role,
+            agent_jid=self.specialists[role].jid,
+            correlation_id="dispatch-support-001",
+            bdi_goal="handle_investigation_task",
+            bdi_acceptance_intention="accept_task",
+            bdi_investigation_intention="investigate_incident",
         )
 
 
@@ -154,7 +271,7 @@ def _success_receipt() -> InvestigationTaskResultReceipt:
     )
 
 
-def test_successful_react_result_can_request_support_after_tl_review() -> None:
+def test_successful_react_result_authorizes_direct_peer_support() -> None:
     repository = FakeRepository()
     coordinator = _coordinator(repository, decision="request_support")
 
@@ -166,14 +283,19 @@ def test_successful_react_result_can_request_support_after_tl_review() -> None:
         )
     )
 
+    support_task = repository.tasks["TASK-SUPPORT-APPLICATION_ENGINEER"]
     assert repository.task["state"] == "COMPLETED"
+    assert support_task["state"] == "RUNNING"
     assert repository.incident["status"] == "UNDER_ANALYSIS"
-    assert repository.incident["agentic"]["review_decision"] == "request_support"
-    assert repository.incident["agentic"]["support_requested"] is True
-    assert repository.incident["agentic"]["support_domain"] == "application"
-    assert repository.events[-1]["event_type"] == "TECHNICAL_LEAD_REVIEW_COMPLETED"
-    assert coordinator.react_results_completed_count == 1
-    assert coordinator.technical_lead_reviews_completed_count == 1
+    assert repository.incident["agentic"]["investigation_task_id"] == support_task["task_id"]
+    assert repository.incident["agentic"]["current_agent"] == "application_engineer"
+    assignee = coordinator.assignee
+    primary = assignee.specialists["system_engineer"]
+    assert len(primary.shared_contexts) == 1
+    assert primary.shared_contexts[0]["target_role"] == "application_engineer"
+    assert primary.shared_contexts[0]["support_task_id"] == support_task["task_id"]
+    assert any(event["event_type"] == "PEER_COLLABORATION_AUTHORIZED" for event in repository.events)
+    assert coordinator.peer_collaborations_started_count == 1
 
 
 def test_successful_react_result_can_resolve_incident_after_tl_review() -> None:
