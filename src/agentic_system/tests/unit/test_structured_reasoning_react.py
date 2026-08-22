@@ -1,5 +1,9 @@
 from agentic_system.agents.factory import MAX_DIAGNOSTIC_REACT_STEPS
-from agentic_system.reasoning.langchain_agent import ReActInvestigationError, _ReasoningDecision
+from agentic_system.reasoning.langchain_agent import (
+    ReActEvidence,
+    ReActInvestigationError,
+    _ReasoningDecision,
+)
 from agentic_system.reasoning.structured_reasoning_react import SpecialistReActExecutor
 
 
@@ -64,6 +68,61 @@ def test_best_available_hypothesis_uses_latest_nonempty_candidate() -> None:
     assert SpecialistReActExecutor._best_available_hypothesis(decisions) == (
         "A CPU-bound worker process is saturating processing-service."
     )
+
+
+def test_best_effort_gate_requires_live_not_rag_only_evidence() -> None:
+    rag = ReActEvidence(
+        step=1,
+        tool="apm_mcp_search_knowledge",
+        arguments={"query": "processing-service CPU behaviour"},
+        observation={"results": ["static project knowledge"]},
+        success=True,
+    )
+    live = ReActEvidence(
+        step=2,
+        tool="apm_mcp_get_processes",
+        arguments={"container": "processing-service"},
+        observation={"processes": [{"pid": 42, "cpu": 98.0}]},
+        success=True,
+    )
+
+    assert SpecialistReActExecutor._has_successful_live_evidence([rag]) is False
+    assert SpecialistReActExecutor._has_successful_live_evidence([rag, live]) is True
+
+
+def test_best_effort_gate_recognizes_six_step_budget_exhaustion() -> None:
+    decisions = [
+        _ReasoningDecision(
+            action="gather_evidence",
+            decision_summary=f"Diagnostic step {step}.",
+            current_hypothesis="CPU-intensive Python child processes are causing saturation.",
+            evidence_needed="Collect another discriminating live observation.",
+        )
+        for step in range(MAX_DIAGNOSTIC_REACT_STEPS)
+    ]
+
+    assert SpecialistReActExecutor._is_bounded_closure(
+        decisions,
+        MAX_DIAGNOSTIC_REACT_STEPS,
+    ) is True
+
+
+def test_best_effort_gate_recognizes_evidence_saturation_before_step_limit() -> None:
+    decisions = [
+        _ReasoningDecision(
+            action="finish",
+            decision_summary=(
+                "The autonomous evidence path is saturated, so close with the best diagnosis."
+            ),
+            current_hypothesis="CPU-intensive Python child processes are causing saturation.",
+            evidence_needed=None,
+        )
+    ]
+
+    assert SpecialistReActExecutor._is_bounded_closure(
+        decisions,
+        MAX_DIAGNOSTIC_REACT_STEPS,
+    ) is True
 
 
 def test_specialist_react_is_capped_at_six_cycles() -> None:
