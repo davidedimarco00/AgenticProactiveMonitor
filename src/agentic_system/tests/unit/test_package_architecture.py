@@ -21,7 +21,7 @@ def test_feature_packages_are_the_canonical_implementations() -> None:
     assert SpecialistAgent.__module__ == "agentic_system.agents.specialist"
     assert RoleLLMProvider.__module__ == "agentic_system.reasoning.models"
     assert SpecialistReActExecutor.__module__ == (
-        "agentic_system.reasoning.structured_reasoning_react"
+        "agentic_system.reasoning.prompt_engineered_react"
     )
     assert build_incident_report.__module__ == "agentic_system.incidents.reporting"
 
