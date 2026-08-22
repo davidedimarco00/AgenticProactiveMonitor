@@ -5,10 +5,11 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from langchain_core.tools import StructuredTool
 from spade_llm.context import create_assistant_tool_call_message
 
-from .diagnostic_react import _DiagnosticFinalOutput
+from .diagnostic_react import _DiagnosticFinalOutput, _ROLE_GUIDANCE
 from .langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
@@ -562,18 +563,103 @@ Output discipline:
                 projected.append(item)
         return projected
 
+    async def _native_reasoning_request(
+        self,
+        messages: list[dict[str, str]],
+    ) -> _ReasoningDecision:
+        schema = _ReasoningDecision.model_json_schema()
+        payload = {
+            "model": self._ollama_model_name(self.reasoning_provider),
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "format": schema,
+            "options": {"temperature": 0},
+        }
+        timeout = max(60.0, self.tool_timeout_seconds * 4)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{self._ollama_base_url(self.reasoning_provider)}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            body = response.json()
+        message = body.get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("Ollama reasoning step returned no message object")
+        content = str(message.get("content") or "").strip()
+        if not content:
+            raise RuntimeError("Ollama reasoning step returned empty content")
+        return _ReasoningDecision.model_validate_json(content)
+
     async def _reason(
         self,
         *,
         assignment: dict[str, Any],
         evidence: list[ReActEvidence],
         decisions: list[Any],
-    ) -> Any:
-        return await super()._reason(
-            assignment=assignment,
-            evidence=self._project_evidence_for_reasoning(evidence),
-            decisions=decisions,
-        )
+    ) -> _ReasoningDecision:
+        projected = self._project_evidence_for_reasoning(evidence)
+        role = str(assignment.get("agent_role") or "").strip().lower()
+        role_guidance = _ROLE_GUIDANCE.get(role, "Stay within the delegated specialist domain.")
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": f"{self.REASONING_POLICY}\n\n{role_guidance}",
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "assignment": assignment,
+                        "collected_evidence": [item.to_dict() for item in projected],
+                        "previous_decision_summaries": [
+                            {
+                                "action": item.action,
+                                "decision_summary": item.decision_summary,
+                                "current_hypothesis": item.current_hypothesis,
+                                "evidence_needed": item.evidence_needed,
+                            }
+                            for item in decisions[-4:]
+                        ],
+                        "instruction": (
+                            "Describe WHAT evidence is needed. Do not mention MCP tool names; "
+                            "Qwen owns action/tool selection."
+                        ),
+                    },
+                    default=str,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            },
+        ]
+
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                return await self._invoke_with_provider_slot(
+                    self.reasoning_provider,
+                    self._native_reasoning_request(messages),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The previous structured reasoning response was invalid. Return "
+                                "only one schema-valid operational decision. If action is "
+                                "gather_evidence, evidence_needed must be non-empty. Validation "
+                                f"feedback: {exc}"
+                            ),
+                        }
+                    )
+        raise ReActInvestigationError(
+            f"Gemma native structured reasoning failed: {last_error}"
+        ) from last_error
 
     async def _finalize(
         self,
