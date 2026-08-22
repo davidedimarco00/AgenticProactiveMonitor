@@ -11,7 +11,7 @@ from .technical_lead import TechnicalLeadAgent
 
 
 MCP_SERVER_NAME = "apm_mcp"
-MIN_DIAGNOSTIC_REACT_STEPS = 10
+MAX_DIAGNOSTIC_REACT_STEPS = 6
 
 
 def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
@@ -84,7 +84,7 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
                 **common_kwargs,
             )
             specialist.configure_react(
-                max_steps=max(config.react_max_steps, MIN_DIAGNOSTIC_REACT_STEPS),
+                max_steps=min(config.react_max_steps, MAX_DIAGNOSTIC_REACT_STEPS),
                 tool_timeout_seconds=config.react_tool_timeout_seconds,
             )
             agent = specialist
