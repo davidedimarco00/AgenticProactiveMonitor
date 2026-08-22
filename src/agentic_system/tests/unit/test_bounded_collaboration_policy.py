@@ -84,7 +84,7 @@ def test_first_explicit_cross_domain_support_is_allowed() -> None:
     )
 
 
-def test_uncertain_result_without_assistance_does_not_force_another_specialist() -> None:
+def test_uncertain_result_without_assistance_can_close_as_best_effort() -> None:
     specialist_result = _result(
         "inconclusive",
         assistance_required=False,
@@ -92,6 +92,10 @@ def test_uncertain_result_without_assistance_does_not_force_another_specialist()
         involved=["system_engineer"],
     )
 
+    TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
+        _assessment("resolve"),
+        specialist_result=specialist_result,
+    )
     TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
         _assessment("operator_action_required"),
         specialist_result=specialist_result,
@@ -104,7 +108,7 @@ def test_uncertain_result_without_assistance_does_not_force_another_specialist()
         )
 
 
-def test_second_cross_domain_support_is_rejected_and_operator_review_is_terminal() -> None:
+def test_second_cross_domain_support_is_rejected_but_best_effort_resolve_is_allowed() -> None:
     specialist_result = _result(
         "probable",
         assistance_required=True,
@@ -124,6 +128,26 @@ def test_second_cross_domain_support_is_rejected_and_operator_review_is_terminal
         )
 
     TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
+        _assessment("resolve"),
+        specialist_result=specialist_result,
+    )
+    TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
         _assessment("operator_action_required"),
         specialist_result=specialist_result,
     )
+
+
+def test_probable_result_still_requires_concrete_root_cause_and_chain() -> None:
+    specialist_result = _result(
+        "probable",
+        assistance_required=False,
+        assistance_domain=None,
+        involved=["system_engineer"],
+    )
+    specialist_result["root_cause"] = None
+
+    with pytest.raises(RuntimeError, match="probable specialist diagnosis requires"):
+        TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
+            _assessment("resolve"),
+            specialist_result=specialist_result,
+        )
