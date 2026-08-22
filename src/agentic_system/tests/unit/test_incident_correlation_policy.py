@@ -44,7 +44,9 @@ def test_stale_or_closed_incident_is_not_correlated() -> None:
     policy = IncidentCorrelationPolicy(window_seconds=600)
 
     stale = _incident(updated_at=(now - timedelta(minutes=11)).isoformat())
-    closed = _incident(status="RESOLVED", updated_at=now.isoformat())
+    resolved = _incident(status="RESOLVED", updated_at=now.isoformat())
+    legacy_operator = _incident(status="OPERATOR_ACTION_REQUIRED", updated_at=now.isoformat())
 
     assert policy.can_correlate(stale, detector_id="detector-1", now=now) is False
-    assert policy.can_correlate(closed, detector_id="detector-1", now=now) is False
+    assert policy.can_correlate(resolved, detector_id="detector-1", now=now) is False
+    assert policy.can_correlate(legacy_operator, detector_id="detector-1", now=now) is False
