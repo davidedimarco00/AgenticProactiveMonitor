@@ -12,7 +12,7 @@ from .langchain_agent import (
     ReActInvestigationError,
     ReActInvestigationResult,
 )
-from .schema_validated_react import SpecialistReActExecutor
+from .observation_aware_react import SpecialistReActExecutor
 from .models import RoleLLMProvider, SharedInferenceGate
 
 __all__ = [
