@@ -105,25 +105,35 @@ class TechnicalLeadReviewReasoner:
 Review only the supplied specialist evidence and choose the next workflow action.
 
 Decisions:
-- resolve: accept a confirmed evidence-backed diagnosis when no immediate human corrective action
-  is required.
-- operator_action_required: use when a confirmed diagnosis needs human corrective action, when an
-  unresolved diagnosis no longer needs another specialist, or when the bounded support budget is
-  exhausted.
+- resolve: accept the best evidence-backed autonomous diagnostic result when no further specialist
+  evidence is requested and no immediate human corrective/manual diagnostic action is required.
+  This may be confirmed, probable, or a bounded inconclusive result after the autonomous evidence
+  budget is exhausted.
+- operator_action_required: use only when the accepted diagnosis/evidence requires a human corrective
+  action, or when a necessary diagnostic action cannot be performed by the autonomous tool layer and
+  must genuinely be carried out by a human operator.
 - request_support: ask exactly one NEW specialist domain only when the current specialist explicitly
   requests cross-domain diagnostic evidence and the support budget is still available.
 
 Collaboration rules:
 - A confirmed diagnosis with assistance_required=false is terminal for autonomous diagnosis.
 - A probable/inconclusive diagnosis with assistance_required=false must NOT trigger another
-  specialist. Escalate to the operator if it cannot be resolved autonomously.
+  specialist and must NOT be escalated to the operator merely because confidence is below 1.0.
+  Prefer resolve for the best-effort result unless a concrete human action is genuinely required.
 - Collaboration is bounded to one cross-domain support round. Never walk through all specialists.
-- If support_budget_exhausted=true, request_support is forbidden.
+- If support_budget_exhausted=true, request_support is forbidden, but budget exhaustion alone does
+  not force operator escalation: accept the best available result when no human action is needed.
 - When support is allowed, support_domain must be one of eligible_support_domains and should match
   specialist_requested_domain when that request is valid.
 
-Remediation rules:
+Diagnostic review rules:
 - Never invent evidence, measurements or a root cause.
+- Preserve a specialist probable root cause when its causal hypothesis is supported by the supplied
+  evidence; do not downgrade it merely because every causal link is not proven.
+- For an inconclusive result accepted as resolve, do not invent a cause. Use a root_cause value such
+  as "Unconfirmed after bounded autonomous investigation" and explain what the evidence did establish.
+
+Remediation rules:
 - Remediation is advisory only; the agent must never execute it automatically.
 - For terminal decisions, provide concrete operator steps grounded in the diagnosis/evidence.
 - Commands must be suitable for the thesis Windows operator workstation: prefer PowerShell and
@@ -268,13 +278,15 @@ null unless decision=request_support."""
         if support_policy["support_budget_exhausted"]:
             next_rule = (
                 "The support budget is exhausted. Do not request another specialist. Choose resolve "
-                "only for a confirmed diagnosis that needs no human action; otherwise choose "
-                "operator_action_required."
+                "for the best evidence-backed result when no human action is required; choose "
+                "operator_action_required only when a concrete human corrective/manual diagnostic "
+                "action is genuinely necessary."
             )
         else:
             next_rule = (
                 "Request support only if specialist_result.assistance_required=true. Otherwise do "
-                "not add a specialist. If support is required, use only "
+                "not add a specialist and do not force operator escalation solely because the "
+                "diagnosis is probable or inconclusive. If support is required, use only "
                 f"eligible_support_domains={support_policy['eligible_support_domains']} and prefer "
                 f"specialist_requested_domain={support_policy['specialist_requested_domain']!r}."
             )
@@ -453,11 +465,13 @@ null unless decision=request_support."""
                 f"Specialist returned unsupported diagnosis_status: {diagnosis_status!r}"
             )
 
-        if diagnosis_status == "confirmed":
+        if diagnosis_status in {"confirmed", "probable"}:
             if not root_cause or not isinstance(causal_chain, list) or not causal_chain:
                 raise RuntimeError(
-                    "Terminal TL decision requires specialist root_cause and causal_chain"
+                    f"{diagnosis_status} specialist diagnosis requires root_cause and causal_chain"
                 )
+
+        if diagnosis_status == "confirmed":
             if assistance_required:
                 raise RuntimeError(
                     "Confirmed specialist diagnosis cannot request diagnostic assistance"
@@ -469,18 +483,19 @@ null unless decision=request_support."""
             return
 
         if support_budget_exhausted:
-            if assessment.decision != "operator_action_required":
+            if assessment.decision == "request_support":
                 raise RuntimeError(
-                    "Cross-domain support budget exhausted; unresolved autonomous diagnosis must "
-                    "escalate to operator review"
+                    "Cross-domain support budget exhausted; request_support is forbidden. Accept "
+                    "the best available result or escalate only when concrete human action is needed."
                 )
             return
 
         if not assistance_required:
-            if assessment.decision != "operator_action_required":
+            if assessment.decision == "request_support":
                 raise RuntimeError(
                     f"{diagnosis_status} diagnosis does not request peer assistance; do not add a "
-                    "specialist. Escalate unresolved work to the operator."
+                    "specialist. Accept the bounded best-effort result unless concrete human action "
+                    "is required."
                 )
             return
 
