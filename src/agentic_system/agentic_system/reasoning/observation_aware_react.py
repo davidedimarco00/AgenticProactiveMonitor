@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
+
+from langchain_core.tools import StructuredTool
 
 from .langchain_agent import ReActEvidence
 from .schema_validated_react import SpecialistReActExecutor as _SchemaValidatedExecutor
@@ -59,6 +62,42 @@ class SpecialistReActExecutor(_SchemaValidatedExecutor):
     compact structured projection. This avoids blind character-prefix truncation
     while keeping reasoning prompts bounded and useful.
     """
+
+    def _adapt_tool(self, tool: Any) -> StructuredTool:
+        """Adapt an MCP tool without applying the legacy 6k observation truncation."""
+
+        async def execute_spade_tool(**kwargs: Any) -> str:
+            try:
+                raw = await asyncio.wait_for(
+                    tool.execute(**kwargs),
+                    timeout=self.tool_timeout_seconds,
+                )
+                payload = {
+                    "success": True,
+                    "observation": self._normalize_raw_observation(raw),
+                }
+            except asyncio.TimeoutError:
+                payload = {
+                    "success": False,
+                    "error": (
+                        f"Tool {tool.name} exceeded timeout "
+                        f"{self.tool_timeout_seconds:.1f}s"
+                    ),
+                }
+            except Exception as exc:
+                payload = {
+                    "success": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            return json.dumps(payload, default=str, ensure_ascii=False)
+
+        return StructuredTool.from_function(
+            coroutine=execute_spade_tool,
+            name=tool.name,
+            description=tool.description,
+            args_schema=tool.parameters,
+            infer_schema=False,
+        )
 
     def _project_evidence_for_reasoning(
         self,
