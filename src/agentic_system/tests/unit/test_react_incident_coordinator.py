@@ -282,7 +282,7 @@ def _probable_receipt() -> InvestigationTaskResultReceipt:
             },
         ),
         hypotheses=("An application workload may be driving the CPU saturation.",),
-        recommended_next_steps=("Correlate with application evidence.",),
+        recommended_next_steps=("Correlate application evidence.",),
         assistance_required=True,
         assistance_domain="application",
         react_steps=3,
@@ -375,7 +375,8 @@ def test_confirmed_react_result_can_resolve_incident_after_tl_review() -> None:
     assert repository.incident["agentic"]["active_agents"] == []
     assert repository.incident["agentic"]["review_decision"] == "resolve"
     assert repository.incident["agentic"]["support_requested"] is False
-    assert repository.incident["diagnosis"]["confidence"] == 0.9
+    assert repository.incident["diagnosis"]["confidence"] == 0.94
+    assert repository.incident["agentic"]["review_confidence"] == 0.9
     assert repository.incident["diagnosis"]["evidence"] == [
         "CPU remained above the expected range."
     ]
