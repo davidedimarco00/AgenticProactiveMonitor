@@ -333,9 +333,13 @@ class AgentRuntime:
                 raise RuntimeError(
                     "Confirmed specialist diagnosis cannot request diagnostic assistance"
                 )
-        elif not assistance_required or assistance_domain is None:
+        elif assistance_required and assistance_domain is None:
             raise RuntimeError(
-                "Probable or inconclusive specialist diagnosis must request assistance"
+                "Specialist assistance request requires assistance_domain"
+            )
+        elif not assistance_required and assistance_domain is not None:
+            raise RuntimeError(
+                "assistance_domain must be null when assistance_required is false"
             )
 
         return InvestigationTaskResultReceipt(
