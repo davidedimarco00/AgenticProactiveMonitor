@@ -73,22 +73,18 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 if task_state == AgentTaskState.FAILED:
                     last_error = task.get("last_error") or {}
                     reason = str(last_error.get("message") or "Agent task failed.")
-                    escalated = await self.workflow.mark_operator_action_required(
-                        incident_id,
-                        task_id=task_id,
+                    resolved = await self._persist_terminal_diagnostic_failure(
+                        incident,
+                        task,
                         reason=reason,
                     )
-                    self._apply_agent_activity(
-                        incident_id,
-                        decision="operator_action_required",
-                    )
                     LOGGER.warning(
-                        "Terminal task failure released exclusive workflow via operator escalation: "
-                        "incident=%s task=%s",
+                        "Terminal task failure released exclusive workflow with a diagnostic "
+                        "failure result instead of OPERATOR_ACTION_REQUIRED: incident=%s task=%s",
                         incident_id,
                         task_id,
                     )
-                    return escalated
+                    return resolved
 
                 if task_state in {
                     AgentTaskState.PENDING,
@@ -214,6 +210,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         except Exception as exc:
             await self._persist_technical_lead_review_failure(
                 incident_id,
+                specialist_receipt=receipt,
                 task_id=task_id,
                 error=exc,
             )
@@ -232,6 +229,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             except Exception as exc:
                 await self._persist_peer_collaboration_failure(
                     incident_id,
+                    specialist_receipt=receipt,
                     task_id=task_id,
                     error=exc,
                 )
@@ -278,6 +276,17 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         if decision not in {"resolve", "operator_action_required", "request_support"}:
             raise RuntimeError(f"Unsupported Technical Lead review decision: {decision}")
 
+        # Defense in depth: OPERATOR_ACTION_REQUIRED is no longer a terminal
+        # state of the autonomous diagnostic pipeline. Human actions remain
+        # advisory remediation steps attached to a resolved diagnosis.
+        if decision == "operator_action_required":
+            LOGGER.error(
+                "Technical Lead returned legacy operator_action_required; normalizing to resolve: "
+                "incident=%s",
+                incident_id,
+            )
+            decision = "resolve"
+
         involved_roles = await self._involved_specialist_roles(incident_id)
         evidence = await self._combined_findings(
             incident_id,
@@ -300,22 +309,11 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             validation = {
                 "status": "EVIDENCE_REVIEWED",
                 "summary": (
-                    "The Technical Lead accepted the combined specialist evidence and "
-                    "determined that no immediate operator action is required."
+                    "The Technical Lead accepted the combined specialist evidence and preserved "
+                    "the best evidence-backed diagnosis. Any human actions are advisory only."
                 ),
             }
             active_agents: list[str] = []
-            peer_state = "COMPLETED"
-        elif decision == "operator_action_required":
-            status = "OPERATOR_ACTION_REQUIRED"
-            validation = {
-                "status": "OPERATOR_ACTION_PENDING",
-                "summary": (
-                    "The Technical Lead accepted the combined diagnosis, but remediation "
-                    "requires human operator action."
-                ),
-            }
-            active_agents = []
             peer_state = "COMPLETED"
         else:
             status = "UNDER_ANALYSIS"
@@ -347,8 +345,8 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "bdi_review_intention": review.bdi_review_intention,
                     "bdi_review_decision_intention": review.bdi_decision_intention,
                     "support_requested": decision == "request_support",
-                    "support_domain": review.support_domain,
-                    "support_reason": review.support_reason,
+                    "support_domain": review.support_domain if decision == "request_support" else None,
+                    "support_reason": review.support_reason if decision == "request_support" else None,
                     "collaboration_roles": involved_roles,
                     "collaboration_round": max(len(involved_roles) - 1, 0),
                     "peer_collaboration_state": peer_state,
@@ -373,7 +371,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "decision": decision,
                     "confidence": review.confidence,
                     "diagnosis_summary": review.diagnosis_summary,
-                    "support_domain": review.support_domain,
+                    "support_domain": review.support_domain if decision == "request_support" else None,
                     "specialists_involved": involved_roles,
                 },
             },
@@ -619,98 +617,216 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 combined.append(finding)
         return combined
 
+    @staticmethod
+    def _receipt_root_cause(specialist_receipt: Any) -> str:
+        root_cause = str(getattr(specialist_receipt, "root_cause", None) or "").strip()
+        if root_cause:
+            return root_cause
+        for raw in getattr(specialist_receipt, "hypotheses", ()) or ():
+            candidate = str(raw or "").strip()
+            if candidate.lower() not in {"", "none", "null", "unknown", "unconfirmed", "n/a"}:
+                return candidate
+        return "Unconfirmed causal mechanism after bounded autonomous investigation"
+
+    async def _persist_diagnosis_fallback(
+        self,
+        incident_id: str,
+        *,
+        specialist_receipt: Any,
+        task_id: str,
+        validation_status: str,
+        validation_summary: str,
+        event_type: str,
+        event_action: str,
+        reason: str,
+    ) -> None:
+        findings = await self._combined_findings(
+            incident_id,
+            current_findings=getattr(specialist_receipt, "findings", ()) or (),
+        )
+        root_cause = self._receipt_root_cause(specialist_receipt)
+        summary = str(getattr(specialist_receipt, "summary", None) or "").strip()
+        if not summary:
+            summary = "Bounded autonomous diagnosis completed with retained specialist evidence."
+        confidence = float(getattr(specialist_receipt, "confidence", 0.0) or 0.0)
+        next_steps = [
+            str(item).strip()
+            for item in getattr(specialist_receipt, "recommended_next_steps", ()) or ()
+            if str(item).strip()
+        ]
+
+        updated = await self.repository.update_incident(
+            incident_id,
+            {
+                "status": "RESOLVED",
+                "diagnosis": {
+                    "summary": summary,
+                    "root_cause": root_cause,
+                    "confidence": min(max(confidence, 0.0), 1.0),
+                    "evidence": findings,
+                },
+                "remediation": {
+                    "summary": (
+                        "No autonomous remediation was executed. The specialist's retained "
+                        "recommendations remain advisory."
+                    ),
+                    "steps": next_steps,
+                    "status": "ADVISORY",
+                },
+                "validation": {
+                    "status": validation_status,
+                    "summary": validation_summary,
+                },
+                "agentic": {
+                    "current_agent": "technical_lead",
+                    "active_agents": [],
+                    "review_state": "FALLBACK_COMPLETED",
+                    "review_decision": "resolve",
+                    "support_requested": False,
+                    "support_domain": None,
+                    "support_reason": None,
+                    "peer_collaboration_state": "COMPLETED",
+                },
+            },
+        )
+        if updated is None:
+            raise RuntimeError(f"Incident disappeared while persisting diagnosis fallback: {incident_id}")
+
+        await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": event_type,
+                "agent_role": "technical_lead",
+                "action": event_action,
+                "reason": reason,
+                "status": "RESOLVED",
+                "task_id": task_id,
+                "outcome": {
+                    "decision": "resolve",
+                    "diagnosis_summary": summary,
+                    "root_cause": root_cause,
+                    "fallback": True,
+                },
+            },
+        )
+        self._apply_agent_activity(incident_id, decision="resolve")
+
     async def _persist_technical_lead_review_failure(
         self,
         incident_id: str,
         *,
+        specialist_receipt: Any,
         task_id: str,
         error: Exception,
     ) -> None:
         self.technical_lead_reviews_failed_count += 1
         LOGGER.exception(
-            "Technical Lead review failed; escalating without changing agent health: "
-            "incident=%s error=%s",
+            "Technical Lead review failed; preserving specialist diagnosis instead of operator "
+            "escalation: incident=%s error=%s",
             incident_id,
             error,
         )
-        await self.repository.update_incident(
+        await self._persist_diagnosis_fallback(
             incident_id,
-            {
-                "status": "OPERATOR_ACTION_REQUIRED",
-                "validation": {
-                    "status": "TECHNICAL_LEAD_REVIEW_FAILED",
-                    "summary": (
-                        "Specialist evidence was collected, but the Technical Lead "
-                        "critic cycle failed."
-                    ),
-                },
-                "agentic": {
-                    "current_agent": "technical_lead",
-                    "active_agents": [],
-                    "review_state": "FAILED",
-                    "support_requested": False,
-                    "peer_collaboration_state": "FAILED",
-                },
-            },
+            specialist_receipt=specialist_receipt,
+            task_id=task_id,
+            validation_status="TECHNICAL_LEAD_REVIEW_FALLBACK",
+            validation_summary=(
+                "The Technical Lead critic cycle failed, but the specialist's bounded diagnosis "
+                "and retained evidence were preserved as the incident result."
+            ),
+            event_type="TECHNICAL_LEAD_REVIEW_FALLBACK",
+            event_action="preserve_specialist_diagnosis",
+            reason=str(error),
         )
-        await self.repository.add_event(
-            incident_id,
-            {
-                "event_type": "TECHNICAL_LEAD_REVIEW_FAILED",
-                "agent_role": "technical_lead",
-                "action": "escalate_review_failure",
-                "reason": str(error),
-                "status": "OPERATOR_ACTION_REQUIRED",
-                "task_id": task_id,
-            },
-        )
-        self._apply_agent_activity(incident_id, decision="operator_action_required")
 
     async def _persist_peer_collaboration_failure(
         self,
         incident_id: str,
         *,
+        specialist_receipt: Any,
         task_id: str,
         error: Exception,
     ) -> None:
         self.peer_collaborations_failed_count += 1
         LOGGER.exception(
-            "Peer collaboration could not start; escalating without changing agent health: "
-            "incident=%s error=%s",
+            "Peer collaboration could not start; preserving current diagnosis instead of operator "
+            "escalation: incident=%s error=%s",
             incident_id,
             error,
         )
-        await self.repository.update_incident(
+        await self._persist_diagnosis_fallback(
+            incident_id,
+            specialist_receipt=specialist_receipt,
+            task_id=task_id,
+            validation_status="PEER_COLLABORATION_FALLBACK",
+            validation_summary=(
+                "Additional peer evidence could not be collected, so the system preserved the "
+                "best diagnosis already supported by the current specialist evidence."
+            ),
+            event_type="PEER_COLLABORATION_FALLBACK",
+            event_action="preserve_current_diagnosis",
+            reason=str(error),
+        )
+
+    async def _persist_terminal_diagnostic_failure(
+        self,
+        incident: dict[str, Any],
+        task: dict[str, Any],
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        incident_id = str(incident["incident_id"])
+        task_id = str(task["task_id"])
+        summary = (
+            "The autonomous specialist task failed before a deeper anomaly root cause could be "
+            "established. The failure itself is retained as the diagnostic conclusion rather than "
+            "changing the incident to OPERATOR_ACTION_REQUIRED."
+        )
+        updated = await self.repository.update_incident(
             incident_id,
             {
-                "status": "OPERATOR_ACTION_REQUIRED",
+                "status": "RESOLVED",
+                "diagnosis": {
+                    "summary": summary,
+                    "root_cause": f"Autonomous diagnostic execution failure: {reason}",
+                    "confidence": 0.0,
+                    "evidence": [],
+                },
+                "remediation": {
+                    "summary": "No autonomous remediation was executed.",
+                    "steps": [],
+                    "status": "ADVISORY",
+                },
                 "validation": {
-                    "status": "PEER_COLLABORATION_FAILED",
-                    "summary": (
-                        "The Technical Lead requested additional specialist evidence, "
-                        "but direct peer collaboration could not be established."
-                    ),
+                    "status": "DIAGNOSTIC_EXECUTION_FAILED",
+                    "summary": summary,
                 },
                 "agentic": {
                     "current_agent": "technical_lead",
                     "active_agents": [],
+                    "review_state": "DIAGNOSTIC_FAILURE_RECORDED",
+                    "review_decision": "resolve",
                     "support_requested": False,
-                    "peer_collaboration_state": "FAILED",
+                    "peer_collaboration_state": "COMPLETED",
                 },
             },
         )
+        if updated is None:
+            raise RuntimeError(f"Incident disappeared while persisting task failure: {incident_id}")
         await self.repository.add_event(
             incident_id,
             {
-                "event_type": "PEER_COLLABORATION_FAILED",
-                "agent_role": "technical_lead",
-                "action": "escalate_collaboration_failure",
-                "reason": str(error),
-                "status": "OPERATOR_ACTION_REQUIRED",
+                "event_type": "AUTONOMOUS_DIAGNOSIS_FAILED",
+                "agent_role": str(task.get("assigned_to") or "specialist"),
+                "action": "persist_diagnostic_failure",
+                "reason": reason,
+                "status": "RESOLVED",
                 "task_id": task_id,
             },
         )
-        self._apply_agent_activity(incident_id, decision="operator_action_required")
+        self._apply_agent_activity(incident_id, decision="resolve")
+        return dict(updated)
 
     def _apply_agent_activity(self, incident_id: str, *, decision: str) -> None:
         agents = getattr(self.assignee, "agents", None)
