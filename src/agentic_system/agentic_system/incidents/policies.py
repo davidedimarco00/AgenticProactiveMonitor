@@ -10,7 +10,6 @@ ACTIVE_INCIDENT_STATUSES = {
     "TRIAGED",
     "UNDER_ANALYSIS",
     "DIAGNOSED",
-    "OPERATOR_ACTION_REQUIRED",
 }
 
 
@@ -20,6 +19,10 @@ class IncidentCorrelationPolicy:
     Project detectors are SINGLE_ENTITY. Therefore detector_id is the stable
     correlation key for the monitored entity at this stage. Human-readable
     entity enrichment can be added later without changing the policy boundary.
+
+    Only genuinely active diagnostic states are correlatable. Historical
+    OPERATOR_ACTION_REQUIRED records from older versions are terminal and must
+    not absorb a new anomaly into a previously failed review cycle.
     """
 
     def __init__(self, *, window_seconds: int = 600) -> None:
