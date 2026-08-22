@@ -92,7 +92,7 @@ def test_runtime_preserves_diagnostic_closure_from_xmpp_payload(monkeypatch) -> 
     assert receipt.task_outcome()["diagnosis_status"] == "confirmed"
 
 
-def test_runtime_rejects_nonconfirmed_result_without_peer_assistance(monkeypatch) -> None:
+def test_runtime_accepts_nonconfirmed_result_without_peer_assistance(monkeypatch) -> None:
     runtime = object.__new__(AgentRuntime)
     technical_lead = FakeAgent("technical-lead@xmpp")
     specialist = FakeAgent("network-engineer@xmpp")
@@ -103,10 +103,10 @@ def test_runtime_rejects_nonconfirmed_result_without_peer_assistance(monkeypatch
         type="investigation_task_result",
         sender="network-engineer@xmpp",
         receiver="technical-lead@xmpp",
-        correlation_id="corr-diagnostic-invalid",
+        correlation_id="corr-diagnostic-inconclusive",
         payload={
-            "task_id": "TASK-DIAG-INVALID",
-            "incident_id": "INC-DIAG-INVALID",
+            "task_id": "TASK-DIAG-INCONCLUSIVE",
+            "incident_id": "INC-DIAG-INCONCLUSIVE",
             "agent_role": "network_engineer",
             "summary": "Network evidence does not explain the anomaly.",
             "diagnosis_status": "inconclusive",
@@ -116,7 +116,7 @@ def test_runtime_rejects_nonconfirmed_result_without_peer_assistance(monkeypatch
             "findings": [],
             "evidence": [],
             "hypotheses": [],
-            "recommended_next_steps": ["Inspect application logs."],
+            "recommended_next_steps": ["Escalate unresolved diagnosis for operator review."],
             "assistance_required": False,
             "assistance_domain": None,
             "react_steps": 4,
@@ -129,18 +129,20 @@ def test_runtime_rejects_nonconfirmed_result_without_peer_assistance(monkeypatch
         lambda agent, task_id: message,
     )
 
-    try:
-        asyncio.run(
-            runtime.collect_investigation_result(
-                {"incident_id": "INC-DIAG-INVALID"},
-                {
-                    "task_id": "TASK-DIAG-INVALID",
-                    "incident_id": "INC-DIAG-INVALID",
-                    "assigned_to": "network_engineer",
-                },
-            )
+    receipt = asyncio.run(
+        runtime.collect_investigation_result(
+            {"incident_id": "INC-DIAG-INCONCLUSIVE"},
+            {
+                "task_id": "TASK-DIAG-INCONCLUSIVE",
+                "incident_id": "INC-DIAG-INCONCLUSIVE",
+                "assigned_to": "network_engineer",
+            },
         )
-    except RuntimeError as exc:
-        assert "must request assistance" in str(exc)
-    else:
-        raise AssertionError("Invalid non-confirmed result was accepted")
+    )
+
+    assert receipt is not None
+    assert receipt.succeeded is True
+    assert receipt.diagnosis_status == "inconclusive"
+    assert receipt.root_cause is None
+    assert receipt.assistance_required is False
+    assert receipt.assistance_domain is None
