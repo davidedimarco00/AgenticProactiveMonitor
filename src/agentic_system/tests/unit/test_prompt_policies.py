@@ -40,9 +40,19 @@ def test_tool_selection_policy_separates_live_evidence_from_rag() -> None:
     assert "Do not diagnose" in policy
 
 
+def test_reasoning_policy_distinguishes_symptom_from_root_cause() -> None:
+    policy = _normalized(SpecialistReActExecutor.REASONING_POLICY)
+
+    assert "is NOT by itself a root cause" in policy
+    assert "current_hypothesis must name the causal process" in policy
+    assert "If you can only restate the anomaly, gather more evidence instead" in policy
+
+
 def test_finalization_policy_keeps_peer_request_specific() -> None:
     policy = _normalized(SpecialistReActExecutor.FINALIZATION_POLICY)
 
     assert "Static RAG knowledge alone cannot confirm" in policy
     assert "specific evidence the peer should collect" in policy
+    assert "NEVER output confirmed or probable with root_cause=null" in policy
+    assert "Never use probable to mean \"the cause is unknown\"" in policy
     assert "never remediation" in policy
