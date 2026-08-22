@@ -79,6 +79,22 @@ class SpecialistReActExecutor(_ObservationAwareExecutor):
                 return hypothesis
         return None
 
+    @staticmethod
+    def _has_successful_live_evidence(evidence: list[ReActEvidence]) -> bool:
+        return any(
+            item.success and "search_knowledge" not in item.tool.lower()
+            for item in evidence
+        )
+
+    @staticmethod
+    def _is_bounded_closure(decisions: list[_ReasoningDecision], max_steps: int) -> bool:
+        if len(decisions) >= max_steps:
+            return True
+        if not decisions:
+            return False
+        summary = str(decisions[-1].decision_summary or "").lower()
+        return "evidence path is saturated" in summary
+
     async def _native_reasoning_request(
         self,
         messages: list[dict[str, str]],
@@ -133,6 +149,51 @@ class SpecialistReActExecutor(_ObservationAwareExecutor):
         self._bounded_evidence_snapshot = list(evidence)
         self._bounded_decisions_snapshot = [*decisions, decision]
         return decision
+
+    async def _finalize(
+        self,
+        *,
+        assignment: dict[str, Any],
+        evidence: list[ReActEvidence],
+        decisions: list[Any],
+    ) -> _DiagnosticFinalOutput:
+        output = await super()._finalize(
+            assignment=assignment,
+            evidence=evidence,
+            decisions=decisions,
+        )
+        if output.diagnosis_status != "inconclusive":
+            return output
+
+        typed_decisions = [item for item in decisions if isinstance(item, _ReasoningDecision)]
+        best_hypothesis = self._best_available_hypothesis(typed_decisions)
+        if (
+            not best_hypothesis
+            or not self._has_successful_live_evidence(evidence)
+            or not self._is_bounded_closure(typed_decisions, self.max_steps)
+        ):
+            return output
+
+        reconsideration = _ReasoningDecision(
+            action="finish",
+            decision_summary=(
+                "The bounded autonomous ReAct budget is exhausted and live diagnostic evidence "
+                "supports a concrete causal hypothesis. Reassess closure using best-effort "
+                "diagnostic semantics: if the supplied live observations materially support the "
+                "hypothesis but do not prove every causal link, report a probable diagnosis with "
+                "that specific root cause and an evidence-backed causal chain. Use inconclusive "
+                "only if the supplied evidence does not materially support the hypothesis. Do not "
+                "invent any missing fact."
+            ),
+            current_hypothesis=best_hypothesis,
+            evidence_needed=None,
+        )
+        reconsidered = await super()._finalize(
+            assignment=assignment,
+            evidence=evidence,
+            decisions=[*typed_decisions, reconsideration],
+        )
+        return reconsidered
 
     async def investigate(
         self,
