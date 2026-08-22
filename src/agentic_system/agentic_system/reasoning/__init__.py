@@ -12,8 +12,8 @@ from .langchain_agent import (
     ReActInvestigationError,
     ReActInvestigationResult,
 )
-from .observation_aware_react import SpecialistReActExecutor
 from .models import RoleLLMProvider, SharedInferenceGate
+from .structured_reasoning_react import SpecialistReActExecutor
 
 __all__ = [
     "AgentSpeakBDIRuntime",
