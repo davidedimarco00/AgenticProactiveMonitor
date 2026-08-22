@@ -384,6 +384,51 @@ def test_confirmed_react_result_can_resolve_incident_after_tl_review() -> None:
     assert repository.events[-1]["event_type"] == "TECHNICAL_LEAD_REVIEW_COMPLETED"
 
 
+def test_legacy_operator_review_is_normalized_to_resolved_diagnosis() -> None:
+    repository = FakeRepository()
+    coordinator = _coordinator(repository, decision="operator_action_required")
+
+    asyncio.run(
+        coordinator._persist_successful_react_result(
+            deepcopy(repository.incident),
+            deepcopy(repository.task),
+            _confirmed_receipt(),
+        )
+    )
+
+    assert repository.incident["status"] == "RESOLVED"
+    assert repository.incident["agentic"]["review_decision"] == "resolve"
+    assert repository.incident["diagnosis"]["root_cause"] == (
+        "A CPU-bound workload saturated processing-service."
+    )
+    assert all(event.get("status") != "OPERATOR_ACTION_REQUIRED" for event in repository.events)
+
+
+def test_tl_review_failure_preserves_specialist_diagnosis_instead_of_operator_escalation() -> None:
+    repository = FakeRepository()
+    coordinator = _coordinator(repository, decision="resolve")
+
+    async def broken_review(*args, **kwargs):
+        raise RuntimeError("critic model failed after specialist evidence was collected")
+
+    coordinator.assignee.review_investigation_result = broken_review
+
+    asyncio.run(
+        coordinator._persist_successful_react_result(
+            deepcopy(repository.incident),
+            deepcopy(repository.task),
+            _confirmed_receipt(),
+        )
+    )
+
+    assert repository.incident["status"] == "RESOLVED"
+    assert repository.incident["validation"]["status"] == "TECHNICAL_LEAD_REVIEW_FALLBACK"
+    assert repository.incident["agentic"]["review_decision"] == "resolve"
+    assert repository.incident["diagnosis"]["root_cause"] == _confirmed_receipt().root_cause
+    assert repository.events[-1]["event_type"] == "TECHNICAL_LEAD_REVIEW_FALLBACK"
+    assert repository.events[-1]["status"] == "RESOLVED"
+
+
 def test_failed_react_result_moves_task_to_retrying_without_terminal_incident() -> None:
     repository = FakeRepository()
     coordinator = _coordinator(repository, decision="resolve")
