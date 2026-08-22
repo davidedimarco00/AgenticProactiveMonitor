@@ -135,30 +135,54 @@
       <div class="agent-log-title">
         <div>
           <h3>Operational activity log</h3>
-          <p>Structured execution events for operator audit. The log exposes actions and concise operational rationale, not private model chain-of-thought.</p>
+          <p>Scan the timeline on the left, then inspect rationale, outcomes and payloads in the event detail panel.</p>
         </div>
-        <span id="agent-log-loading" class="agent-log-loading" hidden>Loading…</span>
+        <span id="agent-log-loading" class="agent-log-loading" hidden>Refreshing…</span>
       </div>
 
-      <div class="agent-log-table-wrap">
-        <table class="agent-log-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Action</th>
-              <th>Called by</th>
-              <th>Why</th>
-              <th>Tool / Outcome</th>
-              <th>Incident</th>
-            </tr>
-          </thead>
-          <tbody id="agent-log-body"></tbody>
-        </table>
+      <div class="agent-log-toolbar" aria-label="Agent log filters">
+        <label class="agent-log-control agent-log-search">
+          <span>Search events</span>
+          <input id="agent-log-search" type="search" placeholder="Action, rationale, tool, incident…" autocomplete="off">
+        </label>
+        <label class="agent-log-control agent-log-status-filter">
+          <span>Status</span>
+          <select id="agent-log-status-filter">
+            <option value="">All statuses</option>
+          </select>
+        </label>
+        <label class="agent-log-current-filter">
+          <input id="agent-log-current-only" type="checkbox">
+          <span>Current incident only</span>
+        </label>
+        <div class="agent-log-result-count" aria-live="polite">
+          <span>Visible</span>
+          <strong id="agent-log-visible-count">0</strong>
+        </div>
       </div>
 
-      <div class="agent-log-empty" id="agent-log-empty" hidden>
-        <strong>No activity recorded for this role yet.</strong>
-        <p>Structured agent events are persisted by the autonomous backend and exposed through its read API.</p>
+      <div class="agent-log-workspace">
+        <section class="agent-event-list-panel" aria-label="Agent event timeline">
+          <header class="agent-event-panel-header">
+            <div>
+              <span class="eyebrow">TIMELINE</span>
+              <h4>Agent events</h4>
+            </div>
+            <small>Newest first</small>
+          </header>
+          <div class="agent-event-list" id="agent-event-list"></div>
+          <div class="agent-log-empty" id="agent-log-empty" hidden>
+            <strong>No activity recorded for this role yet.</strong>
+            <p>Structured agent events are persisted by the autonomous backend and exposed through its read API.</p>
+          </div>
+        </section>
+
+        <section class="agent-event-detail-panel is-empty" id="agent-event-detail" aria-label="Selected event detail" aria-live="polite">
+          <div class="agent-event-detail-empty" id="agent-event-detail-empty">
+            <strong>Select an event to inspect it.</strong>
+            <p>The complete operational rationale, tool outcome and structured payload will appear here.</p>
+          </div>
+        </section>
       </div>
     </div>
   </section>
