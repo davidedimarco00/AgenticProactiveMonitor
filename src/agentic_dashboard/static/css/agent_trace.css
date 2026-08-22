@@ -1,38 +1,58 @@
-.agent-log-table tr.live-agent-trace td {
-  vertical-align: top;
+.agent-detail-disclosure {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid #dbe3ec;
+  border-radius: 11px;
+  background: #ffffff;
 }
 
-.agent-log-table tr.live-agent-trace td:first-child::after {
-  content: "LIVE";
-  display: block;
-  margin-top: 0.35rem;
-  font-size: 0.65rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  opacity: 0.6;
-}
-
-.agent-trace-details {
-  margin-top: 0.5rem;
-}
-
-.agent-trace-details summary {
+.agent-detail-disclosure summary {
+  position: sticky;
+  top: 0;
   cursor: pointer;
-  font-size: 0.74rem;
-  font-weight: 700;
+  list-style: none;
+  padding: 12px 14px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .02em;
 }
 
-.agent-trace-details pre {
-  max-width: 38rem;
-  max-height: 18rem;
-  margin: 0.55rem 0 0;
-  padding: 0.7rem;
+.agent-detail-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-detail-disclosure summary::after {
+  content: "+";
+  float: right;
+  color: #64748b;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.agent-detail-disclosure[open] summary::after {
+  content: "−";
+}
+
+.agent-detail-disclosure pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 14px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  border: 1px solid rgba(15, 23, 42, 0.12);
-  border-radius: 0.55rem;
-  background: rgba(15, 23, 42, 0.035);
-  font-size: 0.72rem;
-  line-height: 1.45;
+  border-top: 1px solid #e2e8f0;
+  background: #0f172a;
+  color: #dbeafe;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+@media (max-width: 860px) {
+  .agent-detail-disclosure pre {
+    max-height: 260px;
+  }
 }
