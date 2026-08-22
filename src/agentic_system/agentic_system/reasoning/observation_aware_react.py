@@ -6,8 +6,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import StructuredTool
+from spade_llm.context import create_assistant_tool_call_message
 
-from .langchain_agent import ReActEvidence
+from .diagnostic_react import _DiagnosticFinalOutput
+from .langchain_agent import (
+    ReActEvidence,
+    ReActInvestigationError,
+    ReActInvestigationResult,
+    _ReasoningDecision,
+)
 from .schema_validated_react import SpecialistReActExecutor as _SchemaValidatedExecutor
 
 
@@ -56,11 +63,13 @@ class ObservationAwareEvidence(ReActEvidence):
 
 
 class SpecialistReActExecutor(_SchemaValidatedExecutor):
-    """ReAct executor with loss-aware Act -> Observe -> Reason propagation.
+    """ReAct executor with loss-aware observations and guarded diagnostic closure.
 
     MCP output is preserved in full for the audit trail while Gemma receives a
-    compact structured projection. This avoids blind character-prefix truncation
-    while keeping reasoning prompts bounded and useful.
+    compact structured projection. Diagnostic closure is also guarded so that a
+    premature ``finish`` decision or a schema-invalid final diagnosis does not
+    automatically terminate an investigation while autonomous evidence budget
+    remains available.
     """
 
     TOOL_SELECTION_POLICY = """
@@ -87,21 +96,53 @@ Selection policy:
 Return no natural-language answer: produce exactly one schema-valid tool call.
 """.strip()
 
+    REASONING_POLICY = """
+You are the reasoning component of an IT monitoring specialist agent.
+AgentSpeak has already committed the investigation intention. You do NOT call tools and you do
+NOT choose tool names. Return only a concise auditable operational decision, never private
+chain-of-thought.
+
+Safe diagnostic evidence that the action layer can collect includes current resource state,
+process and thread state, process hierarchy and /proc metadata, disk state, sockets, DNS/TCP/HTTP
+connectivity between monitored services, OpenSearch metrics/logs, and project knowledge via RAG.
+
+Choose exactly one action:
+- gather_evidence: whenever another safe live observation can materially confirm/reject the
+  current hypothesis, identify a concrete causal mechanism, or distinguish between plausible causes.
+- finish: only when at least one live observation exists AND either (a) a concrete evidence-backed
+  root-cause hypothesis can be stated, or (b) the missing decisive evidence belongs to another
+  specialist domain and must be requested explicitly.
+
+A detector alert or symptom such as high CPU, high memory, latency, errors, or service degradation
+is NOT by itself a root cause. Before choosing finish for a local diagnosis, current_hypothesis must
+name the causal process, component, dependency, configuration/runtime condition, or other concrete
+mechanism that explains the observed symptom. If you can only restate the anomaly, gather more
+evidence instead.
+
+Do not finish by merely recommending a diagnostic check that the action layer can perform now.
+Do not invent evidence. Do not perform remediation. Prefer a small number of discriminating checks
+over repeated equivalent checks. Request project/RAG knowledge when architecture, dependencies,
+runbooks or service semantics are needed to interpret live telemetry.
+""".strip()
+
     FINALIZATION_POLICY = """
 Convert the completed investigation into the required diagnostic schema using only the supplied
 assignment, operational reasoning summaries and collected tool evidence.
 
 Evidence sufficiency:
-- confirmed: root_cause and causal_chain are required and must be directly supported by live
+- confirmed: root_cause and causal_chain are mandatory and must be directly supported by live
   observations. Static RAG knowledge alone cannot confirm a live incident. No peer assistance.
-- probable: root_cause and causal_chain are required, but at least one material causal link still
-  needs confirmation. Request peer assistance only when a different specialist domain can collect
-  that missing evidence.
-- inconclusive: available evidence does not discriminate sufficiently between remaining causes;
-  root_cause may be null. Assistance is optional when another domain can materially reduce the
-  uncertainty.
+- probable: root_cause and causal_chain are mandatory. A probable diagnosis means a SPECIFIC
+  evidence-backed causal hypothesis exists but at least one material causal link still needs
+  confirmation. Never use probable to mean "the cause is unknown".
+- inconclusive: use this status when no concrete root cause can yet be supported. root_cause may be
+  null. Request peer assistance only when a different specialist domain can collect specific
+  material evidence that is unavailable to the current specialist.
 
 Output discipline:
+- NEVER output confirmed or probable with root_cause=null, unknown, unconfirmed, or empty.
+- NEVER output confirmed or probable without a non-empty causal_chain.
+- Do not use the anomaly symptom itself (for example "high CPU" or "high latency") as root_cause.
 - never request assistance from the same specialist domain.
 - findings are observations supported by collected evidence, not interpretations presented as facts.
 - hypotheses are unresolved causal possibilities.
@@ -111,6 +152,367 @@ Output discipline:
   postpone a safe diagnostic check that the current action layer can already perform.
 - never invent evidence, measurements, logs, architecture facts or remediation.
 """.strip()
+
+    @staticmethod
+    def _has_concrete_hypothesis(decision: _ReasoningDecision) -> bool:
+        hypothesis = str(decision.current_hypothesis or "").strip()
+        return hypothesis.lower() not in {"", "none", "null", "unknown", "unconfirmed", "n/a"}
+
+    @staticmethod
+    def _is_semantic_closure_error(error: Exception) -> bool:
+        text = str(error).lower()
+        markers = (
+            "requires a root_cause",
+            "requires a causal_chain",
+            "assistance_required=true requires assistance_domain",
+            "assistance_domain must be null",
+            "confirmed diagnosis cannot request",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _closure_feedback(
+        *,
+        hypothesis: str | None,
+        reason: str,
+    ) -> _ReasoningDecision:
+        return _ReasoningDecision(
+            action="gather_evidence",
+            decision_summary=(
+                "Diagnostic closure was rejected because the collected evidence does not yet "
+                f"support a schema-valid causal diagnosis: {reason}"
+            ),
+            current_hypothesis=(str(hypothesis).strip() or None) if hypothesis is not None else None,
+            evidence_needed=(
+                "Collect one additional safe live observation that identifies or discriminates a "
+                "concrete root cause rather than merely confirming the anomaly symptom."
+            ),
+        )
+
+    @staticmethod
+    def _hard_stop_output(
+        *,
+        evidence: list[ReActEvidence],
+        decisions: list[_ReasoningDecision],
+        reason: str,
+    ) -> _DiagnosticFinalOutput:
+        findings = [
+            f"A successful diagnostic observation was collected through {item.tool}."
+            for item in evidence
+            if item.success
+        ]
+        hypotheses: list[str] = []
+        for item in decisions:
+            hypothesis = str(item.current_hypothesis or "").strip()
+            if hypothesis and hypothesis not in hypotheses:
+                hypotheses.append(hypothesis)
+        return _DiagnosticFinalOutput(
+            summary=(
+                "Autonomous diagnostic evidence was collected, but a schema-valid root cause could "
+                "not be established before the bounded ReAct investigation ended."
+            ),
+            diagnosis_status="inconclusive",
+            root_cause=None,
+            causal_chain=[],
+            confidence=0.0,
+            findings=findings,
+            hypotheses=hypotheses,
+            recommended_next_steps=[
+                "Review the retained diagnostic evidence and extend the autonomous evidence path "
+                f"for the unresolved gap. Closure reason: {reason}"
+            ],
+            assistance_required=False,
+            assistance_domain=None,
+        )
+
+    async def investigate(
+        self,
+        *,
+        task_id: str,
+        incident_id: str,
+        agent_role: str,
+        severity: str,
+        entity: str,
+        anomaly: dict[str, Any],
+    ) -> ReActInvestigationResult:
+        """Run ReAct while treating diagnostic closure as a guarded checkpoint.
+
+        A premature ``finish`` is converted back into evidence gathering when a
+        concrete causal hypothesis is absent. Likewise, semantic finalization
+        errors such as ``probable`` with a null root cause no longer fail the
+        whole specialist task while additional autonomous steps remain.
+        """
+
+        task_id = task_id.strip()
+        incident_id = incident_id.strip()
+        agent_role = agent_role.strip().lower()
+        if not task_id or not incident_id or not agent_role:
+            raise ValueError("ReAct investigation requires task, incident and agent identity")
+
+        assignment = {
+            "task_id": task_id,
+            "incident_id": incident_id,
+            "agent_role": agent_role,
+            "severity": severity,
+            "entity": entity,
+            "anomaly": anomaly,
+        }
+        conversation_id = f"react:{agent_role}:{incident_id}:{task_id}"
+        self.context.add_message_dict(
+            {
+                "role": "user",
+                "content": (
+                    "Hybrid ReAct investigation started for assignment: "
+                    + json.dumps(assignment, separators=(",", ":"), sort_keys=True)
+                ),
+            },
+            conversation_id,
+        )
+
+        evidence: list[ReActEvidence] = []
+        tools_used: list[str] = []
+        decisions: list[_ReasoningDecision] = []
+        output: _DiagnosticFinalOutput | None = None
+
+        await self._emit_trace(
+            action="react_started",
+            reason="AgentSpeak committed the investigation intention; Gemma starts evidence planning.",
+            incident_id=incident_id,
+            task_id=task_id,
+            outcome=(
+                f"reasoning={self._ollama_model_name(self.reasoning_provider)}; "
+                f"tool_selection={self._ollama_model_name(self.tool_provider)}"
+            ),
+        )
+
+        for step in range(1, self.max_steps + 1):
+            decision = await self._reason(
+                assignment=assignment,
+                evidence=evidence,
+                decisions=decisions,
+            )
+            decisions.append(decision)
+            await self._emit_trace(
+                action="reason",
+                reason=decision.decision_summary,
+                incident_id=incident_id,
+                task_id=task_id,
+                outcome=(
+                    f"action={decision.action}; hypothesis={decision.current_hypothesis or 'none'}; "
+                    f"evidence_needed={decision.evidence_needed or 'none'}"
+                ),
+                details=decision.model_dump(),
+            )
+            self.context.add_assistant_message(
+                json.dumps(
+                    {
+                        "stage": "reason",
+                        "step": step,
+                        **decision.model_dump(),
+                    },
+                    ensure_ascii=False,
+                ),
+                conversation_id,
+            )
+
+            if decision.action == "finish" and evidence:
+                if not self._has_concrete_hypothesis(decision) and step < self.max_steps:
+                    feedback = self._closure_feedback(
+                        hypothesis=decision.current_hypothesis,
+                        reason="no concrete root-cause hypothesis was stated",
+                    )
+                    decisions[-1] = feedback
+                    await self._emit_trace(
+                        action="diagnostic_closure_rejected",
+                        reason=feedback.decision_summary,
+                        incident_id=incident_id,
+                        task_id=task_id,
+                        outcome="continue_react",
+                        details=feedback.model_dump(),
+                    )
+                    continue
+
+                try:
+                    candidate = await self._finalize(
+                        assignment=assignment,
+                        evidence=evidence,
+                        decisions=decisions,
+                    )
+                except ReActInvestigationError as exc:
+                    if self._is_semantic_closure_error(exc) and step < self.max_steps:
+                        feedback = self._closure_feedback(
+                            hypothesis=decision.current_hypothesis,
+                            reason=str(exc),
+                        )
+                        decisions[-1] = feedback
+                        await self._emit_trace(
+                            action="diagnostic_closure_rejected",
+                            reason=feedback.decision_summary,
+                            incident_id=incident_id,
+                            task_id=task_id,
+                            outcome="continue_react",
+                            details={
+                                **feedback.model_dump(),
+                                "finalization_error": str(exc),
+                            },
+                        )
+                        continue
+                    if self._is_semantic_closure_error(exc):
+                        output = self._hard_stop_output(
+                            evidence=evidence,
+                            decisions=decisions,
+                            reason=str(exc),
+                        )
+                        break
+                    raise
+
+                if (
+                    candidate.diagnosis_status == "inconclusive"
+                    and not candidate.assistance_required
+                    and step < self.max_steps
+                ):
+                    feedback = self._closure_feedback(
+                        hypothesis=decision.current_hypothesis,
+                        reason=(
+                            "finalization remained inconclusive while autonomous diagnostic steps "
+                            "are still available"
+                        ),
+                    )
+                    decisions[-1] = feedback
+                    await self._emit_trace(
+                        action="diagnostic_closure_rejected",
+                        reason=feedback.decision_summary,
+                        incident_id=incident_id,
+                        task_id=task_id,
+                        outcome="continue_react",
+                        details={
+                            **feedback.model_dump(),
+                            "candidate_diagnosis": candidate.model_dump(),
+                        },
+                    )
+                    continue
+
+                output = candidate
+                break
+
+            evidence_needed = str(decision.evidence_needed or "").strip()
+            if not evidence_needed:
+                evidence_needed = (
+                    "Collect one live observation that materially tests the current anomaly "
+                    "before attempting diagnostic closure."
+                )
+
+            tool_name, arguments = await self._select_tool(
+                assignment=assignment,
+                evidence_needed=evidence_needed,
+                evidence=evidence,
+            )
+            await self._emit_trace(
+                action="select_tool",
+                reason=evidence_needed,
+                incident_id=incident_id,
+                task_id=task_id,
+                tool=tool_name,
+                outcome="Qwen selected one MCP/RAG action.",
+                details={"arguments": arguments},
+            )
+
+            item = await self._execute_tool(
+                step=step,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+            evidence.append(item)
+            if tool_name not in tools_used:
+                tools_used.append(tool_name)
+
+            call_id = f"{task_id}-step-{step}"
+            self.context.add_message_dict(
+                create_assistant_tool_call_message(
+                    [{"id": call_id, "name": tool_name, "arguments": dict(arguments)}]
+                ),
+                conversation_id,
+            )
+            self.context.add_tool_result(
+                tool_name,
+                item.observation,
+                call_id,
+                conversation_id,
+            )
+
+            is_rag = "search_knowledge" in tool_name.lower()
+            await self._emit_trace(
+                action="rag_retrieval" if is_rag else "observe",
+                reason=(
+                    "Project knowledge was retrieved for the requested evidence."
+                    if is_rag
+                    else "Live MCP observation returned to Gemma for the next reasoning step."
+                ),
+                incident_id=incident_id,
+                task_id=task_id,
+                tool=tool_name,
+                outcome=self._observation_summary(item.observation, success=item.success),
+                details={
+                    "arguments": dict(arguments),
+                    "observation": item.observation,
+                    "success": item.success,
+                    "source": "Qdrant RAG" if is_rag else "MCP",
+                },
+            )
+
+        if not evidence:
+            raise ReActInvestigationError(
+                f"No operational tool was selected within {self.max_steps} ReAct steps"
+            )
+
+        if output is None:
+            try:
+                output = await self._finalize(
+                    assignment=assignment,
+                    evidence=evidence,
+                    decisions=decisions,
+                )
+            except ReActInvestigationError as exc:
+                if not self._is_semantic_closure_error(exc):
+                    raise
+                output = self._hard_stop_output(
+                    evidence=evidence,
+                    decisions=decisions,
+                    reason=str(exc),
+                )
+
+        await self._emit_trace(
+            action="diagnosis",
+            reason=output.summary,
+            incident_id=incident_id,
+            task_id=task_id,
+            outcome=(
+                f"status={output.diagnosis_status}; confidence={output.confidence:.3f}; "
+                f"root_cause={output.root_cause or 'unconfirmed'}"
+            ),
+            details=output.model_dump(),
+        )
+        self.context.add_assistant_message(output.model_dump_json(), conversation_id)
+
+        return ReActInvestigationResult(
+            task_id=task_id,
+            incident_id=incident_id,
+            agent_role=agent_role,
+            summary=output.summary,
+            diagnosis_status=output.diagnosis_status,
+            root_cause=output.root_cause,
+            causal_chain=tuple(output.causal_chain),
+            confidence=output.confidence,
+            findings=tuple(output.findings),
+            evidence=tuple(item.to_dict() for item in evidence),
+            hypotheses=tuple(output.hypotheses),
+            recommended_next_steps=tuple(output.recommended_next_steps),
+            assistance_required=output.assistance_required,
+            assistance_domain=output.assistance_domain,
+            react_steps=max(len(decisions), 1),
+            tools_used=tuple(tools_used),
+            conversation_id=conversation_id,
+        )
 
     def _adapt_tool(self, tool: Any) -> StructuredTool:
         """Adapt an MCP tool without applying the legacy 6k observation truncation."""
