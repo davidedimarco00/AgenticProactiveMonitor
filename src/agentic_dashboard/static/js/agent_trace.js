@@ -2,7 +2,6 @@
   const modal = document.getElementById("agent-observability-modal");
   const eventList = document.getElementById("agent-event-list");
   const detailPanel = document.getElementById("agent-event-detail");
-  const detailEmpty = document.getElementById("agent-event-detail-empty");
   const empty = document.getElementById("agent-log-empty");
   const loading = document.getElementById("agent-log-loading");
   const eventCount = document.getElementById("agent-event-count");
@@ -144,6 +143,7 @@
     if (value === undefined || value === null || value === "") return;
     const disclosure = document.createElement("details");
     disclosure.className = "agent-detail-disclosure";
+    disclosure.dataset.disclosureLabel = label;
     disclosure.open = open;
     const summary = document.createElement("summary");
     summary.textContent = label;
@@ -153,7 +153,49 @@
     container.appendChild(disclosure);
   };
 
-  const renderDetail = (event, key) => {
+  const captureDetailState = () => {
+    const disclosures = Array.from(detailPanel.querySelectorAll(".agent-detail-disclosure")).map((node, index) => {
+      const pre = node.querySelector("pre");
+      return {
+        index,
+        label: node.dataset.disclosureLabel || node.querySelector("summary")?.textContent || "",
+        open: node.open,
+        preScrollTop: pre?.scrollTop || 0,
+        preScrollLeft: pre?.scrollLeft || 0,
+      };
+    });
+
+    return {
+      eventKey: selectedEventKey,
+      panelScrollTop: detailPanel.scrollTop,
+      panelScrollLeft: detailPanel.scrollLeft,
+      disclosures,
+    };
+  };
+
+  const restoreDetailState = (state, key) => {
+    if (!state || state.eventKey !== key) return;
+
+    const disclosures = Array.from(detailPanel.querySelectorAll(".agent-detail-disclosure"));
+    disclosures.forEach((node, index) => {
+      const label = node.dataset.disclosureLabel || node.querySelector("summary")?.textContent || "";
+      const saved = state.disclosures.find((item) => item.index === index && item.label === label)
+        || state.disclosures.find((item) => item.label === label);
+      if (!saved) return;
+
+      node.open = saved.open;
+      const pre = node.querySelector("pre");
+      if (pre) {
+        pre.scrollTop = saved.preScrollTop;
+        pre.scrollLeft = saved.preScrollLeft;
+      }
+    });
+
+    detailPanel.scrollTop = state.panelScrollTop;
+    detailPanel.scrollLeft = state.panelScrollLeft;
+  };
+
+  const renderDetail = (event, key, preservedState = null) => {
     selectedEventKey = key;
     detailPanel.replaceChildren();
     detailPanel.classList.remove("is-empty");
@@ -226,6 +268,8 @@
     if (typeof event.outcome === "object" && event.outcome !== null) {
       appendDisclosure(detailPanel, "Outcome payload", event.outcome, !details);
     }
+
+    restoreDetailState(preservedState, key);
   };
 
   const buildSearchText = (event) => [
@@ -272,8 +316,9 @@
     statusFilter.value = values.includes(previous) ? previous : "";
   };
 
-  const renderList = () => {
-    const scrollTop = eventList.scrollTop;
+  const renderList = ({ preserveDetail = false } = {}) => {
+    const listScrollTop = eventList.scrollTop;
+    const detailState = preserveDetail ? captureDetailState() : null;
     const items = filteredEvents();
     eventList.replaceChildren();
     if (visibleCount) visibleCount.textContent = String(items.length);
@@ -333,8 +378,8 @@
       eventList.appendChild(button);
     });
 
-    eventList.scrollTop = scrollTop;
-    renderDetail(active.event, active.key);
+    eventList.scrollTop = listScrollTop;
+    renderDetail(active.event, active.key, detailState);
   };
 
   const render = (payload) => {
@@ -349,7 +394,7 @@
     if (currentOnly) currentOnly.disabled = !currentIncidentId;
 
     updateStatusOptions();
-    renderList();
+    renderList({ preserveDetail: true });
   };
 
   const refresh = async () => {
@@ -393,9 +438,9 @@
     refreshTimer = null;
   };
 
-  searchInput?.addEventListener("input", renderList);
-  statusFilter?.addEventListener("change", renderList);
-  currentOnly?.addEventListener("change", renderList);
+  searchInput?.addEventListener("input", () => renderList());
+  statusFilter?.addEventListener("change", () => renderList());
+  currentOnly?.addEventListener("change", () => renderList());
 
   document.querySelectorAll(".agent-node[data-agent-runtime-jid]").forEach((node) => {
     node.addEventListener("click", () => start(node.dataset.agentRuntimeJid));
