@@ -58,6 +58,18 @@
     row.appendChild(cell);
   };
 
+  const appendDisclosure = (cell, label, value) => {
+    if (value === undefined || value === null) return;
+    const disclosure = document.createElement("details");
+    disclosure.className = "agent-trace-details";
+    const summary = document.createElement("summary");
+    summary.textContent = label;
+    const pre = document.createElement("pre");
+    pre.textContent = stringify(value);
+    disclosure.append(summary, pre);
+    cell.appendChild(disclosure);
+  };
+
   const appendTool = (row, event) => {
     const cell = document.createElement("td");
     if (event.tool) {
@@ -71,14 +83,28 @@
 
     const details = event.details && typeof event.details === "object" ? event.details : null;
     if (details && Object.keys(details).length) {
-      const disclosure = document.createElement("details");
-      disclosure.className = "agent-trace-details";
-      const summary = document.createElement("summary");
-      summary.textContent = event.action === "rag_retrieval" ? "View retrieved knowledge" : "View details";
-      const pre = document.createElement("pre");
-      pre.textContent = stringify(details);
-      disclosure.append(summary, pre);
-      cell.appendChild(disclosure);
+      const hasObservationViews = Object.prototype.hasOwnProperty.call(details, "raw_observation")
+        || Object.prototype.hasOwnProperty.call(details, "reasoning_observation");
+
+      if (hasObservationViews) {
+        appendDisclosure(cell, "View reasoning observation", details.reasoning_observation);
+        appendDisclosure(
+          cell,
+          event.action === "rag_retrieval" ? "View complete retrieved knowledge" : "View complete MCP output",
+          details.raw_observation,
+        );
+
+        const metadata = { ...details };
+        delete metadata.reasoning_observation;
+        delete metadata.raw_observation;
+        if (Object.keys(metadata).length) appendDisclosure(cell, "View trace metadata", metadata);
+      } else {
+        appendDisclosure(
+          cell,
+          event.action === "rag_retrieval" ? "View retrieved knowledge" : "View details",
+          details,
+        );
+      }
     }
     row.appendChild(cell);
   };
