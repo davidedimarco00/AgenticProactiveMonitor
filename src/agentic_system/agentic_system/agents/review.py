@@ -99,43 +99,45 @@ class TechnicalLeadReviewDecision:
 
 
 class TechnicalLeadReviewReasoner:
-    """Gemma critic with bounded collaboration and operator-ready remediation."""
+    """Gemma critic with bounded collaboration and diagnosis-first closure."""
 
     SYSTEM_PROMPT = """You are the Technical Lead of an IT monitoring multi-agent team.
 Review only the supplied specialist evidence and choose the next workflow action.
 
-Decisions:
-- resolve: accept the best evidence-backed autonomous diagnostic result when no further specialist
-  evidence is requested and no immediate human corrective/manual diagnostic action is required.
-  This may be confirmed, probable, or a bounded inconclusive result after the autonomous evidence
-  budget is exhausted.
-- operator_action_required: use only when the accepted diagnosis/evidence requires a human corrective
-  action, or when a necessary diagnostic action cannot be performed by the autonomous tool layer and
-  must genuinely be carried out by a human operator.
+Diagnosis-first workflow:
+- resolve: use this whenever the current autonomous investigation can terminate with the best
+  evidence-backed diagnosis. A diagnosis may be confirmed, probable, or bounded inconclusive.
+  Human remediation recommendations belong in remediation_steps and do NOT change the workflow
+  status away from resolve.
 - request_support: ask exactly one NEW specialist domain only when the current specialist explicitly
   requests cross-domain diagnostic evidence and the support budget is still available.
+- operator_action_required is retained only for backward-compatible schema parsing. Do NOT choose it
+  in this autonomous diagnostic workflow. The system must return a diagnosis instead of replacing
+  diagnosis with an operator escalation state.
 
 Collaboration rules:
 - A confirmed diagnosis with assistance_required=false is terminal for autonomous diagnosis.
 - A probable/inconclusive diagnosis with assistance_required=false must NOT trigger another
-  specialist and must NOT be escalated to the operator merely because confidence is below 1.0.
-  Prefer resolve for the best-effort result unless a concrete human action is genuinely required.
+  specialist. Accept the best bounded result with resolve.
 - Collaboration is bounded to one cross-domain support round. Never walk through all specialists.
-- If support_budget_exhausted=true, request_support is forbidden, but budget exhaustion alone does
-  not force operator escalation: accept the best available result when no human action is needed.
+- If support_budget_exhausted=true, request_support is forbidden. Accept the best diagnosis obtained
+  from the evidence already collected.
 - When support is allowed, support_domain must be one of eligible_support_domains and should match
   specialist_requested_domain when that request is valid.
 
 Diagnostic review rules:
 - Never invent evidence, measurements or a root cause.
-- Preserve a specialist probable root cause when its causal hypothesis is supported by the supplied
-  evidence; do not downgrade it merely because every causal link is not proven.
-- For an inconclusive result accepted as resolve, do not invent a cause. Use a root_cause value such
-  as "Unconfirmed after bounded autonomous investigation" and explain what the evidence did establish.
+- Preserve a specialist probable root cause when its causal hypothesis is supported by supplied live
+  evidence; do not demand an ultimate source-code cause when a lower-level process, dependency,
+  component or runtime mechanism already explains the anomaly.
+- For an inconclusive result, still return a diagnosis summary describing what the autonomous
+  investigation established. If no specific root cause was proven, use a conservative non-empty
+  root_cause label such as "Unconfirmed causal mechanism after bounded autonomous investigation".
 
 Remediation rules:
 - Remediation is advisory only; the agent must never execute it automatically.
-- For terminal decisions, provide concrete operator steps grounded in the diagnosis/evidence.
+- For resolve, remediation_steps may contain concrete operator recommendations when useful, but these
+  recommendations do not turn the incident into OPERATOR_ACTION_REQUIRED.
 - Commands must be suitable for the thesis Windows operator workstation: prefer PowerShell and
   Docker CLI commands. To inspect or act inside a monitored Linux container, wrap the command with
   `docker exec <container> ...` so it is executable from PowerShell.
@@ -199,16 +201,21 @@ null unless decision=request_support."""
             conversation_id,
         )
 
-        last_error: RuntimeError | None = None
+        last_error: Exception | None = None
         for attempt in range(1, self.max_attempts + 1):
-            response = await self._request_review(
-                context,
-                conversation_id=conversation_id,
-                incident_id=incident_id,
-                attempt=attempt,
-            )
             try:
+                response = await self._request_review(
+                    context,
+                    conversation_id=conversation_id,
+                    incident_id=incident_id,
+                    attempt=attempt,
+                )
                 assessment = self._assessment_from_response(response)
+                assessment = self._normalize_diagnosis_first_decision(
+                    assessment,
+                    specialist_result=specialist_result,
+                    support_policy=support_policy,
+                )
                 self._validate_decision_against_specialist_result(
                     assessment,
                     specialist_result=specialist_result,
@@ -221,10 +228,20 @@ null unless decision=request_support."""
                         self.max_attempts,
                     )
                 return assessment
-            except RuntimeError as exc:
+            except Exception as exc:
                 last_error = exc
                 if attempt >= self.max_attempts:
-                    raise
+                    fallback = self._fallback_assessment(
+                        specialist_result,
+                        error=exc,
+                    )
+                    LOGGER.error(
+                        "Technical Lead review exhausted model retries; using deterministic "
+                        "diagnosis-first fallback instead of operator escalation: incident=%s error=%s",
+                        incident_id,
+                        exc,
+                    )
+                    return fallback
                 LOGGER.warning(
                     "Technical Lead review response rejected; retrying inference: incident=%s attempt=%d/%d error=%s",
                     incident_id,
@@ -235,12 +252,18 @@ null unless decision=request_support."""
                 context.add_message_dict(
                     {
                         "role": "user",
-                        "content": self._retry_instruction(exc, support_policy),
+                        "content": self._retry_instruction(
+                            RuntimeError(str(exc)),
+                            support_policy,
+                        ),
                     },
                     conversation_id,
                 )
 
-        raise last_error or RuntimeError("Technical Lead review reasoning failed")
+        return self._fallback_assessment(
+            specialist_result,
+            error=last_error or RuntimeError("Technical Lead review reasoning failed"),
+        )
 
     async def _request_review(
         self,
@@ -277,21 +300,20 @@ null unless decision=request_support."""
     def _retry_instruction(error: RuntimeError, support_policy: dict[str, Any]) -> str:
         if support_policy["support_budget_exhausted"]:
             next_rule = (
-                "The support budget is exhausted. Do not request another specialist. Choose resolve "
-                "for the best evidence-backed result when no human action is required; choose "
-                "operator_action_required only when a concrete human corrective/manual diagnostic "
-                "action is genuinely necessary."
+                "The support budget is exhausted. Do not request another specialist and do not "
+                "return operator_action_required. Choose resolve and preserve the best diagnosis "
+                "supported by the collected evidence."
             )
         else:
             next_rule = (
                 "Request support only if specialist_result.assistance_required=true. Otherwise do "
-                "not add a specialist and do not force operator escalation solely because the "
-                "diagnosis is probable or inconclusive. If support is required, use only "
+                "not add a specialist and do not return operator_action_required; choose resolve. "
+                "If support is required, use only "
                 f"eligible_support_domains={support_policy['eligible_support_domains']} and prefer "
                 f"specialist_requested_domain={support_policy['specialist_requested_domain']!r}."
             )
         return (
-            "The previous review decision violated the deterministic collaboration/remediation "
+            "The previous review decision violated the deterministic collaboration/diagnosis "
             f"contract. Validation error: {error}. {next_rule} Return ONLY the required JSON object."
         )
 
@@ -379,11 +401,6 @@ null unless decision=request_support."""
                 normalized_steps.append(normalized)
         remediation_steps = tuple(normalized_steps)
 
-        if decision in {"resolve", "operator_action_required"} and not remediation_steps:
-            raise RuntimeError(
-                "Terminal Technical Lead decision requires at least one structured operator step"
-            )
-
         support_domain_raw = payload.get("support_domain")
         support_domain = (
             str(support_domain_raw).strip().lower()
@@ -413,6 +430,124 @@ null unless decision=request_support."""
             remediation_steps=remediation_steps,
             support_domain=support_domain,
             support_reason=support_reason,
+        )
+
+    @staticmethod
+    def _replace_decision(
+        assessment: TechnicalLeadReviewAssessment,
+        *,
+        decision: str,
+        support_domain: str | None = None,
+        support_reason: str | None = None,
+    ) -> TechnicalLeadReviewAssessment:
+        return TechnicalLeadReviewAssessment(
+            decision=decision,
+            confidence=assessment.confidence,
+            diagnosis_summary=assessment.diagnosis_summary,
+            root_cause=assessment.root_cause,
+            rationale=assessment.rationale,
+            remediation_summary=assessment.remediation_summary,
+            remediation_steps=assessment.remediation_steps,
+            support_domain=support_domain,
+            support_reason=support_reason,
+        )
+
+    @classmethod
+    def _normalize_diagnosis_first_decision(
+        cls,
+        assessment: TechnicalLeadReviewAssessment,
+        *,
+        specialist_result: dict[str, Any],
+        support_policy: dict[str, Any],
+    ) -> TechnicalLeadReviewAssessment:
+        assistance_required = bool(specialist_result.get("assistance_required", False))
+        support_budget_exhausted = bool(support_policy["support_budget_exhausted"])
+
+        # OPERATOR_ACTION_REQUIRED is not a terminal state of the autonomous
+        # diagnostic pipeline anymore. Any human-facing action stays advisory
+        # inside remediation_steps while the incident still receives a diagnosis.
+        if assessment.decision == "operator_action_required":
+            return cls._replace_decision(assessment, decision="resolve")
+
+        if assessment.decision != "request_support":
+            return assessment
+
+        if not assistance_required or support_budget_exhausted:
+            return cls._replace_decision(assessment, decision="resolve")
+
+        eligible_domains = list(support_policy["eligible_support_domains"])
+        requested_domain = support_policy["specialist_requested_domain"]
+        selected_domain = str(assessment.support_domain or "").strip().lower()
+        if requested_domain and requested_domain in eligible_domains:
+            selected_domain = requested_domain
+        if selected_domain not in eligible_domains:
+            return cls._replace_decision(assessment, decision="resolve")
+
+        support_reason = str(assessment.support_reason or "").strip()
+        if not support_reason:
+            support_reason = (
+                "The current specialist explicitly requested cross-domain evidence to reduce "
+                "diagnostic uncertainty."
+            )
+        return cls._replace_decision(
+            assessment,
+            decision="request_support",
+            support_domain=selected_domain,
+            support_reason=support_reason,
+        )
+
+    @staticmethod
+    def _fallback_assessment(
+        specialist_result: dict[str, Any],
+        *,
+        error: Exception,
+    ) -> TechnicalLeadReviewAssessment:
+        summary = str(specialist_result.get("summary") or "").strip()
+        if not summary:
+            summary = "Bounded autonomous specialist investigation completed with retained evidence."
+
+        root_cause = str(specialist_result.get("root_cause") or "").strip()
+        if not root_cause:
+            for raw in specialist_result.get("hypotheses") or []:
+                candidate = str(raw or "").strip()
+                if candidate.lower() not in {"", "none", "null", "unknown", "unconfirmed", "n/a"}:
+                    root_cause = candidate
+                    break
+        if not root_cause:
+            root_cause = "Unconfirmed causal mechanism after bounded autonomous investigation"
+
+        try:
+            confidence = float(specialist_result.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.5
+        confidence = min(max(confidence, 0.0), 1.0)
+
+        next_steps = [
+            str(item).strip()
+            for item in specialist_result.get("recommended_next_steps") or []
+            if str(item).strip()
+        ]
+        remediation_summary = (
+            "No autonomous remediation was executed. The retained specialist recommendations are "
+            "advisory and the diagnosis was preserved despite Technical Lead model-review failure."
+        )
+        if next_steps:
+            remediation_summary += " Recommended verification: " + next_steps[0]
+
+        return TechnicalLeadReviewAssessment(
+            decision="resolve",
+            confidence=confidence,
+            diagnosis_summary=summary,
+            root_cause=root_cause,
+            rationale=(
+                "The Technical Lead model review could not satisfy the structured workflow contract; "
+                "the system therefore preserved the specialist's bounded evidence-backed diagnosis "
+                f"instead of escalating to OPERATOR_ACTION_REQUIRED. Review error: {error}"
+            ),
+            remediation_summary=remediation_summary,
+            remediation_steps=(),
+            support_domain=None,
+            support_reason=None,
         )
 
     @staticmethod
@@ -471,6 +606,11 @@ null unless decision=request_support."""
                     f"{diagnosis_status} specialist diagnosis requires root_cause and causal_chain"
                 )
 
+        if assessment.decision == "operator_action_required":
+            raise RuntimeError(
+                "operator_action_required is not a valid autonomous diagnostic terminal decision"
+            )
+
         if diagnosis_status == "confirmed":
             if assistance_required:
                 raise RuntimeError(
@@ -486,7 +626,7 @@ null unless decision=request_support."""
             if assessment.decision == "request_support":
                 raise RuntimeError(
                     "Cross-domain support budget exhausted; request_support is forbidden. Accept "
-                    "the best available result or escalate only when concrete human action is needed."
+                    "the best available diagnosis."
                 )
             return
 
@@ -494,8 +634,7 @@ null unless decision=request_support."""
             if assessment.decision == "request_support":
                 raise RuntimeError(
                     f"{diagnosis_status} diagnosis does not request peer assistance; do not add a "
-                    "specialist. Accept the bounded best-effort result unless concrete human action "
-                    "is required."
+                    "specialist. Accept the bounded best-effort diagnosis with resolve."
                 )
             return
 
