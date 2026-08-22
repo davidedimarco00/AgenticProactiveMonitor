@@ -120,6 +120,9 @@ def test_review_structured_schema_constrains_decision_support_and_remediation() 
     schema = _TechnicalLeadReviewOutput.model_json_schema()
     properties = schema["properties"]
 
+    # operator_action_required remains parse-compatible with older persisted/model
+    # outputs, but the diagnosis-first policy normalizes it to resolve before the
+    # autonomous workflow can persist a terminal decision.
     assert set(properties["decision"]["enum"]) == {
         "resolve",
         "operator_action_required",
@@ -135,7 +138,7 @@ def test_review_structured_schema_constrains_decision_support_and_remediation() 
     assert properties["remediation_steps"]["type"] == "array"
 
 
-def test_review_reasoner_retries_empty_response_before_escalating() -> None:
+def test_review_reasoner_retries_empty_response_before_valid_diagnosis() -> None:
     class FakeProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -198,7 +201,7 @@ def test_review_reasoner_prefers_structured_provider_output() -> None:
     assert result.remediation_steps[0]["command"].startswith("docker exec processing-service")
 
 
-def test_review_rejects_terminal_decision_for_probable_diagnosis_and_requests_support() -> None:
+def test_review_retries_when_probable_result_explicitly_requires_support() -> None:
     class FakeProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -227,12 +230,14 @@ def test_review_rejects_terminal_decision_for_probable_diagnosis_and_requests_su
         )
     )
 
+    # The legacy operator decision is first normalized to resolve, then rejected
+    # because this specialist explicitly asked for the one allowed support round.
     assert provider.calls == 2
     assert result.decision == "request_support"
     assert result.support_domain == "application"
 
 
-def test_review_retries_when_support_domain_already_participated() -> None:
+def test_review_redirects_support_to_explicit_requested_eligible_domain() -> None:
     class FakeProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -246,12 +251,8 @@ def test_review_retries_when_support_domain_already_participated() -> None:
         ):
             self.calls += 1
             payload = _valid_review_payload(decision="request_support")
-            if self.calls == 1:
-                payload["support_domain"] = "network"
-                payload["support_reason"] = "Ask the network specialist to inspect again."
-            else:
-                payload["support_domain"] = "system"
-                payload["support_reason"] = "System evidence can test the remaining hypothesis."
+            payload["support_domain"] = "network"
+            payload["support_reason"] = "The model initially selected a different domain."
             if output_schema is not None:
                 return {"text": None, "structured": output_schema(**payload)}
             return {"text": json.dumps(payload), "structured": None}
@@ -269,9 +270,76 @@ def test_review_retries_when_support_domain_already_participated() -> None:
         )
     )
 
-    assert provider.calls == 2
+    # The deterministic collaboration policy does not waste another LLM call:
+    # the specialist explicitly requested system evidence and system is eligible.
+    assert provider.calls == 1
     assert result.decision == "request_support"
     assert result.support_domain == "system"
+
+
+def test_operator_decision_is_normalized_to_resolve_when_no_peer_support_is_requested() -> None:
+    class FakeProvider:
+        async def get_llm_response(
+            self,
+            context,
+            tools=None,
+            conversation_id=None,
+            output_schema=None,
+        ):
+            payload = _valid_review_payload(decision="operator_action_required")
+            if output_schema is not None:
+                return {"text": None, "structured": output_schema(**payload)}
+            return {"text": json.dumps(payload), "structured": None}
+
+    reasoner = TechnicalLeadReviewReasoner(FakeProvider())  # type: ignore[arg-type]
+    result = asyncio.run(
+        reasoner.assess(
+            incident=_incident(),
+            specialist_result=_specialist_result(),
+        )
+    )
+
+    assert result.decision == "resolve"
+    assert result.root_cause
+
+
+def test_review_model_failure_returns_diagnostic_fallback_not_operator_escalation() -> None:
+    class BrokenProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_llm_response(
+            self,
+            context,
+            tools=None,
+            conversation_id=None,
+            output_schema=None,
+        ):
+            self.calls += 1
+            return {"text": "not valid json", "structured": None}
+
+    provider = BrokenProvider()
+    reasoner = TechnicalLeadReviewReasoner(provider, max_attempts=3)  # type: ignore[arg-type]
+    specialist = _specialist_result(diagnosis_status="inconclusive")
+    specialist["assistance_required"] = False
+    specialist["assistance_domain"] = None
+    specialist["hypotheses"] = [
+        "Multiple CPU-intensive python3 child processes are causing CPU saturation."
+    ]
+
+    result = asyncio.run(
+        reasoner.assess(
+            incident=_incident(),
+            specialist_result=specialist,
+        )
+    )
+
+    assert provider.calls == 3
+    assert result.decision == "resolve"
+    assert result.root_cause == (
+        "Multiple CPU-intensive python3 child processes are causing CPU saturation."
+    )
+    assert "instead of escalating to OPERATOR_ACTION_REQUIRED" in result.rationale
 
 
 def test_terminal_review_validation_requires_confirmed_root_cause_and_causal_chain() -> None:
