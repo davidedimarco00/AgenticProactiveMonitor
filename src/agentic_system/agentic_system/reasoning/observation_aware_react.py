@@ -63,6 +63,55 @@ class SpecialistReActExecutor(_SchemaValidatedExecutor):
     while keeping reasoning prompts bounded and useful.
     """
 
+    TOOL_SELECTION_POLICY = """
+You are the action-selection component of an IT monitoring specialist agent. Gemma has already
+specified WHAT evidence is needed. Your only task is to select HOW to collect that evidence.
+Do not diagnose, explain, summarize or remediate. Call exactly ONE bound tool.
+
+Selection policy:
+1. Live runtime claims require live diagnostic evidence. Prefer the most specific MCP tool for
+   metrics, logs, process/runtime state, disk state, sockets, DNS/TCP/HTTP connectivity or other
+   observable telemetry requested by Gemma.
+2. Use RAG/project knowledge only for static architecture, dependencies, configuration, runbooks
+   and expected service behaviour. RAG/project knowledge can explain telemetry but cannot prove
+   that a runtime condition is currently true.
+3. Prefer a tool that can confirm or reject the current hypothesis with one read-only observation.
+4. Do not repeat a successful equivalent call already present in previous_tool_calls unless the
+   evidence request explicitly requires a temporal comparison.
+5. Populate arguments only from the assignment, Gemma's evidence request and supplied context.
+   Never invent host IDs, service names, ports, time windows, process IDs or other identifiers.
+6. Choose the narrowest tool whose declared schema and description satisfy the evidence request.
+7. If project knowledge is required to interpret live evidence, retrieve only the missing static
+   fact; do not replace a live check with RAG.
+
+Return no natural-language answer: produce exactly one schema-valid tool call.
+""".strip()
+
+    FINALIZATION_POLICY = """
+Convert the completed investigation into the required diagnostic schema using only the supplied
+assignment, operational reasoning summaries and collected tool evidence.
+
+Evidence sufficiency:
+- confirmed: root_cause and causal_chain are required and must be directly supported by live
+  observations. Static RAG knowledge alone cannot confirm a live incident. No peer assistance.
+- probable: root_cause and causal_chain are required, but at least one material causal link still
+  needs confirmation. Request peer assistance only when a different specialist domain can collect
+  that missing evidence.
+- inconclusive: available evidence does not discriminate sufficiently between remaining causes;
+  root_cause may be null. Assistance is optional when another domain can materially reduce the
+  uncertainty.
+
+Output discipline:
+- never request assistance from the same specialist domain.
+- findings are observations supported by collected evidence, not interpretations presented as facts.
+- hypotheses are unresolved causal possibilities.
+- when assistance_required=true, the first recommended_next_steps item must state the specific
+  evidence the peer should collect and why it would reduce uncertainty.
+- recommended_next_steps contain diagnostic verification only, never remediation, and must not
+  postpone a safe diagnostic check that the current action layer can already perform.
+- never invent evidence, measurements, logs, architecture facts or remediation.
+""".strip()
+
     def _adapt_tool(self, tool: Any) -> StructuredTool:
         """Adapt an MCP tool without applying the legacy 6k observation truncation."""
 

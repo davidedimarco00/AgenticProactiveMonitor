@@ -1,13 +1,6 @@
 from pathlib import Path
 
-from agentic_system.agents import (
-    ApplicationEngineerAgent,
-    NetworkEngineerAgent,
-    SoftwareDeveloperAgent,
-    SpecialistAgent,
-    SystemEngineerAgent,
-    TechnicalLeadAgent,
-)
+from agentic_system.agents import BaseAgent, SpecialistAgent, TechnicalLeadAgent
 from agentic_system.incidents import AnomalyObservation, build_incident_report
 from agentic_system.integrations import IncidentRepository, OpenSearchAnomalyWatcher
 from agentic_system.reasoning import RoleLLMProvider, SpecialistReActExecutor
@@ -23,15 +16,12 @@ def test_feature_packages_are_the_canonical_implementations() -> None:
         "agentic_system.integrations.opensearch_watcher"
     )
     assert IncidentRepository.__module__ == "agentic_system.integrations.mongodb"
+    assert BaseAgent.__module__ == "agentic_system.agents.base"
     assert TechnicalLeadAgent.__module__ == "agentic_system.agents.technical_lead"
     assert SpecialistAgent.__module__ == "agentic_system.agents.specialist"
-    assert SystemEngineerAgent is SpecialistAgent
-    assert NetworkEngineerAgent is SpecialistAgent
-    assert ApplicationEngineerAgent is SpecialistAgent
-    assert SoftwareDeveloperAgent is SpecialistAgent
     assert RoleLLMProvider.__module__ == "agentic_system.reasoning.models"
     assert SpecialistReActExecutor.__module__ == (
-        "agentic_system.reasoning.langchain_agent"
+        "agentic_system.reasoning.observation_aware_react"
     )
     assert build_incident_report.__module__ == "agentic_system.incidents.reporting"
 
@@ -42,6 +32,7 @@ def test_obsolete_wrapper_files_are_removed() -> None:
     reasoning = package_root / "reasoning"
 
     for filename in (
+        "roles.py",
         "system_engineer.py",
         "network_engineer.py",
         "application_engineer.py",
