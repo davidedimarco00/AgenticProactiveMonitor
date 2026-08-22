@@ -12,6 +12,11 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
     collaboration. This specialization only persists the terminal critic result
     with a strict distinction between specialist diagnostic confidence and the
     Technical Lead confidence in its workflow/review decision.
+
+    ``OPERATOR_ACTION_REQUIRED`` is intentionally not a terminal diagnostic
+    outcome in the autonomous workflow. Human actions are persisted as advisory
+    remediation attached to a resolved diagnosis; they must not replace the
+    diagnosis or become a fallback for model/review uncertainty.
     """
 
     async def _persist_technical_lead_review(
@@ -26,6 +31,14 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
         decision = str(review.decision).strip().lower()
         if decision not in {"resolve", "operator_action_required", "request_support"}:
             raise RuntimeError(f"Unsupported Technical Lead review decision: {decision}")
+
+        # Diagnosis-first invariant: a completed autonomous diagnosis is never
+        # converted into OPERATOR_ACTION_REQUIRED. Corrective/manual actions are
+        # advisory remediation for the operator after diagnosis; they do not
+        # represent a diagnostic workflow state. Keep request_support unchanged
+        # because it is the only valid non-terminal continuation.
+        if decision == "operator_action_required":
+            decision = "resolve"
 
         involved_roles = await self._involved_specialist_roles(incident_id)
         evidence = await self._combined_findings(
@@ -51,22 +64,12 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
             validation = {
                 "status": "EVIDENCE_REVIEWED",
                 "summary": (
-                    "The Technical Lead accepted the combined specialist evidence and "
-                    "determined that no immediate operator action is required."
+                    "The autonomous diagnostic workflow completed with the best evidence-backed "
+                    "diagnosis. Any human corrective actions remain advisory remediation and do "
+                    "not replace the diagnosis with an operator-escalation state."
                 ),
             }
             active_agents: list[str] = []
-            peer_state = "COMPLETED"
-        elif decision == "operator_action_required":
-            status = "OPERATOR_ACTION_REQUIRED"
-            validation = {
-                "status": "OPERATOR_ACTION_PENDING",
-                "summary": (
-                    "The bounded autonomous investigation is complete. Human operator action "
-                    "is required for remediation or for the remaining diagnostic uncertainty."
-                ),
-            }
-            active_agents = []
             peer_state = "COMPLETED"
         else:
             status = "UNDER_ANALYSIS"
@@ -98,8 +101,8 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
                     "bdi_review_intention": review.bdi_review_intention,
                     "bdi_review_decision_intention": review.bdi_decision_intention,
                     "support_requested": decision == "request_support",
-                    "support_domain": review.support_domain,
-                    "support_reason": review.support_reason,
+                    "support_domain": review.support_domain if decision == "request_support" else None,
+                    "support_reason": review.support_reason if decision == "request_support" else None,
                     "collaboration_roles": involved_roles,
                     "collaboration_round": max(len(involved_roles) - 1, 0),
                     "peer_collaboration_state": peer_state,
@@ -125,7 +128,7 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
                     "diagnostic_confidence": diagnostic_confidence,
                     "review_confidence": review_confidence,
                     "diagnosis_summary": review.diagnosis_summary,
-                    "support_domain": review.support_domain,
+                    "support_domain": review.support_domain if decision == "request_support" else None,
                     "specialists_involved": involved_roles,
                 },
             },
