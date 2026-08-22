@@ -11,7 +11,6 @@ from .agents.investigation_results import (
     pop_investigation_result,
 )
 from .agents.messages import Performative
-from .agents.roles import SystemEngineerAgent, TechnicalLeadAgent
 from .agents.specialist import (
     INVESTIGATION_TASK_ACCEPTED_TYPE,
     INVESTIGATION_TASK_EXECUTION_FAILED_TYPE,
@@ -19,6 +18,7 @@ from .agents.specialist import (
     INVESTIGATION_TASK_RESULT_TYPE,
     SpecialistAgent,
 )
+from .agents.technical_lead import TechnicalLeadAgent
 from .incidents import (
     AnomalyIntake,
     AnomalyObservation,
@@ -486,12 +486,7 @@ class AgentRuntime:
 
     async def _run_communication_probe(self) -> dict[str, Any]:
         technical_lead = self._technical_lead()
-        system_engineer = next(
-            (agent for agent in self.agents if agent.role == "system_engineer"), None
-        )
-
-        if not isinstance(system_engineer, SystemEngineerAgent):
-            raise RuntimeError("System Engineer SPADE-LLM agent is not available")
+        system_engineer = self._specialist_by_role("system_engineer")
 
         request, acknowledgement = await technical_lead.request_specialist(
             receiver=str(system_engineer.jid),
