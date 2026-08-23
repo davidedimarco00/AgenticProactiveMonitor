@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 import docker
 from docker.errors import APIError, NotFound
 from mcp.server import MCPServer
+from pydantic import Field
 
 
 HostId = Literal[
@@ -13,6 +14,8 @@ HostId = Literal[
     "data-service",
     "worker-service",
 ]
+ProcessLimit = Annotated[int, Field(ge=1, le=50)]
+ConnectionLimit = Annotated[int, Field(ge=1, le=100)]
 
 MONITORED_HOSTS = {
     "traffic-generator",
@@ -46,7 +49,7 @@ def _error(host_id: str, message: str, **extra) -> dict:
 
 def register_docker_tools(mcp: MCPServer) -> None:
     @mcp.tool()
-    def get_processes(host_id: HostId, limit: int = 10) -> dict:
+    def get_processes(host_id: HostId, limit: ProcessLimit = 10) -> dict:
         """
         Retrieve processes currently running on a monitored service.
 
@@ -319,7 +322,7 @@ def register_docker_tools(mcp: MCPServer) -> None:
             return _error(host_id, f"Docker API error: {exc}")
 
     @mcp.tool()
-    def get_network_connections(host_id: HostId, limit: int = 50) -> dict:
+    def get_network_connections(host_id: HostId, limit: ConnectionLimit = 50) -> dict:
         """
         Retrieve current TCP and UDP sockets of a monitored service.
 
