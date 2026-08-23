@@ -1,6 +1,7 @@
 import pytest
 
 from agentic_system.agents.prompts import SPECIALIST_ROLE_PROFILES, specialist_system_prompt
+from agentic_system.agents.review import TechnicalLeadReviewReasoner
 from agentic_system.reasoning import SpecialistReActExecutor
 
 
@@ -43,6 +44,9 @@ def test_tool_selection_policy_separates_live_evidence_from_rag() -> None:
     assert "Do not diagnose" in policy
     assert "Never guess a common/default port or endpoint" in policy
     assert "failed check against an unverified identifier is not evidence" in policy
+    assert "success=false is a failed evidence acquisition" in policy
+    assert "Respect every bound declared by the tool schema" in policy
+    assert "repair the arguments" in policy
 
 
 def test_reasoning_policy_distinguishes_symptom_normal_state_and_root_cause() -> None:
@@ -57,6 +61,9 @@ def test_reasoning_policy_distinguishes_symptom_normal_state_and_root_cause() ->
     assert "never from the detector name alone" in policy
     assert "bounded execution budget is not diagnostic evidence" in policy
     assert "Never convert uncertainty into probable" in policy
+    assert "Diagnostic-tool failure policy" in policy
+    assert "failure of the diagnostic process is NOT a root cause" in policy
+    assert "Treat a failed diagnostic action as missing/unavailable evidence" in policy
 
 
 def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> None:
@@ -76,3 +83,14 @@ def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> No
     assert "duplicate-action saturation is NOT evidence" in policy
     assert "MUST NOT by itself upgrade inconclusive to probable" in policy
     assert "bounded inconclusive is a valid result" in policy
+    assert "Tool execution/validation failures are investigation metadata" in policy
+    assert "MUST NOT appear as root_cause" in policy
+
+
+def test_technical_lead_rejects_diagnostic_process_failures_as_root_causes() -> None:
+    policy = _normalized(TechnicalLeadReviewReasoner.SYSTEM_PROMPT)
+
+    assert "diagnostic-process failure is NOT a root cause" in policy
+    assert "Invalid tool arguments" in policy
+    assert "do not preserve it as a causal diagnosis" in policy
+    assert "Unconfirmed causal mechanism after bounded autonomous investigation" in policy
