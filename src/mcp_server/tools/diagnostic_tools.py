@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 import docker
 from docker.errors import APIError, NotFound
 from mcp.server import MCPServer
+from pydantic import Field
 
 from .docker_tools import HostId, MONITORED_HOSTS, _error, _get_monitored_container
 
@@ -17,6 +18,29 @@ TargetHostId = Literal[
     "data-service",
     "worker-service",
 ]
+
+# Only components that actually expose an application service endpoint are
+# valid targets for service-level TCP/HTTP checks. These are INTERNAL Docker
+# endpoints, not host-published ports. The mapping mirrors the monitored-system
+# runtime topology and prevents an LLM from mixing host ports (for example
+# api-gateway host port 8080) with container-to-container service ports.
+ServiceTargetHostId = Literal[
+    "api-gateway",
+    "processing-service",
+    "data-service",
+]
+
+SERVICE_INTERNAL_ENDPOINTS: dict[str, dict[str, object]] = {
+    "api-gateway": {"port": 5000, "health_path": "/health"},
+    "processing-service": {"port": 8000, "health_path": "/health"},
+    "data-service": {"port": 8000, "health_path": "/health"},
+}
+
+Pid = Annotated[int, Field(ge=1, le=4_194_304)]
+ThreadLimit = Annotated[int, Field(ge=1, le=100)]
+ProcessTreeLimit = Annotated[int, Field(ge=1, le=200)]
+DiagnosticTimeout = Annotated[float, Field(ge=0.2, le=5.0)]
+HttpPath = Annotated[str, Field(min_length=1, max_length=256, pattern=r"^/")]
 
 
 def _validate_pid(pid: int) -> int:
@@ -33,10 +57,20 @@ def _validate_target(target_host: str) -> str:
     return target_host
 
 
-def _validate_port(port: int) -> int:
-    if port < 1 or port > 65535:
-        raise ValueError("port must be between 1 and 65535")
-    return port
+def _service_endpoint(target_host: str) -> dict[str, object]:
+    endpoint = SERVICE_INTERNAL_ENDPOINTS.get(target_host)
+    if endpoint is None:
+        raise ValueError(
+            "target_host does not expose a registered monitored application endpoint; "
+            f"valid service targets are: {', '.join(sorted(SERVICE_INTERNAL_ENDPOINTS))}"
+        )
+    return dict(endpoint)
+
+
+def service_internal_port(target_host: str) -> int:
+    """Return the authoritative container-to-container port for a service."""
+
+    return int(_service_endpoint(target_host)["port"])
 
 
 def _validate_timeout(timeout_seconds: float) -> float:
@@ -66,10 +100,12 @@ def _exec_fixed_python(container, script: str, *arguments: str):
 
 def register_diagnostic_tools(mcp: MCPServer) -> None:
     @mcp.tool()
-    def get_process_threads(host_id: HostId, pid: int, limit: int = 30) -> dict:
+    def get_process_threads(
+        host_id: HostId,
+        pid: Pid,
+        limit: ThreadLimit = 30,
+    ) -> dict:
         """Inspect threads of one process, ordered by CPU usage. Read-only."""
-        if limit < 1 or limit > 100:
-            raise ValueError("limit must be between 1 and 100")
         _validate_pid(pid)
         try:
             client = docker.from_env()
@@ -136,7 +172,7 @@ def register_diagnostic_tools(mcp: MCPServer) -> None:
             return _error(host_id, f"Docker API error: {exc}", pid=pid)
 
     @mcp.tool()
-    def inspect_process(host_id: HostId, pid: int) -> dict:
+    def inspect_process(host_id: HostId, pid: Pid) -> dict:
         """Read /proc metadata for one PID: status, command line and I/O counters."""
         _validate_pid(pid)
         try:
@@ -189,10 +225,11 @@ print(json.dumps({'status':'ok','pid':pid,'process_status':status,'cmdline':cmdl
             return _error(host_id, f"Docker API error: {exc}", pid=pid)
 
     @mcp.tool()
-    def get_process_tree(host_id: HostId, limit: int = 100) -> dict:
+    def get_process_tree(
+        host_id: HostId,
+        limit: ProcessTreeLimit = 100,
+    ) -> dict:
         """Retrieve process parent/child relationships with CPU and memory usage. Read-only."""
-        if limit < 1 or limit > 200:
-            raise ValueError("limit must be between 1 and 200")
         try:
             client = docker.from_env()
             container = _get_monitored_container(client, host_id)
@@ -284,19 +321,27 @@ except Exception as exc:
     @mcp.tool()
     def test_tcp_connection(
         host_id: HostId,
-        target_host: TargetHostId,
-        port: int,
-        timeout_seconds: float = 2.0,
+        target_host: ServiceTargetHostId,
+        timeout_seconds: DiagnosticTimeout = 2.0,
     ) -> dict:
-        """Perform one bounded TCP connect test between allow-listed monitored services."""
-        _validate_target(target_host)
-        _validate_port(port)
+        """Perform a bounded TCP test using the target service's authoritative internal port.
+
+        The caller chooses only source and target services. The MCP server resolves the
+        container-to-container port from the monitored-system topology so an agent cannot
+        mix host-published ports with internal service ports.
+        """
+        port = service_internal_port(target_host)
         _validate_timeout(timeout_seconds)
         try:
             client = docker.from_env()
             container = _get_monitored_container(client, host_id)
             if container.status != "running":
-                return _error(host_id, "container is not running", target_host=target_host, port=port)
+                return _error(
+                    host_id,
+                    "container is not running",
+                    target_host=target_host,
+                    port=port,
+                )
             script = """
 import json, socket, sys, time
 host, port, timeout = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
@@ -320,28 +365,56 @@ except Exception as exc:
                 output = "python diagnostic runtime unavailable"
                 if result is not None:
                     output = result.output.decode("utf-8", errors="replace")
-                return _error(host_id, output, target_host=target_host, port=port)
+                return _error(
+                    host_id,
+                    output,
+                    target_host=target_host,
+                    port=port,
+                    endpoint_source="authoritative_monitored_system_topology",
+                )
             payload = json.loads(result.output.decode("utf-8", errors="replace"))
             payload["host_id"] = host_id
+            payload["endpoint_source"] = "authoritative_monitored_system_topology"
             return payload
         except (ValueError, json.JSONDecodeError) as exc:
-            return _error(host_id, str(exc), target_host=target_host, port=port)
+            return _error(
+                host_id,
+                str(exc),
+                target_host=target_host,
+                port=port,
+                endpoint_source="authoritative_monitored_system_topology",
+            )
         except NotFound:
-            return _error(host_id, "monitored container not found", target_host=target_host, port=port)
+            return _error(
+                host_id,
+                "monitored container not found",
+                target_host=target_host,
+                port=port,
+                endpoint_source="authoritative_monitored_system_topology",
+            )
         except APIError as exc:
-            return _error(host_id, f"Docker API error: {exc}", target_host=target_host, port=port)
+            return _error(
+                host_id,
+                f"Docker API error: {exc}",
+                target_host=target_host,
+                port=port,
+                endpoint_source="authoritative_monitored_system_topology",
+            )
 
     @mcp.tool()
     def check_http_endpoint(
         host_id: HostId,
-        target_host: TargetHostId,
-        port: int,
-        path: str = "/",
-        timeout_seconds: float = 3.0,
+        target_host: ServiceTargetHostId,
+        path: HttpPath = "/health",
+        timeout_seconds: DiagnosticTimeout = 3.0,
     ) -> dict:
-        """Issue one read-only HTTP GET from a monitored service to another allow-listed service."""
-        _validate_target(target_host)
-        _validate_port(port)
+        """Issue a read-only HTTP GET using the target service's authoritative internal port.
+
+        The internal port is resolved by MCP from monitored-system topology. The optional
+        path remains explicit because specialists may need a specific read-only endpoint;
+        when omitted, the common service health endpoint is used.
+        """
+        port = service_internal_port(target_host)
         _validate_timeout(timeout_seconds)
         if not path.startswith("/") or len(path) > 256 or "\n" in path or "\r" in path:
             raise ValueError("path must be an absolute HTTP path up to 256 characters")
@@ -349,7 +422,12 @@ except Exception as exc:
             client = docker.from_env()
             container = _get_monitored_container(client, host_id)
             if container.status != "running":
-                return _error(host_id, "container is not running", target_host=target_host, port=port)
+                return _error(
+                    host_id,
+                    "container is not running",
+                    target_host=target_host,
+                    port=port,
+                )
             script = """
 import json, sys, time, urllib.error, urllib.request
 host, port, path, timeout = sys.argv[1], int(sys.argv[2]), sys.argv[3], float(sys.argv[4])
@@ -381,13 +459,40 @@ except Exception as exc:
                 output = "python diagnostic runtime unavailable"
                 if result is not None:
                     output = result.output.decode("utf-8", errors="replace")
-                return _error(host_id, output, target_host=target_host, port=port)
+                return _error(
+                    host_id,
+                    output,
+                    target_host=target_host,
+                    port=port,
+                    endpoint_source="authoritative_monitored_system_topology",
+                )
             payload = json.loads(result.output.decode("utf-8", errors="replace"))
             payload["host_id"] = host_id
+            payload["target_host"] = target_host
+            payload["port"] = port
+            payload["endpoint_source"] = "authoritative_monitored_system_topology"
             return payload
         except (ValueError, json.JSONDecodeError) as exc:
-            return _error(host_id, str(exc), target_host=target_host, port=port)
+            return _error(
+                host_id,
+                str(exc),
+                target_host=target_host,
+                port=port,
+                endpoint_source="authoritative_monitored_system_topology",
+            )
         except NotFound:
-            return _error(host_id, "monitored container not found", target_host=target_host, port=port)
+            return _error(
+                host_id,
+                "monitored container not found",
+                target_host=target_host,
+                port=port,
+                endpoint_source="authoritative_monitored_system_topology",
+            )
         except APIError as exc:
-            return _error(host_id, f"Docker API error: {exc}", target_host=target_host, port=port)
+            return _error(
+                host_id,
+                f"Docker API error: {exc}",
+                target_host=target_host,
+                port=port,
+                endpoint_source="authoritative_monitored_system_topology",
+            )
