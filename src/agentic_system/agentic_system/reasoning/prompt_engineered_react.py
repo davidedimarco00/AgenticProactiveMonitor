@@ -6,11 +6,11 @@ from .structured_reasoning_react import SpecialistReActExecutor as _StructuredRe
 class SpecialistReActExecutor(_StructuredReActExecutor):
     """Prompt-engineering experiment for generalized causal multi-agent diagnosis.
 
-    The deterministic execution model is intentionally unchanged: AgentSpeak
-    commits the intention, ReAct remains bounded, Qwen selects one bound action,
-    MCP/RAG returns observations, and the structured validators still enforce
-    the diagnostic schema. This subclass changes only the semantic policies
-    supplied to the reasoning and action-selection models.
+    AgentSpeak commits the intention, ReAct remains bounded, Qwen selects one
+    bound action, MCP/RAG returns observations, and Python validates transport,
+    schemas and execution limits. Diagnostic meaning stays with Gemma: Python
+    must not upgrade an inconclusive result merely because the local ReAct budget
+    ended or because the action selector reached evidence saturation.
     """
 
     TOOL_SELECTION_POLICY = """
@@ -67,6 +67,8 @@ Causal validity policy:
   candidate cause -> intermediate effect(s) -> reported anomaly.
 - If you can only restate the anomaly or describe healthy operation, gather more discriminating
   evidence instead of manufacturing a probable diagnosis.
+- A bounded execution budget is not diagnostic evidence. Never convert uncertainty into probable
+  merely because the ReAct step limit is near or has been reached.
 
 Domain-boundary policy:
 - Investigate the delegated domain deeply enough to test its main plausible causes, but do not force
@@ -112,6 +114,12 @@ Causal diagnosis rules:
 A root cause MUST be anomaly-producing. Normal-state facts such as a running service, successful DNS,
 existing TCP connections, normal CPU/memory, or general request handling are findings or hypothesis-
 elimination evidence, never root causes. The anomaly symptom itself is also not a root cause.
+
+Bounded-closure rule:
+- Reaching the ReAct step limit, exhausting safe local actions, or encountering duplicate-action
+  saturation is NOT evidence for a root cause and MUST NOT by itself upgrade inconclusive to probable.
+- Preserve the diagnostic status justified by the evidence. If a specific unresolved hypothesis can
+  be tested by another domain, request collaboration. If not, bounded inconclusive is a valid result.
 
 Cross-domain collaboration policy:
 - If the current specialist has materially weakened the plausible causes in its own domain and a
