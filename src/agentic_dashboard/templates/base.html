@@ -37,6 +37,7 @@
     <nav class="header-nav" aria-label="Primary navigation">
       <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Operations</a>
       <a class="nav-link {% if request.path == '/anomalies' %}active{% endif %}" href="/anomalies">Anomalies</a>
+      <a class="nav-link {% if request.path.startswith('/incidents') %}active{% endif %}" href="/incidents">Incidents</a>
       <a class="nav-link {% if request.path == '/system' %}active{% endif %}" href="/system">System</a>
     </nav>
 
