@@ -36,6 +36,17 @@ def level_for_status(status_code: int) -> str:
     return "INFO"
 
 
+def safe_validation_errors(exc: RequestValidationError) -> list[dict[str, object]]:
+    return [
+        {
+            "type": error.get("type"),
+            "loc": list(error.get("loc", ())),
+            "msg": error.get("msg"),
+        }
+        for error in exc.errors()
+    ]
+
+
 def configured_fault_delay_ms() -> int:
     if not FAULT_DELAY_FILE.exists():
         return 0
@@ -136,6 +147,7 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     request_id = request_id_from(request)
     errors = exc.errors()
+    safe_errors = safe_validation_errors(exc)
     write_log(
         service=SERVICE_NAME,
         level="WARN",
@@ -145,7 +157,7 @@ async def validation_exception_handler(
         method=request.method,
         path=request.url.path,
         status_code=422,
-        validation_errors=jsonable_encoder(errors),
+        validation_errors=safe_errors,
     )
     return JSONResponse(
         status_code=422,
