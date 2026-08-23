@@ -1,6 +1,8 @@
 (() => {
   const panel = document.getElementById("workflow-panel");
-  if (!panel) return;
+  const anomalyInboxBody = document.getElementById("anomaly-inbox-body");
+  const queueDepthDisplay = document.getElementById("workflow-queue-depth");
+  if (!panel && !anomalyInboxBody && !queueDepthDisplay) return;
 
   const byId = (id) => document.getElementById(id);
   const backendAnomalyApi = `${window.location.protocol}//${window.location.hostname}:8082/api/v1/anomalies`;
@@ -10,8 +12,13 @@
     if (!value) return "—";
     return String(value)
       .replaceAll("_", " ")
+      .replaceAll("-", " ")
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   };
+
+  const humanizeStatus = (value) => String(value || "—")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
   const formatTimestamp = (value) => {
     if (!value) return "—";
@@ -38,6 +45,24 @@
   const formatGrade = (value) => {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric.toFixed(3) : "—";
+  };
+
+  const compactStructured = (value, fallback = "—") => {
+    if (value === null || value === undefined || value === "") return fallback;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    if (typeof value === "object") {
+      const preferred = value.summary || value.message || value.reason || value.root_cause || value.status;
+      if (preferred) return String(preferred);
+      try {
+        const serialized = JSON.stringify(value);
+        return serialized.length > 260 ? `${serialized.slice(0, 257)}…` : serialized;
+      } catch (_) {
+        return fallback;
+      }
+    }
+    return String(value);
   };
 
   const appendTextCell = (row, value, className = "") => {
@@ -91,25 +116,152 @@
     return state;
   };
 
-  const renderQueue = (depth, maxSize, activeAnomaly) => {
-    const normalizedDepth = Math.max(Number(depth || 0), 0);
-    const depthNode = byId("workflow-queue-depth");
-    const capacityNode = byId("workflow-queue-capacity");
-    const queueMessage = byId("workflow-queue-message");
-
-    if (depthNode) depthNode.textContent = String(normalizedDepth);
-    if (capacityNode) capacityNode.textContent = `${normalizedDepth} / ${Number(maxSize || 4096)}`;
-    if (queueMessage) {
-      queueMessage.textContent = normalizedDepth
-        ? `${normalizedDepth} ${normalizedDepth === 1 ? "anomaly is" : "anomalies are"} waiting for the current collaborative workflow to finish.`
-        : activeAnomaly
-          ? "The team owns one anomaly and no additional anomalies are waiting."
-          : "No anomalies are currently queued.";
-    }
+  const setStatusPill = (node, status) => {
+    if (!node) return;
+    const normalized = String(status || "NO ACTIVE INCIDENT").trim().toUpperCase();
+    node.className = `status-pill status-${normalized.toLowerCase().replaceAll("_", "-").replaceAll(" ", "-")}`;
+    node.textContent = normalized.replaceAll("_", " ");
   };
 
-  const renderWorkflow = (workflow) => {
-    if (!workflow) return;
+  const progressStage = (workflow, incident) => {
+    if (!incident || !Object.keys(incident).length) return workflow?.active_anomaly ? 0 : -1;
+
+    const status = String(incident.status || "NEW").toUpperCase();
+    const agentic = incident.agentic || {};
+    const task = workflow?.task || null;
+    const reviewState = String(agentic.review_state || "").toUpperCase();
+
+    if (["DIAGNOSED", "OPERATOR_ACTION_REQUIRED", "RESOLVED", "CLOSED"].includes(status)) return 4;
+    if (status === "UNDER_ANALYSIS") {
+      if (reviewState && reviewState !== "NOT_STARTED") return 3;
+      if (String(task?.state || "").toUpperCase() === "COMPLETED") return 3;
+      return 2;
+    }
+    if (status === "TRIAGED") return 2;
+    if (status === "TAKEN_IN_CHARGE") return 1;
+    return 0;
+  };
+
+  const renderDiagnosisProgress = (workflow, incident) => {
+    const progress = byId("diagnosis-progress");
+    if (!progress) return;
+
+    const current = progressStage(workflow, incident);
+    progress.querySelectorAll(".diagnosis-stage").forEach((stage) => {
+      const index = Number(stage.dataset.stageIndex || 0);
+      stage.classList.toggle("done", current >= 0 && index < current);
+      stage.classList.toggle("current", index === current);
+    });
+
+    const label = byId("diagnosis-progress-label");
+    if (label) label.textContent = workflow?.phase || (current < 0 ? "Waiting for anomaly" : "Anomaly intake");
+  };
+
+  const renderLiveDiagnosis = (workflow, team) => {
+    if (!byId("diagnosis-live-card")) return;
+
+    const incident = workflow?.active_incident || null;
+    const diagnosis = incident?.diagnosis || {};
+    const agentic = incident?.agentic || {};
+    const timeline = Array.isArray(incident?.timeline) ? incident.timeline : [];
+    const latest = timeline.length ? timeline[timeline.length - 1] : null;
+    const state = effectiveState(workflow);
+
+    const status = incident?.status || (workflow?.active_anomaly ? "STARTING" : "NO ACTIVE INCIDENT");
+    setStatusPill(byId("diagnosis-live-status"), status);
+
+    const summary = byId("diagnosis-live-summary");
+    if (summary) {
+      summary.textContent = incident
+        ? diagnosis.summary || "The agents are still collecting and correlating evidence. No stable diagnosis has been persisted yet."
+        : workflow?.active_anomaly
+          ? "The anomaly has been admitted to the workflow. Incident creation and Technical Lead triage are starting."
+          : "No anomaly is currently being processed. The live diagnostic summary will appear here when the team takes an anomaly in charge.";
+    }
+
+    const confidence = byId("diagnosis-live-confidence");
+    if (confidence) confidence.textContent = formatConfidence(diagnosis.confidence);
+
+    const evidence = byId("diagnosis-live-evidence");
+    if (evidence) evidence.textContent = String(Array.isArray(diagnosis.evidence) ? diagnosis.evidence.length : 0);
+
+    const workingMembers = Array.isArray(team?.members)
+      ? team.members.filter((member) => String(member.activity || "").toUpperCase() === "WORKING")
+      : [];
+    const waitingMembers = Array.isArray(team?.members)
+      ? team.members.filter((member) => String(member.activity || "").toUpperCase() === "WAITING")
+      : [];
+    const agents = byId("diagnosis-live-agents");
+    if (agents) {
+      if (workingMembers.length) {
+        agents.textContent = workingMembers.map((member) => member.name || humanizeRole(member.backend_role || member.key)).join(", ");
+      } else if (waitingMembers.length) {
+        agents.textContent = `${waitingMembers.map((member) => member.name || humanizeRole(member.backend_role || member.key)).join(", ")} waiting`;
+      } else {
+        agents.textContent = workflow?.assigned_to ? humanizeRole(workflow.assigned_to) : "Idle";
+      }
+    }
+
+    const updated = byId("diagnosis-live-updated");
+    if (updated) updated.textContent = formatTimestamp(incident?.updated_at || latest?.timestamp);
+
+    const rootCause = byId("diagnosis-live-root-cause");
+    if (rootCause) rootCause.textContent = diagnosis.root_cause || "No root-cause candidate has been confirmed yet.";
+
+    const latestTitle = byId("diagnosis-latest-title");
+    const latestCopy = byId("diagnosis-latest-copy");
+    const latestTime = byId("diagnosis-latest-time");
+    if (latest) {
+      if (latestTitle) {
+        const actor = latest.agent_role || latest.agent_jid || latest.called_by;
+        latestTitle.textContent = `${latest.action || latest.event_type || "Agent activity"}${actor ? ` · ${humanizeRole(actor)}` : ""}`;
+      }
+      if (latestCopy) {
+        latestCopy.textContent = latest.reason
+          || latest.description
+          || compactStructured(latest.outcome, "Agent activity recorded without an operator summary.");
+      }
+      if (latestTime) latestTime.textContent = formatTimestamp(latest.timestamp || latest.created_at);
+    } else {
+      if (latestTitle) latestTitle.textContent = state === "IDLE" ? "Waiting for agent activity" : "Investigation starting";
+      if (latestCopy) latestCopy.textContent = state === "IDLE"
+        ? "The latest agent observation will appear here as the investigation progresses."
+        : "The team has not persisted a diagnostic event for this incident yet.";
+      if (latestTime) latestTime.textContent = "—";
+    }
+
+    const collaboration = byId("diagnosis-live-collaboration");
+    if (collaboration) {
+      const peerState = String(agentic.peer_collaboration_state || "").trim();
+      collaboration.textContent = peerState
+        ? humanizeStatus(peerState)
+        : agentic.support_requested
+          ? "Support requested"
+          : workingMembers.length > 1
+            ? "Collaborative specialist investigation"
+            : workflow?.assigned_to
+              ? `Primary investigator: ${humanizeRole(workflow.assigned_to)}`
+              : "Primary investigator workflow";
+    }
+
+    const incidentLink = byId("diagnosis-open-incident");
+    if (incidentLink) {
+      if (workflow?.active_incident_id) {
+        incidentLink.href = `/incidents/${encodeURIComponent(workflow.active_incident_id)}`;
+        incidentLink.classList.remove("is-disabled");
+        incidentLink.removeAttribute("aria-disabled");
+      } else {
+        incidentLink.href = "#";
+        incidentLink.classList.add("is-disabled");
+        incidentLink.setAttribute("aria-disabled", "true");
+      }
+    }
+
+    renderDiagnosisProgress(workflow, incident);
+  };
+
+  const renderWorkflow = (workflow, team) => {
+    if (!panel || !workflow) return;
 
     const state = effectiveState(workflow);
     panel.dataset.workflowState = state;
@@ -131,12 +283,12 @@
     const anomaly = workflow.active_anomaly || null;
     const anomalyNode = byId("workflow-anomaly");
     const resultNode = byId("workflow-result-id");
-    if (anomalyNode) anomalyNode.textContent = anomaly?.detector_name || anomaly?.detector_id || "—";
+    if (anomalyNode) anomalyNode.textContent = anomaly?.detector_name || anomaly?.detector_id || "No active anomaly";
     if (resultNode) {
       resultNode.textContent = anomaly?.result_id || (
         state === "RECOVERY"
           ? "Persisted workflow from an earlier runtime"
-          : "No anomaly currently owned by the team"
+          : "The team is ready for the next anomaly"
       );
     }
 
@@ -153,35 +305,23 @@
         : "Created after Technical Lead triage";
     }
 
-    const runtimeDepth = Number(workflow.queue_depth || 0);
-    const depth = durableWaitingCount === null ? runtimeDepth : durableWaitingCount;
-    const maxSize = Number(workflow.queue_maxsize || 4096);
-    const maxConcurrent = Number(workflow.max_concurrent_anomalies || 1);
-    const activeSlots = anomaly ? 1 : 0;
-    const activeSlotsNode = byId("workflow-active-slots");
-    if (activeSlotsNode) activeSlotsNode.textContent = `${activeSlots} / ${maxConcurrent}`;
-    renderQueue(depth, maxSize, Boolean(anomaly));
+    const runtimeDepth = Math.max(Number(workflow.queue_depth || 0), 0);
+    const queueDepth = durableWaitingCount === null ? runtimeDepth : durableWaitingCount;
+    const depthNode = byId("workflow-queue-depth");
+    if (depthNode) depthNode.textContent = String(queueDepth);
 
     const error = byId("workflow-error");
     const errorMessage = byId("workflow-error-message");
     if (error) error.hidden = !workflow.last_error;
     if (errorMessage) errorMessage.textContent = workflow.last_error || "";
+
+    renderLiveDiagnosis(workflow, team);
   };
 
   const syncDurableQueueCount = (summary) => {
     durableWaitingCount = Math.max(Number(summary?.waiting || 0), 0);
-    const activeAnomaly = byId("workflow-anomaly")?.textContent?.trim();
-    const capacityNode = byId("workflow-queue-capacity");
-    let maxSize = 4096;
-    if (capacityNode) {
-      const parts = capacityNode.textContent.split("/");
-      if (parts.length > 1) maxSize = Number(parts[1].trim()) || 4096;
-    }
-    renderQueue(
-      durableWaitingCount,
-      maxSize,
-      Boolean(activeAnomaly && activeAnomaly !== "—"),
-    );
+    const depthNode = byId("workflow-queue-depth");
+    if (depthNode) depthNode.textContent = String(durableWaitingCount);
   };
 
   const dismissWaitingAnomaly = async (anomaly, button) => {
@@ -314,20 +454,23 @@
   };
 
   const refreshWorkflow = async () => {
+    if (!panel) return;
     try {
       const response = await fetch("/api/overview", { cache: "no-store" });
       if (!response.ok) return;
       const payload = await response.json();
-      renderWorkflow(payload.workflow);
+      renderWorkflow(payload.workflow, payload.team);
     } catch (_) {
       // Preserve the last server-rendered workflow snapshot on transient errors.
     }
   };
 
   const refreshAnomalyInbox = async () => {
+    if (!anomalyInboxBody && !queueDepthDisplay) return;
+    const limit = anomalyInboxBody ? 4096 : 1;
     try {
       const response = await fetch(
-        "/api/anomalies?state=WAITING&limit=4096&ascending=true",
+        `/api/anomalies?state=WAITING&limit=${limit}&ascending=true`,
         { cache: "no-store" },
       );
       if (!response.ok) return;
@@ -339,6 +482,6 @@
 
   refreshWorkflow();
   refreshAnomalyInbox();
-  window.setInterval(refreshWorkflow, 10000);
-  window.setInterval(refreshAnomalyInbox, 10000);
+  if (panel) window.setInterval(refreshWorkflow, 4000);
+  if (anomalyInboxBody || queueDepthDisplay) window.setInterval(refreshAnomalyInbox, 8000);
 })();
