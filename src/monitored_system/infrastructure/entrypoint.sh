@@ -14,9 +14,10 @@ APP_COMMAND=${APP_COMMAND:-}
 LOG_DIR="/var/log/machine"
 APP_LOG_FILE="${LOG_DIR}/app.log"
 SYSTEM_LOG_FILE="${LOG_DIR}/system.log"
+RUNTIME_LOG_FILE="${LOG_DIR}/runtime.log"
 
 mkdir -p "${LOG_DIR}"
-touch "${APP_LOG_FILE}" "${SYSTEM_LOG_FILE}"
+touch "${APP_LOG_FILE}" "${SYSTEM_LOG_FILE}" "${RUNTIME_LOG_FILE}"
 
 TELEGRAF_PID=""
 FLUENTBIT_PID=""
@@ -88,7 +89,9 @@ if [ "${WORKLOAD_MODE}" = "application" ]; then
   fi
 
   echo "Starting monitored application..."
-  bash -lc "${APP_COMMAND}" &
+  bash -lc "${APP_COMMAND}" \
+    > >(tee -a "${RUNTIME_LOG_FILE}") \
+    2> >(tee -a "${RUNTIME_LOG_FILE}" >&2) &
   APP_PID=$!
 
   sleep 2
