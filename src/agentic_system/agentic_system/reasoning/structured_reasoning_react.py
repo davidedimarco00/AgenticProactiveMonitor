@@ -4,6 +4,8 @@ import json
 from typing import Any
 
 import httpx
+from pydantic import BaseModel
+from spade_llm.context import ContextManager
 
 from .langchain_agent import (
     ReActEvidence,
@@ -11,6 +13,7 @@ from .langchain_agent import (
     ReActInvestigationResult,
     _ReasoningDecision,
 )
+from .models import RoleLLMProvider
 from .observation_aware_react import SpecialistReActExecutor as _ObservationAwareExecutor
 
 
@@ -22,6 +25,11 @@ class SpecialistReActExecutor(_ObservationAwareExecutor):
     with the reasoning/finalization model: budget exhaustion or evidence-path
     saturation must not automatically upgrade ``inconclusive`` to ``probable``
     or suppress a model-requested cross-domain collaboration.
+
+    Production ``RoleLLMProvider`` instances use Ollama's native JSON-schema
+    endpoint for deterministic structured reasoning. Injected/test providers use
+    the provider abstraction instead, so unit tests never depend on a live
+    Ollama server and can still validate the same reasoning contract.
     """
 
     _DUPLICATE_SELECTION_MARKER = "same successful diagnostic call was already executed"
@@ -89,10 +97,78 @@ class SpecialistReActExecutor(_ObservationAwareExecutor):
                 return hypothesis
         return None
 
+    async def _provider_reasoning_request(
+        self,
+        messages: list[dict[str, str]],
+    ) -> _ReasoningDecision:
+        """Execute the structured reasoning contract through an injected provider.
+
+        This path is primarily used by unit-test/fake providers. It deliberately
+        preserves the same schema and normalization used by native Ollama.
+        """
+
+        system_prompt = ""
+        context = ContextManager(system_prompt="")
+        conversation_id = "specialist-native-structured-reasoning"
+        for message in messages:
+            role = str(message.get("role") or "user").strip().lower()
+            content = str(message.get("content") or "").strip()
+            if role == "system" and not system_prompt:
+                system_prompt = content
+                continue
+            context.add_message_dict(
+                {"role": role or "user", "content": content},
+                conversation_id,
+            )
+        if system_prompt:
+            context = ContextManager(system_prompt=system_prompt)
+            for message in messages:
+                role = str(message.get("role") or "user").strip().lower()
+                if role == "system":
+                    continue
+                context.add_message_dict(
+                    {
+                        "role": role or "user",
+                        "content": str(message.get("content") or "").strip(),
+                    },
+                    conversation_id,
+                )
+
+        response = await self.reasoning_provider.get_llm_response(
+            context,
+            tools=None,
+            conversation_id=conversation_id,
+            output_schema=_ReasoningDecision,
+        )
+        structured = response.get("structured")
+        if isinstance(structured, BaseModel):
+            raw = structured.model_dump()
+        elif isinstance(structured, dict):
+            raw = dict(structured)
+        else:
+            text = str(response.get("text") or "").strip()
+            if not text:
+                raise RuntimeError("Injected reasoning provider returned no structured content")
+            try:
+                raw = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("Injected reasoning provider returned invalid JSON") from exc
+
+        normalized = self._normalize_reasoning_payload(raw)
+        return _ReasoningDecision.model_validate(normalized)
+
     async def _native_reasoning_request(
         self,
         messages: list[dict[str, str]],
     ) -> _ReasoningDecision:
+        # Production RoleLLMProvider instances use Ollama native structured JSON
+        # because this path avoids the structured-output transport instability
+        # previously observed through the generic SPADE-LLM/LiteLLM layer.
+        # Test/injected providers must remain fully offline and therefore use
+        # their normal provider abstraction instead of making a raw HTTP call.
+        if not isinstance(self.reasoning_provider, RoleLLMProvider):
+            return await self._provider_reasoning_request(messages)
+
         schema = self._reasoning_json_schema()
         payload = {
             "model": self._ollama_model_name(self.reasoning_provider),
