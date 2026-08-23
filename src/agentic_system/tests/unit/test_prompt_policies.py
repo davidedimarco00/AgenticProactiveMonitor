@@ -42,11 +42,16 @@ def test_tool_selection_policy_separates_live_evidence_from_rag() -> None:
     assert "cannot prove" in policy
     assert "Do not repeat" in policy
     assert "Do not diagnose" in policy
-    assert "Never guess a common/default port or endpoint" in policy
-    assert "failed check against an unverified identifier is not evidence" in policy
     assert "success=false is a failed evidence acquisition" in policy
     assert "Respect every bound declared by the tool schema" in policy
     assert "repair the arguments" in policy
+    assert "Service ports are authoritative topology facts" in policy
+    assert "NOT an LLM decision" in policy
+    assert "MCP tool resolves the target's internal container port deterministically" in policy
+    assert "Never add, infer, copy, guess or transfer a host-published port" in policy
+    assert "Distinguish Docker host-published ports from internal service ports" in policy
+    assert "must never be reassigned to another component" in policy
+    assert "failed check against an unverified identifier is not evidence" in policy
 
 
 def test_reasoning_policy_distinguishes_symptom_normal_state_and_root_cause() -> None:
