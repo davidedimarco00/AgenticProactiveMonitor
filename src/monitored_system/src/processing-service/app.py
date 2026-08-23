@@ -145,7 +145,7 @@ async def validation_exception_handler(
         method=request.method,
         path=request.url.path,
         status_code=422,
-        validation_errors=errors,
+        validation_errors=jsonable_encoder(errors),
     )
     return JSONResponse(
         status_code=422,
