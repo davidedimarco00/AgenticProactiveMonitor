@@ -37,7 +37,7 @@ Target link: `api-gateway -> processing-service`
 
 The scenario resolves the Docker route from `api-gateway` to `processing-service` and applies a Linux `tc/netem` root qdisc only to that application-network interface. `api-gateway` is granted the `NET_ADMIN` capability; privileged mode is not required.
 
-Expected detector: `NETLAT-api-gateway-processing-service`, based on `network_service_latency.response_time`. Telegraf `ping.average_response_ms` provides an independent RTT signal and `inputs.net` keeps interface counters.
+Expected detector: `NETLAT-api-gateway-processing-service`, based on `network_transport_latency.response_time`. This measurement is TCP-connect latency only. Telegraf `ping.average_response_ms` remains an independent RTT signal and `inputs.net` keeps interface counters.
 
 On Docker Desktop for Windows, this scenario requires a backend kernel with `sch_netem` support. The validated thesis environment uses Docker Desktop Hyper-V/LinuxKit.
 
@@ -51,6 +51,8 @@ On Docker Desktop for Windows, this scenario requires a backend kernel with `sch
 Target: `processing-service`
 
 Adds an application-level runtime delay before downstream calls. Unlike `network-latency`, the delay is introduced inside the application.
+
+Expected detector: `APPLAT-api-gateway-processing-service`, based on `application_service_latency.response_time`. The application probe performs `GET /health`, which executes the processing-service dependency path and therefore includes the controlled processing delay.
 
 ```powershell
 .\infrastructure\scenarios\high-latency\start.ps1 -DelayMs 2500
