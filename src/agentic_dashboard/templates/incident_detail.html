@@ -221,23 +221,58 @@
   </summary>
 
   {% if incident.timeline %}
-  <div class="trace-table-wrap">
-    <table class="simple-table trace-table">
-      <thead><tr><th>Time</th><th>Agent</th><th>Action</th><th>Description / outcome</th></tr></thead>
-      <tbody>
-        {% for item in incident.timeline %}
-        <tr>
-          <td>{{ item.timestamp|human_time }}</td>
-          <td>{{ item.agent_role or item.agent_jid or 'system' }}</td>
-          <td>
+  <div class="audit-event-list">
+    {% for item in incident.timeline %}
+      {% set payload = item.description or item.outcome or item.reason %}
+      <article class="audit-event">
+        <div class="audit-event-meta">
+          <time>{{ item.timestamp|human_time }}</time>
+          <span class="audit-agent-pill">{{ item.agent_role or item.agent_jid or 'system' }}</span>
+        </div>
+
+        <div class="audit-event-body">
+          <div class="audit-event-title">
             <strong>{{ item.action or item.event_type or 'Agent activity' }}</strong>
-            {% if item.tool %}<small>{{ item.tool }}</small>{% endif %}
-          </td>
-          <td>{{ item.description or item.outcome or item.reason or '—' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+            {% if item.tool %}<span class="audit-tool-pill">{{ item.tool }}</span>{% endif %}
+          </div>
+
+          {% if payload is mapping %}
+            {% if payload.summary %}
+              <p class="audit-event-summary">{{ payload.summary }}</p>
+            {% elif payload.message %}
+              <p class="audit-event-summary">{{ payload.message }}</p>
+            {% elif payload.reason %}
+              <p class="audit-event-summary">{{ payload.reason }}</p>
+            {% else %}
+              <p class="audit-event-summary">Structured result produced by the agent. Expand the payload below to inspect the complete data.</p>
+            {% endif %}
+
+            {% if payload.status or payload.diagnosis_status or (payload.confidence is defined and payload.confidence is not none) or payload.causal_chain %}
+            <div class="audit-result-facts">
+              {% if payload.status %}<span class="audit-result-fact"><span>Status</span><strong>{{ payload.status }}</strong></span>{% endif %}
+              {% if payload.diagnosis_status %}<span class="audit-result-fact"><span>Diagnosis</span><strong>{{ payload.diagnosis_status }}</strong></span>{% endif %}
+              {% if payload.confidence is defined and payload.confidence is not none %}<span class="audit-result-fact"><span>Confidence</span><strong>{{ payload.confidence|confidence }}</strong></span>{% endif %}
+              {% if payload.causal_chain %}<span class="audit-result-fact"><span>Causal chain</span><strong>{{ payload.causal_chain }}</strong></span>{% endif %}
+            </div>
+            {% endif %}
+
+            {% if payload.root_cause %}
+            <div class="audit-root-cause">
+              <span>Root cause</span>
+              <p>{{ payload.root_cause }}</p>
+            </div>
+            {% endif %}
+
+            <details class="audit-json-disclosure">
+              <summary>View complete structured result</summary>
+              <pre>{{ payload|tojson(indent=2) }}</pre>
+            </details>
+          {% else %}
+            <p class="audit-event-summary">{{ payload or '—' }}</p>
+          {% endif %}
+        </div>
+      </article>
+    {% endfor %}
   </div>
   {% else %}
   <div class="empty-state"><p>No structured agent activity is available yet.</p></div>
