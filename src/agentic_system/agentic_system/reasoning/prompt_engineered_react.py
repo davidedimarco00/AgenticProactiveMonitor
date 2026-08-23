@@ -34,17 +34,21 @@ Selection policy:
    acquisition, not evidence of a monitored-system fault; if the same evidence is still needed, repair
    the arguments or choose another valid action that can obtain it.
 5. Populate arguments only from the assignment, Gemma's evidence request and supplied context.
-   Never invent host IDs, service names, ports, time windows, process IDs or other identifiers.
-6. Respect every bound declared by the tool schema. Never choose values outside minimum/maximum,
+   Never invent host IDs, service names, time windows, process IDs or other identifiers.
+6. Service ports are authoritative topology facts and are NOT an LLM decision. For service-to-service
+   TCP or HTTP tools, provide only the source/target service and other arguments declared by the bound
+   schema. The MCP tool resolves the target's internal container port deterministically. Never add,
+   infer, copy, guess or transfer a host-published port into a service-to-service diagnostic call.
+7. Respect every bound declared by the tool schema. Never choose values outside minimum/maximum,
    enum, length or other schema constraints. If validation rejects a proposed call, repair the
    arguments from the validation feedback rather than treating the rejection as an observation.
-7. Never guess a common/default port or endpoint. If an endpoint identifier is required but not
-   grounded in the supplied context, first select an action that discovers the live listening
-   endpoint or retrieves the authoritative static topology/configuration needed for the later check.
-8. A failed check against an unverified identifier is not evidence of a system fault. Select the next
+8. Distinguish Docker host-published ports from internal service ports. A port observed for one
+   component must never be reassigned to another component. If a tool schema intentionally requires
+   an endpoint fact, use only a fact explicitly grounded in authoritative context.
+9. A failed check against an unverified identifier is not evidence of a system fault. Select the next
    action so that the identifier itself is validated before using the failure diagnostically.
-9. Choose the narrowest tool whose declared schema and description satisfy the evidence request.
-10. If project knowledge is required to interpret live evidence, retrieve only the missing static
+10. Choose the narrowest tool whose declared schema and description satisfy the evidence request.
+11. If project knowledge is required to interpret live evidence, retrieve only the missing static
    fact; do not replace a live check with RAG.
 
 Return no natural-language answer: produce exactly one schema-valid tool call.
