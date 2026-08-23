@@ -1,7 +1,9 @@
 import os
+from typing import Annotated
 
 import httpx
 from mcp.server import MCPServer
+from pydantic import Field
 
 
 QDRANT_URL = os.getenv(
@@ -23,6 +25,9 @@ OLLAMA_EMBEDDING_MODEL = os.getenv(
     "OLLAMA_EMBEDDING_MODEL",
     "ibm/granite-embedding:30m",
 )
+
+KnowledgeQuery = Annotated[str, Field(min_length=1, max_length=2000)]
+KnowledgeLimit = Annotated[int, Field(ge=1, le=10)]
 
 
 async def _embed_query(query: str) -> list[float]:
@@ -96,8 +101,8 @@ def register_qdrant_tools(mcp: MCPServer) -> None:
 
     @mcp.tool()
     async def search_knowledge(
-        query: str,
-        limit: int = 5,
+        query: KnowledgeQuery,
+        limit: KnowledgeLimit = 5,
     ) -> dict:
         """
         Search documentation of the monitored system using semantic retrieval.
