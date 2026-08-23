@@ -1,17 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Incidents · {{ app_name }}{% endblock %}
-{% block page_title %}Incident History{% endblock %}
-{% block page_actions %}<a class="secondary-button" href="/">Back to operations</a>{% endblock %}
+{% block page_title %}Incidents{% endblock %}
 
 {% block content %}
 <section class="panel filter-panel">
+  <div class="section-header compact">
+    <div>
+      <span class="eyebrow">INCIDENT HISTORY</span>
+      <h2>Investigation records</h2>
+      <p class="section-description">Browse completed and active incident investigations independently from the live Operations workspace.</p>
+    </div>
+  </div>
+
   <form class="filter-row" method="get" action="/incidents">
     <input class="search-input" type="search" name="q" value="{{ query }}" placeholder="Search incident, target, diagnosis or remediation">
     <select name="status" class="select-input">
       <option value="">All statuses</option>
       {% for value, label in [
-        ('NEW','New'),('TAKEN_IN_CHARGE','Taken in charge'),('UNDER_ANALYSIS','Under analysis'),
-        ('DIAGNOSED','Diagnosed'),('OPERATOR_ACTION_REQUIRED','Operator action required'),('RESOLVED','Resolved')
+        ('NEW','New'),('TAKEN_IN_CHARGE','Taken in charge'),('TRIAGED','Triaged'),('UNDER_ANALYSIS','Under analysis'),
+        ('DIAGNOSED','Diagnosed'),('OPERATOR_ACTION_REQUIRED','Operator action required'),('RESOLVED','Resolved'),('CLOSED','Closed')
       ] %}
         <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
       {% endfor %}
@@ -25,7 +32,7 @@
   <div class="section-header">
     <div>
       <span class="eyebrow">{{ incidents|length }} RECORD(S)</span>
-      <h2>Incidents</h2>
+      <h2>Incident history</h2>
     </div>
   </div>
 
