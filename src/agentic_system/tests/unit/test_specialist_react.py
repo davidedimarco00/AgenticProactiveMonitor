@@ -256,7 +256,10 @@ def test_inconclusive_finalization_can_stop_without_artificial_peer_request() ->
     }
     finalizer = FakeFinalizer([inconclusive])
 
-    result = asyncio.run(_investigate(_executor(finalizer=finalizer)))
+    # Inconclusive/no-peer is accepted at the actual bounded edge. If safe local
+    # ReAct steps were still available, observation_aware_react would correctly
+    # continue gathering evidence instead of stopping early.
+    result = asyncio.run(_investigate(_executor(finalizer=finalizer, max_steps=2)))
 
     assert result.diagnosis_status == "inconclusive"
     assert result.root_cause is None
