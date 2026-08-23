@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+
+from .langchain_agent import ReActEvidence
 from .structured_reasoning_react import SpecialistReActExecutor as _StructuredReActExecutor
 
 
@@ -27,16 +30,21 @@ Selection policy:
    but cannot prove that a runtime condition is currently true.
 3. Prefer one read-only observation that can confirm, weaken or reject the current causal hypothesis.
 4. Do not repeat a successful equivalent call already present in previous_tool_calls unless Gemma
-   explicitly requests a temporal comparison.
+   explicitly requests a temporal comparison. A previous call with success=false is a failed evidence
+   acquisition, not evidence of a monitored-system fault; if the same evidence is still needed, repair
+   the arguments or choose another valid action that can obtain it.
 5. Populate arguments only from the assignment, Gemma's evidence request and supplied context.
    Never invent host IDs, service names, ports, time windows, process IDs or other identifiers.
-6. Never guess a common/default port or endpoint. If an endpoint identifier is required but not
+6. Respect every bound declared by the tool schema. Never choose values outside minimum/maximum,
+   enum, length or other schema constraints. If validation rejects a proposed call, repair the
+   arguments from the validation feedback rather than treating the rejection as an observation.
+7. Never guess a common/default port or endpoint. If an endpoint identifier is required but not
    grounded in the supplied context, first select an action that discovers the live listening
    endpoint or retrieves the authoritative static topology/configuration needed for the later check.
-7. A failed check against an unverified identifier is not evidence of a system fault. Select the next
+8. A failed check against an unverified identifier is not evidence of a system fault. Select the next
    action so that the identifier itself is validated before using the failure diagnostically.
-8. Choose the narrowest tool whose declared schema and description satisfy the evidence request.
-9. If project knowledge is required to interpret live evidence, retrieve only the missing static
+9. Choose the narrowest tool whose declared schema and description satisfy the evidence request.
+10. If project knowledge is required to interpret live evidence, retrieve only the missing static
    fact; do not replace a live check with RAG.
 
 Return no natural-language answer: produce exactly one schema-valid tool call.
@@ -69,6 +77,18 @@ Causal validity policy:
   evidence instead of manufacturing a probable diagnosis.
 - A bounded execution budget is not diagnostic evidence. Never convert uncertainty into probable
   merely because the ReAct step limit is near or has been reached.
+
+Diagnostic-tool failure policy:
+- A failure of the diagnostic process is NOT a root cause of the monitored anomaly. Invalid tool
+  arguments, schema validation errors, tool timeouts, unavailable diagnostic endpoints, malformed
+  responses, duplicate-action saturation and other evidence-acquisition failures describe the
+  investigation process, not the monitored system.
+- Treat a failed diagnostic action as missing/unavailable evidence. It may justify correcting the
+  request, choosing another evidence source, reducing confidence, requesting cross-domain evidence,
+  or remaining inconclusive. It MUST NOT be used as the anomaly-producing mechanism unless the
+  diagnostic infrastructure itself is explicitly the monitored entity in the incident.
+- When a tool failed because the request was invalid and the intended observation is still useful,
+  request that evidence again with valid grounded parameters while the ReAct budget permits.
 
 Domain-boundary policy:
 - Investigate the delegated domain deeply enough to test its main plausible causes, but do not force
@@ -115,6 +135,14 @@ A root cause MUST be anomaly-producing. Normal-state facts such as a running ser
 existing TCP connections, normal CPU/memory, or general request handling are findings or hypothesis-
 elimination evidence, never root causes. The anomaly symptom itself is also not a root cause.
 
+Diagnostic-tool failure rule:
+- Tool execution/validation failures are investigation metadata, not monitored-system causes.
+  Invalid arguments, schema errors, timeouts, unavailable diagnostic services, malformed responses,
+  and duplicate-action saturation MUST NOT appear as root_cause or causal_chain elements unless the
+  incident explicitly concerns that diagnostic infrastructure.
+- Failed diagnostic actions may be reported as evidence gaps/findings about investigation quality,
+  but they do not increase diagnostic confidence and cannot justify probable or confirmed status.
+
 Bounded-closure rule:
 - Reaching the ReAct step limit, exhausting safe local actions, or encountering duplicate-action
   saturation is NOT evidence for a root cause and MUST NOT by itself upgrade inconclusive to probable.
@@ -147,3 +175,38 @@ Output discipline:
   postpone a safe diagnostic check that the current action layer can already perform.
 - never invent evidence, measurements, logs, architecture facts, identifiers or remediation.
 """.strip()
+
+    async def _execute_tool(
+        self,
+        *,
+        step: int,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> ReActEvidence:
+        """Treat tool-reported error states as failed evidence acquisition.
+
+        The underlying adapter can successfully execute an MCP function that
+        returns a structured ``status=error`` payload. Transport success does
+        not make that payload valid incident evidence, so surface it to Gemma as
+        ``success=False`` while preserving the diagnostic error details.
+        """
+
+        item = await super()._execute_tool(
+            step=step,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        if not item.success or not isinstance(item.observation, dict):
+            return item
+
+        status = str(item.observation.get("status") or "").strip().lower()
+        if status not in {"error", "failed", "failure"}:
+            return item
+
+        return ReActEvidence(
+            step=item.step,
+            tool=item.tool,
+            arguments=dict(item.arguments),
+            observation=dict(item.observation),
+            success=False,
+        )
