@@ -1,8 +1,9 @@
 import os
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
 from mcp.server import MCPServer
+from pydantic import Field
 
 
 HostId = Literal[
@@ -16,6 +17,9 @@ HostId = Literal[
 MetricName = Literal["cpu", "memory"]
 LogLevel = Literal["ALL", "DEBUG", "INFO", "WARN", "ERROR"]
 LogSource = Literal["all", "application", "system"]
+TimeWindowMinutes = Annotated[int, Field(ge=1, le=120)]
+ResultLimit = Annotated[int, Field(ge=1, le=100)]
+SearchText = Annotated[str, Field(min_length=1)]
 
 OPENSEARCH_URL = os.getenv(
     "OPENSEARCH_URL",
@@ -52,7 +56,7 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
     async def get_metrics(
         host_id: HostId,
         metric: MetricName,
-        minutes: int = 15,
+        minutes: TimeWindowMinutes = 15,
     ) -> dict:
         """
         Retrieve recent CPU or memory metrics for one monitored service.
@@ -151,10 +155,10 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
     @mcp.tool()
     async def get_logs(
         host_id: HostId,
-        minutes: int = 15,
+        minutes: TimeWindowMinutes = 15,
         level: LogLevel = "ALL",
         source: LogSource = "all",
-        limit: int = 30,
+        limit: ResultLimit = 30,
     ) -> dict:
         """
         Retrieve recent application or system logs for one monitored service.
@@ -265,9 +269,9 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
     @mcp.tool()
     async def search_logs(
         host_id: HostId,
-        query_text: str,
-        minutes: int = 30,
-        limit: int = 20,
+        query_text: SearchText,
+        minutes: TimeWindowMinutes = 30,
+        limit: ResultLimit = 20,
     ) -> dict:
         """
         Full-text search recent logs for one monitored service.
