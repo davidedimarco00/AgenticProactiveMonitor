@@ -55,6 +55,8 @@ def test_reasoning_policy_distinguishes_symptom_normal_state_and_root_cause() ->
     assert "candidate cause -> intermediate effect(s) -> reported anomaly" in policy
     assert "do not invent a local root cause" in policy
     assert "never from the detector name alone" in policy
+    assert "bounded execution budget is not diagnostic evidence" in policy
+    assert "Never convert uncertainty into probable" in policy
 
 
 def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> None:
@@ -70,3 +72,7 @@ def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> No
     assert "NEVER output confirmed or probable" in policy
     assert "Never use probable to mean" in policy
     assert "never remediation" in policy
+    assert "step limit" in policy
+    assert "duplicate-action saturation is NOT evidence" in policy
+    assert "MUST NOT by itself upgrade inconclusive to probable" in policy
+    assert "bounded inconclusive is a valid result" in policy
