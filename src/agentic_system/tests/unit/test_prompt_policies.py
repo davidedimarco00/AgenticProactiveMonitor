@@ -90,6 +90,9 @@ def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> No
     assert "bounded inconclusive is a valid result" in policy
     assert "Tool execution/validation failures are investigation metadata" in policy
     assert "MUST NOT appear as root_cause" in policy
+    assert "Decide ONLY assistance_domain" in policy
+    assert "Do NOT output assistance_required" in policy
+    assert "runtime derives it from assistance_domain" in policy
 
 
 def test_technical_lead_rejects_diagnostic_process_failures_as_root_causes() -> None:
