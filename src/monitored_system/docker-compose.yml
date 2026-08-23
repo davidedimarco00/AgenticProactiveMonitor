@@ -29,7 +29,7 @@ services:
       NETWORK_TARGET_NAME: api-gateway
       NETWORK_PING_TARGET: api-gateway
       NETWORK_TCP_TARGET: api-gateway:5000
-      NETWORK_PROBE_PATH: /notes/new
+      APPLICATION_PROBE_PATH: /health
     depends_on:
       - api-gateway
 
@@ -53,7 +53,7 @@ services:
       NETWORK_TARGET_NAME: processing-service
       NETWORK_PING_TARGET: processing-service
       NETWORK_TCP_TARGET: processing-service:8000
-      NETWORK_PROBE_PATH: /docs
+      APPLICATION_PROBE_PATH: /health
     depends_on:
       - processing-service
 
@@ -76,7 +76,7 @@ services:
       NETWORK_TARGET_NAME: data-service
       NETWORK_PING_TARGET: data-service
       NETWORK_TCP_TARGET: data-service:8000
-      NETWORK_PROBE_PATH: /docs
+      APPLICATION_PROBE_PATH: /health
     depends_on:
       - data-service
 
@@ -96,7 +96,7 @@ services:
       NETWORK_TARGET_NAME: processing-service
       NETWORK_PING_TARGET: processing-service
       NETWORK_TCP_TARGET: processing-service:8000
-      NETWORK_PROBE_PATH: /docs
+      APPLICATION_PROBE_PATH: /health
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - notes-data:/var/lib/notes
@@ -116,7 +116,7 @@ services:
       NETWORK_TARGET_NAME: api-gateway
       NETWORK_PING_TARGET: api-gateway
       NETWORK_TCP_TARGET: api-gateway:5000
-      NETWORK_PROBE_PATH: /notes/new
+      APPLICATION_PROBE_PATH: /health
 
 networks:
   monitored-system-net:
