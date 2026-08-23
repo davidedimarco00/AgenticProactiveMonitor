@@ -127,6 +127,13 @@ class SpecialistReActExecutor(_PromptEngineeredExecutor):
 
     FINALIZATION_POLICY = (
         _PromptEngineeredExecutor.FINALIZATION_POLICY
+        .replace("assistance_required=false.", "assistance_domain=null.")
+        .replace("set assistance_required=true.", "set assistance_domain to that peer domain.")
+        .replace("When assistance_required=true", "When assistance_domain is non-null")
+        .replace(
+            "assistance_required=false rather than inventing a cause.",
+            "assistance_domain=null rather than inventing a cause.",
+        )
         + """
 
 Peer-assistance output contract:
