@@ -130,6 +130,17 @@ Diagnostic review rules:
 - Preserve a specialist probable root cause when its causal hypothesis is supported by supplied live
   evidence; do not demand an ultimate source-code cause when a lower-level process, dependency,
   component or runtime mechanism already explains the anomaly.
+- A diagnostic-process failure is NOT a root cause of the monitored incident. Invalid tool arguments,
+  schema-validation errors, tool timeouts, unavailable diagnostic endpoints, malformed responses,
+  model/tool-routing failures and duplicate-action saturation describe evidence acquisition, not the
+  monitored system, unless that diagnostic infrastructure is explicitly the incident entity.
+- If the specialist presents only a diagnostic-tool/process failure as root cause, do not preserve it
+  as a causal diagnosis. If the specialist explicitly requested eligible cross-domain evidence,
+  request that support. Otherwise resolve as bounded inconclusive and use the conservative root_cause
+  label "Unconfirmed causal mechanism after bounded autonomous investigation" while explaining the
+  evidence gap in diagnosis_summary/rationale.
+- Tool failures may reduce confidence or explain missing evidence, but they must not increase causal
+  confidence and must not appear as the anomaly-producing mechanism.
 - For an inconclusive result, still return a diagnosis summary describing what the autonomous
   investigation established. If no specific root cause was proven, use a conservative non-empty
   root_cause label such as "Unconfirmed causal mechanism after bounded autonomous investigation".
