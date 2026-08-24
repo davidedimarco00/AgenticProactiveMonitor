@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -10,6 +11,9 @@ from pydantic import ValidationError
 
 from .diagnostic_react import SpecialistReActExecutor as _EvidenceFirstExecutor
 from .langchain_agent import ReActEvidence, ReActInvestigationError
+
+
+LOGGER = logging.getLogger("agentic_system.reasoning.schema_validated_react")
 
 
 class SpecialistReActExecutor(_EvidenceFirstExecutor):
@@ -89,18 +93,41 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
         properties = self._tool_schema_properties(tool)
         target_component = str(request.get("target_component") or "").strip()
         related_component = str(request.get("related_component") or "").strip()
+        tool_name = str(getattr(tool, "name", "")).strip()
 
         if target_component:
             for field in self._PRIMARY_TARGET_ARGUMENTS:
-                if field in properties:
-                    clean_args[field] = target_component
-                    break
+                if field not in properties:
+                    continue
+                original = str(clean_args.get(field) or "").strip()
+                clean_args[field] = target_component
+                if original and original != target_component:
+                    LOGGER.info(
+                        "Rebound Qwen primary target before MCP execution: tool=%s field=%s "
+                        "model_value=%s evidence_target=%s",
+                        tool_name,
+                        field,
+                        original,
+                        target_component,
+                    )
+                break
 
         if related_component:
             for field in self._RELATED_TARGET_ARGUMENTS:
-                if field in properties:
-                    clean_args[field] = related_component
-                    break
+                if field not in properties:
+                    continue
+                original = str(clean_args.get(field) or "").strip()
+                clean_args[field] = related_component
+                if original and original != related_component:
+                    LOGGER.info(
+                        "Rebound Qwen related target before MCP execution: tool=%s field=%s "
+                        "model_value=%s evidence_target=%s",
+                        tool_name,
+                        field,
+                        original,
+                        related_component,
+                    )
+                break
 
         return clean_args
 
