@@ -37,6 +37,47 @@ def _detector_display_name(
     return f"single-entity-detector:{detector_id}"
 
 
+def _anomaly_payload(
+    observation: AnomalyObservation,
+    *,
+    detector_name: str,
+    detector_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Persist detector semantics needed to keep later diagnosis on the right signal."""
+
+    context = dict(detector_context or {})
+    description = str(
+        context.get("description") or observation.detector_description or ""
+    ).strip()
+    raw_indices = context.get("indices") or observation.detector_indices or []
+    indices = [str(index) for index in raw_indices] if isinstance(raw_indices, (list, tuple)) else []
+
+    return {
+        "detector_id": observation.detector_id,
+        "detector_name": detector_name,
+        "detector_type": str(context.get("detector_type") or "SINGLE_ENTITY"),
+        "detector_description": description,
+        "detector_indices": indices,
+        "time_field": context.get("time_field"),
+        "measurement_name": context.get("measurement_name"),
+        "feature_name": context.get("feature_name"),
+        "feature_field": context.get("feature_field"),
+        "anomaly_type": (
+            "opensearch_anomaly"
+            if observation.source == "opensearch"
+            else "synthetic_test_anomaly"
+        ),
+        "grade": observation.anomaly_grade,
+        "confidence": observation.confidence,
+        "anomaly_score": observation.anomaly_score,
+        "data_start_time": observation.data_start_time,
+        "data_end_time": observation.data_end_time,
+        "execution_start_time": observation.execution_start_time,
+        "execution_end_time": observation.execution_end_time,
+        "source": observation.source,
+    }
+
+
 class IncidentWorkflow:
     """Create, correlate and update the lifecycle of persisted incidents."""
 
@@ -62,6 +103,11 @@ class IncidentWorkflow:
             observation.detector_id,
             observation.detector_name,
         )
+        anomaly_payload = _anomaly_payload(
+            observation,
+            detector_name=detector_name,
+            detector_context=detector_context,
+        )
         existing = await self.repository.find_active_incident_by_detector(
             observation.detector_id
         )
@@ -75,18 +121,7 @@ class IncidentWorkflow:
                 incident_id,
                 {
                     "entity": detector_name,
-                    "anomaly": {
-                        "detector_id": observation.detector_id,
-                        "detector_name": detector_name,
-                        "anomaly_type": (
-                            "opensearch_anomaly"
-                            if observation.source == "opensearch"
-                            else "synthetic_test_anomaly"
-                        ),
-                        "grade": observation.anomaly_grade,
-                        "confidence": observation.confidence,
-                        "source": observation.source,
-                    },
+                    "anomaly": anomaly_payload,
                 },
             )
             if updated is None:
@@ -146,16 +181,7 @@ class IncidentWorkflow:
                     "automatic_opensearch_anomaly" if is_opensearch else "synthetic_test_anomaly",
                     "single_entity_detector",
                 ],
-                "anomaly": {
-                    "detector_id": observation.detector_id,
-                    "detector_name": detector_name,
-                    "anomaly_type": (
-                        "opensearch_anomaly" if is_opensearch else "synthetic_test_anomaly"
-                    ),
-                    "grade": observation.anomaly_grade,
-                    "confidence": observation.confidence,
-                    "source": observation.source,
-                },
+                "anomaly": anomaly_payload,
                 "detected_at": detected_at,
             }
         )
