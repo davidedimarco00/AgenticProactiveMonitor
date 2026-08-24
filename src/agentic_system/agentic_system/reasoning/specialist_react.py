@@ -466,8 +466,8 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         payload["anchor_component"] = str(anchor.get("affected_component") or "unknown")
         return payload
 
-    def _validate_tool_args(self, tool: Any, args: dict[str, Any]) -> dict[str, Any]:
-        clean_args = super()._validate_tool_args(tool, args)
+    def _validate_tool_semantics(self, tool: Any, args: dict[str, Any]) -> dict[str, Any]:
+        clean_args = dict(args)
         request = self._active_evidence_request
         if request is None:
             # Compatibility path for injected/offline providers that still emit
@@ -539,6 +539,26 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         elif action == "finish":
             normalized["evidence_needed"] = None
         return normalized
+
+    @staticmethod
+    def _reasoning_messages_have_live_evidence(messages: list[dict[str, str]]) -> bool:
+        for message in reversed(messages):
+            if str(message.get("role") or "").strip().lower() != "user":
+                continue
+            try:
+                payload = json.loads(str(message.get("content") or ""))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            collected = payload.get("collected_evidence") if isinstance(payload, dict) else None
+            if not isinstance(collected, list):
+                continue
+            return any(
+                isinstance(item, dict)
+                and bool(item.get("success"))
+                and "search_knowledge" not in str(item.get("tool") or "").lower()
+                for item in collected
+            )
+        return False
 
     async def _provider_reasoning_request(
         self,
@@ -643,6 +663,11 @@ class SpecialistReActExecutor(_CoreReActExecutor):
             ) from exc
 
         decision = _StructuredReasoningDecision.model_validate(raw)
+        if decision.action == "finish" and not self._reasoning_messages_have_live_evidence(messages):
+            raise ValueError(
+                "finish requires at least one successful live diagnostic observation; "
+                "request structured evidence instead"
+            )
         if decision.evidence_request is not None and self._active_reasoning_assignment is not None:
             normalized_request = self._normalize_and_validate_evidence_request(
                 decision.evidence_request,
