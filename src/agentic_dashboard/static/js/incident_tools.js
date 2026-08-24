@@ -46,13 +46,16 @@
   };
 
   const addDelimitedTools = (text, target) => {
-    const raw = String(text || "").trim();
+    let raw = String(text || "").trim();
     if (!raw) return;
 
     try {
       const parsed = JSON.parse(raw);
-      collectToolNames(parsed, target, "tools_used");
-      return;
+      if (Array.isArray(parsed) || (parsed && typeof parsed === "object")) {
+        collectToolNames(parsed, target, "tools_used");
+        return;
+      }
+      if (typeof parsed === "string" && parsed !== raw) raw = parsed.trim();
     } catch (_) {
       // Some persisted model results are Python-style stringified lists rather than JSON.
     }
@@ -177,7 +180,13 @@
     if (updated) updated.textContent = formatTimestamp(incident?.updated_at);
 
     if (!tools.length) {
-      if (empty) empty.hidden = false;
+      if (empty) {
+        empty.hidden = false;
+        const title = empty.querySelector("strong");
+        const copy = empty.querySelector("p");
+        if (title) title.textContent = "No diagnostic tool calls recorded yet.";
+        if (copy) copy.textContent = "The list will populate automatically when ReAct or RAG tool usage is persisted in the incident timeline.";
+      }
       grid.hidden = true;
       return;
     }
