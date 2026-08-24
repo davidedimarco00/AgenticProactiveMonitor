@@ -7,13 +7,15 @@ from agentic_system.reasoning.langchain_agent import (
 )
 
 
-def test_reasoning_schema_requires_evidence_needed_field() -> None:
+def test_reasoning_schema_requires_structured_evidence_request_field() -> None:
     schema = SpecialistReActExecutor._reasoning_json_schema()
 
-    assert "evidence_needed" in schema["required"]
+    assert "evidence_request" in schema["required"]
+    assert "evidence_request" in schema["properties"]
+    assert "evidence_needed" not in schema["properties"]
 
 
-def test_missing_evidence_needed_is_recovered_from_decision_summary() -> None:
+def test_legacy_injected_provider_missing_evidence_needed_is_recovered_from_summary() -> None:
     normalized = SpecialistReActExecutor._normalize_reasoning_payload(
         {
             "action": "gather_evidence",
@@ -27,7 +29,7 @@ def test_missing_evidence_needed_is_recovered_from_decision_summary() -> None:
     )
 
 
-def test_finish_forces_evidence_needed_to_null() -> None:
+def test_legacy_injected_provider_finish_forces_evidence_needed_to_null() -> None:
     normalized = SpecialistReActExecutor._normalize_reasoning_payload(
         {
             "action": "finish",
@@ -126,6 +128,7 @@ def test_consolidated_executor_keeps_bounded_semantics_without_probable_promotio
     assert "_finalize" in SpecialistReActExecutor.__dict__
     assert "_retrieve_initial_rag_grounding" in SpecialistReActExecutor.__dict__
     assert "_build_incident_anchor" in SpecialistReActExecutor.__dict__
+    assert "_validate_tool_semantics" in SpecialistReActExecutor.__dict__
 
 
 def test_specialist_react_is_capped_at_six_cycles() -> None:
