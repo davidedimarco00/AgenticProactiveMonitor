@@ -57,8 +57,8 @@ def test_focus_policies_forbid_silent_cross_domain_symptom_pivot() -> None:
     finalization = " ".join(SpecialistReActExecutor.FINALIZATION_POLICY.split())
 
     assert "reported anomaly signal as INVARIANT" in reasoning
-    assert "never replace it with an unrelated symptom" in reasoning
-    assert "Off-domain evidence is secondary" in reasoning
-    assert "incident_anchor.primary_diagnostic_question" in selection
-    assert "generic MCP server health-check named ping" in selection
+    assert "never silently replace it with another symptom" in reasoning
+    assert "remaining hypothesis belongs to another specialist domain" in reasoning
+    assert "incident_anchor is authoritative focus context" in selection
+    assert "generic MCP health-check ping is not an incident diagnostic action" in selection
     assert "must explain incident_anchor.observed_signal" in finalization
