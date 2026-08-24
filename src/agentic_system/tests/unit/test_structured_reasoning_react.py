@@ -1,10 +1,10 @@
 from agentic_system.agents.factory import MAX_DIAGNOSTIC_REACT_STEPS
+from agentic_system.reasoning import SpecialistReActExecutor
 from agentic_system.reasoning.langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
     _ReasoningDecision,
 )
-from agentic_system.reasoning.structured_reasoning_react import SpecialistReActExecutor
 
 
 def test_reasoning_schema_requires_evidence_needed_field() -> None:
@@ -119,11 +119,13 @@ def test_hard_stop_with_live_evidence_remains_inconclusive() -> None:
     assert output.assistance_domain is None
 
 
-def test_structured_executor_no_longer_contains_bounded_probable_promotion_hooks() -> None:
+def test_consolidated_executor_keeps_bounded_semantics_without_probable_promotion() -> None:
     assert "_promote_bounded_best_effort" not in SpecialistReActExecutor.__dict__
     assert "_is_bounded_closure" not in SpecialistReActExecutor.__dict__
     assert "_has_successful_live_evidence" not in SpecialistReActExecutor.__dict__
-    assert "_finalize" not in SpecialistReActExecutor.__dict__
+    assert "_finalize" in SpecialistReActExecutor.__dict__
+    assert "_retrieve_initial_rag_grounding" in SpecialistReActExecutor.__dict__
+    assert "_build_incident_anchor" in SpecialistReActExecutor.__dict__
 
 
 def test_specialist_react_is_capped_at_six_cycles() -> None:
