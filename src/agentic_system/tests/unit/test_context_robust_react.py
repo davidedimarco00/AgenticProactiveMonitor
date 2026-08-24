@@ -52,6 +52,7 @@ def _native_executor() -> SpecialistReActExecutor:
     provider.base_url = "http://ollama:11434"
     executor.reasoning_provider = provider
     executor.tool_timeout_seconds = 30.0
+    executor._active_reasoning_assignment = None
     return executor
 
 
@@ -86,7 +87,7 @@ def test_configured_ollama_context_rejects_invalid_values(monkeypatch, value: st
         _configured_ollama_context()
 
 
-def test_native_reasoning_sends_num_ctx_and_schema_in_prompt(monkeypatch) -> None:
+def test_native_reasoning_sends_num_ctx_and_structured_evidence_schema(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_LLM_CONTEXT", "8192")
     monkeypatch.setattr(module.httpx, "AsyncClient", _FakeAsyncClient)
     _FakeAsyncClient.last_payload = None
@@ -98,9 +99,20 @@ def test_native_reasoning_sends_num_ctx_and_schema_in_prompt(monkeypatch) -> Non
             "content": json.dumps(
                 {
                     "action": "gather_evidence",
-                    "decision_summary": "Collect current CPU evidence.",
+                    "decision_summary": "Collect current CPU attribution evidence.",
                     "current_hypothesis": "A CPU-bound workload may be saturating the service.",
-                    "evidence_needed": "Current processing-service CPU usage.",
+                    "evidence_request": {
+                        "kind": "process_attribution",
+                        "target_component": "processing-service",
+                        "related_component": None,
+                        "purpose": "Identify the process responsible for current CPU consumption.",
+                        "time_scope": "current",
+                        "causal_relation": "attribute_cause",
+                        "causal_link": (
+                            "A CPU-consuming process would directly explain the reported "
+                            "container CPU anomaly."
+                        ),
+                    },
                 }
             ),
         },
@@ -117,11 +129,16 @@ def test_native_reasoning_sends_num_ctx_and_schema_in_prompt(monkeypatch) -> Non
     )
 
     assert decision.action == "gather_evidence"
+    assert decision.evidence_request is not None
+    assert decision.evidence_request.kind == "process_attribution"
+    assert decision.evidence_needed == "Identify the process responsible for current CPU consumption."
     payload = _FakeAsyncClient.last_payload
     assert payload is not None
     assert payload["options"]["num_ctx"] == 8192
     assert payload["options"]["temperature"] == 0
     assert payload["format"]["type"] == "object"
+    assert "evidence_request" in payload["format"]["properties"]
+    assert "evidence_needed" not in payload["format"]["properties"]
     assert any(
         message["role"] == "system" and "JSON Schema" in message["content"]
         for message in payload["messages"]
