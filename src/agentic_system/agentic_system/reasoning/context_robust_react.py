@@ -37,7 +37,15 @@ def _configured_ollama_context() -> int:
 
 
 class _ContextAwarePromptGemmaDiagnosticFinalizer(_PromptGemmaDiagnosticFinalizer):
-    """Prompt finalizer that applies the configured Ollama context explicitly."""
+    """Prompt finalizer that applies context while preserving schema feedback.
+
+    JSON syntax errors are transport/serialization failures and are wrapped with
+    bounded Ollama diagnostics. A syntactically valid JSON object that violates
+    the diagnostic Pydantic contract is deliberately *not* wrapped: its
+    ValidationError must propagate to the parent bounded repair loop so Gemma
+    receives the exact semantic rejection reason and can correct only the final
+    structured object using the same evidence.
+    """
 
     def __init__(
         self,
@@ -100,14 +108,22 @@ class _ContextAwarePromptGemmaDiagnosticFinalizer(_PromptGemmaDiagnosticFinalize
         content = str(message.get("content") or "").strip()
         if not content:
             raise RuntimeError("Ollama diagnostic finalizer returned empty content")
+
+        # Keep syntax and semantic/schema failures separate. The parent
+        # collaboration finalizer already catches Pydantic ValidationError and
+        # turns it into precise bounded repair feedback for the next Gemma
+        # attempt. Wrapping that error here would hide the useful reason.
         try:
-            return _PromptDiagnosticFinalOutput.model_validate_json(content)
-        except Exception as exc:
+            raw = json.loads(content)
+        except json.JSONDecodeError as exc:
             done_reason = str(body.get("done_reason") or "unknown")
             raise RuntimeError(
-                "Ollama diagnostic finalizer returned invalid structured JSON "
-                f"(content_chars={len(content)}, done_reason={done_reason})"
+                "Ollama diagnostic finalizer returned invalid JSON syntax "
+                f"(content_chars={len(content)}, done_reason={done_reason}, "
+                f"num_ctx={self.context_size})"
             ) from exc
+
+        return _PromptDiagnosticFinalOutput.model_validate(raw)
 
 
 class SpecialistReActExecutor(_GroundedCollaborativeExecutor):
@@ -119,8 +135,8 @@ class SpecialistReActExecutor(_GroundedCollaborativeExecutor):
 
     - ``AGENT_LLM_CONTEXT`` is sent as Ollama ``num_ctx``;
     - the reasoning JSON Schema is included both in ``format`` and in the prompt;
-    - malformed structured output reports bounded diagnostics without exposing
-      or reinterpreting the generated text.
+    - malformed JSON is distinguished from schema-invalid diagnostic content;
+    - diagnostic schema ValidationError reaches the existing bounded repair loop.
     """
 
     @staticmethod
