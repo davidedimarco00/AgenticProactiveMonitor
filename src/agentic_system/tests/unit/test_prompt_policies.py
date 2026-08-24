@@ -70,8 +70,13 @@ def test_reasoning_policy_distinguishes_symptom_normal_state_and_root_cause() ->
     assert "Diagnostic-tool failure policy" in policy
     assert "failure of the diagnostic process is NOT a root cause" in policy
     assert "Treat a failed diagnostic action as missing/unavailable evidence" in policy
-    assert "DNS/ICMP/TCP/HTTP connectivity" in policy
+    # The consolidated reasoning policy keeps transport diagnostics in the
+    # network domain and HTTP/service behaviour in the application domain.
+    # The tool-selection policy still exposes DNS/ICMP/TCP/HTTP actions, but
+    # reasoning should preserve the semantic domain boundary instead of testing
+    # the historical combined wording.
     assert "DNS/ICMP/TCP/sockets/routes/connectivity/network latency" in policy
+    assert "HTTP/dependencies/application timing" in policy
 
 
 def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> None:
