@@ -7,13 +7,13 @@ from .bdi import (
     BDITriageResult,
     TechnicalLeadReviewBDIRuntime,
 )
-from .incident_focus_react import SpecialistReActExecutor
 from .langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
     ReActInvestigationResult,
 )
 from .models import RoleLLMProvider, SharedInferenceGate
+from .specialist_react import SpecialistReActExecutor
 
 __all__ = [
     "AgentSpeakBDIRuntime",
