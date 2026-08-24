@@ -38,6 +38,22 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
         validated = input_schema.model_validate(args)
         return validated.model_dump(exclude_none=True)
 
+    def _bind_tool_arguments(
+        self,
+        tool: Any,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project extension point for deterministic argument binding.
+
+        The generic engine leaves model-produced arguments untouched. A
+        project-specific executor may bind authoritative arguments, such as an
+        evidence target already selected by the reasoning contract, before JSON
+        Schema validation. This avoids asking the action model to re-decide facts
+        that are already fixed elsewhere in the workflow.
+        """
+
+        return dict(args)
+
     def _validate_tool_semantics(
         self,
         tool: Any,
@@ -96,7 +112,8 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                     raise RuntimeError("Qwen tool arguments are not a JSON object")
 
                 tool = self._langchain_tool_by_name[name]
-                clean_args = self._validate_tool_args(tool, args)
+                bound_args = self._bind_tool_arguments(tool, dict(args))
+                clean_args = self._validate_tool_args(tool, bound_args)
                 clean_args = self._validate_tool_semantics(tool, clean_args)
                 duplicate = any(
                     item.success and item.tool == name and item.arguments == clean_args
@@ -118,8 +135,10 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                             "role": "user",
                             "content": (
                                 "The proposed tool call was rejected BEFORE MCP execution. Repair "
-                                "the arguments without changing Gemma's evidence goal. Validation "
-                                f"feedback: {exc}. Select exactly one bound tool with valid arguments."
+                                "the tool choice or non-authoritative arguments without changing "
+                                "Gemma's evidence goal. Authoritative target arguments are bound "
+                                "deterministically by the runtime. Validation feedback: "
+                                f"{exc}. Select exactly one bound tool with valid arguments."
                             ),
                         }
                     )
