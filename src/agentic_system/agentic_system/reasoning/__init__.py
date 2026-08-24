@@ -7,7 +7,7 @@ from .bdi import (
     BDITriageResult,
     TechnicalLeadReviewBDIRuntime,
 )
-from .context_robust_react import SpecialistReActExecutor
+from .incident_focus_react import SpecialistReActExecutor
 from .langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
