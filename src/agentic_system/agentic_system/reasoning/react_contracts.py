@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import (
@@ -13,10 +13,31 @@ from pydantic import (
     model_validator,
 )
 
-from .langchain_agent import AssistanceDomain, DiagnosisStatus
+from .langchain_agent import AssistanceDomain, DiagnosisStatus, ReasoningAction
 
 
 _DEFAULT_OLLAMA_CONTEXT = 8192
+
+EvidenceKind = Literal[
+    "metric_history",
+    "runtime_resource_state",
+    "process_attribution",
+    "process_detail",
+    "log_evidence",
+    "network_path",
+    "application_endpoint",
+    "storage_state",
+    "static_knowledge",
+]
+EvidenceTimeScope = Literal["anomaly_window", "recent_history", "current", "static"]
+EvidenceCausalRelation = Literal[
+    "measure_signal",
+    "attribute_cause",
+    "test_hypothesis",
+    "temporal_compare",
+    "static_context",
+    "cross_domain_hypothesis",
+]
 
 
 def _configured_ollama_context() -> int:
@@ -30,6 +51,103 @@ def _configured_ollama_context() -> int:
     if value <= 0:
         raise RuntimeError("AGENT_LLM_CONTEXT must be greater than zero")
     return value
+
+
+class _EvidenceRequest(BaseModel):
+    """Semantic contract between Gemma reasoning and Qwen action selection.
+
+    Gemma decides the evidence family and diagnostic purpose without naming a
+    concrete MCP tool. Qwen remains responsible for selecting one compatible
+    bound tool and valid arguments. The incident signal itself is not an LLM
+    field; the runtime attaches it from the deterministic incident anchor.
+    """
+
+    kind: EvidenceKind
+    target_component: str
+    related_component: str | None = None
+    purpose: str
+    time_scope: EvidenceTimeScope
+    causal_relation: EvidenceCausalRelation
+    causal_link: str
+
+    @field_validator("target_component", "purpose", "causal_link")
+    @classmethod
+    def _required_text_not_empty(cls, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError("evidence request text fields cannot be empty")
+        return normalized
+
+    @field_validator("related_component", mode="before")
+    @classmethod
+    def _normalize_related_component(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if normalized.lower() in {"", "none", "null", "n/a"}:
+            return None
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_static_semantics(self) -> "_EvidenceRequest":
+        if self.kind == "static_knowledge":
+            if self.time_scope != "static":
+                raise ValueError("static_knowledge requires time_scope=static")
+            if self.causal_relation != "static_context":
+                raise ValueError("static_knowledge requires causal_relation=static_context")
+        elif self.time_scope == "static" or self.causal_relation == "static_context":
+            raise ValueError(
+                "runtime evidence requests cannot use static time/context semantics"
+            )
+        return self
+
+
+class _StructuredReasoningDecision(BaseModel):
+    """Production Gemma reasoning contract with an explicit evidence request.
+
+    ``evidence_needed`` remains available as a computed compatibility view for
+    the lower-level ReAct loop, but it is derived from the structured request
+    rather than being a second free-text decision channel.
+    """
+
+    action: ReasoningAction
+    decision_summary: str
+    current_hypothesis: str | None = None
+    evidence_request: _EvidenceRequest | None = None
+
+    @computed_field(return_type=str | None)
+    @property
+    def evidence_needed(self) -> str | None:
+        if self.evidence_request is None:
+            return None
+        return self.evidence_request.purpose
+
+    @field_validator("decision_summary")
+    @classmethod
+    def _decision_summary_not_empty(cls, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError("decision_summary cannot be empty")
+        return normalized
+
+    @field_validator("current_hypothesis", mode="before")
+    @classmethod
+    def _normalize_hypothesis(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if normalized.lower() in {"", "none", "null", "unknown", "unconfirmed"}:
+            return None
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_action_contract(self) -> "_StructuredReasoningDecision":
+        if self.action == "gather_evidence":
+            if self.evidence_request is None:
+                raise ValueError("gather_evidence requires evidence_request")
+        elif self.evidence_request is not None:
+            raise ValueError("finish requires evidence_request=null")
+        return self
 
 
 class _PromptDiagnosticFinalOutput(BaseModel):
