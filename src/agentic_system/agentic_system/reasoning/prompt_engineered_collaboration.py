@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from typing import Any
 
@@ -8,7 +9,13 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError, computed_field, field_validator, model_validator
 
 from .diagnostic_react import _ROLE_DOMAIN
-from .langchain_agent import AssistanceDomain, DiagnosisStatus, ReActEvidence, ReActInvestigationError
+from .langchain_agent import (
+    AssistanceDomain,
+    DiagnosisStatus,
+    ReActEvidence,
+    ReActInvestigationError,
+    ReActInvestigationResult,
+)
 from .prompt_engineered_react import SpecialistReActExecutor as _PromptEngineeredExecutor
 
 
@@ -123,12 +130,35 @@ class _PromptGemmaDiagnosticFinalizer:
 
 
 class SpecialistReActExecutor(_PromptEngineeredExecutor):
-    """Prompt-engineered executor with a non-contradictory collaboration contract."""
+    """Prompt-engineered executor with RAG grounding and bounded collaboration.
 
-    TOOL_SELECTION_POLICY = _PromptEngineeredExecutor.TOOL_SELECTION_POLICY.replace(
-        "DNS/TCP/HTTP connectivity",
-        "DNS/ICMP/TCP/HTTP connectivity",
-    )
+    Every investigation performs one deterministic, read-only Qdrant retrieval before
+    ReAct step 1 when ``search_knowledge`` is available. The retrieved chunks are static
+    project context, not live incident evidence, and therefore do not consume the bounded
+    ReAct evidence budget. The normal RAG tool remains available for additional targeted
+    retrieval if a new static knowledge gap emerges during reasoning.
+    """
+
+    INITIAL_RAG_LIMIT = 4
+    _STATIC_GROUNDING_KEY = "static_project_grounding"
+
+    TOOL_SELECTION_POLICY = (
+        _PromptEngineeredExecutor.TOOL_SELECTION_POLICY.replace(
+            "DNS/TCP/HTTP connectivity",
+            "DNS/ICMP/TCP/HTTP connectivity",
+        )
+        + """
+
+Initial RAG grounding policy:
+- The assignment may already contain static_project_grounding retrieved from Qdrant before step 1.
+- Use that grounding for known monitored-system topology, dependencies, configuration, telemetry
+  semantics, endpoint meaning, expected behaviour and relevant runbooks.
+- Do not spend a ReAct step repeating a broad knowledge search when the initial grounding already
+  answers the static question. search_knowledge remains available for a NEW, specific static gap.
+- Static grounding never proves that a runtime condition is currently true; select a live tool when
+  Gemma asks for current-state evidence.
+"""
+    ).strip()
 
     REASONING_POLICY = (
         _PromptEngineeredExecutor.REASONING_POLICY
@@ -140,7 +170,19 @@ class SpecialistReActExecutor(_PromptEngineeredExecutor):
             "network =\n  DNS/TCP/sockets/routes/connectivity/network latency",
             "network =\n  DNS/ICMP/TCP/sockets/routes/connectivity/network latency",
         )
-    )
+        + """
+
+Initial RAG grounding policy:
+- Before the first bounded ReAct step, the runtime may attach static_project_grounding to the
+  assignment. Read and USE it when forming hypotheses and interpreting live observations.
+- Grounding can establish static project facts such as architecture, dependencies, configuration,
+  telemetry semantics, expected service behaviour and runbook guidance.
+- Grounding is NOT live evidence and cannot confirm that a fault is currently occurring. A current
+  incident claim still requires live MCP/OpenSearch observations.
+- Prefer using the already retrieved grounding before requesting another broad RAG lookup. Request
+  search_knowledge during ReAct only when a new, specific project-fact gap remains.
+"""
+    ).strip()
 
     FINALIZATION_POLICY = (
         _PromptEngineeredExecutor.FINALIZATION_POLICY
@@ -153,6 +195,13 @@ class SpecialistReActExecutor(_PromptEngineeredExecutor):
         )
         + """
 
+Initial RAG grounding policy:
+- static_project_grounding in the assignment is authoritative project context retrieved from Qdrant.
+- Use it to interpret topology, dependencies, configuration, telemetry semantics, service behaviour
+  and runbook expectations when building the causal explanation.
+- Do NOT treat static grounding as proof of a current runtime failure. confirmed/probable incident
+  mechanisms must still be supported by the collected live observations required by the policies above.
+
 Peer-assistance output contract:
 - Decide ONLY assistance_domain. Use system, network, application, software, or null.
 - Do NOT output assistance_required; the runtime derives it from assistance_domain.
@@ -161,6 +210,223 @@ Peer-assistance output contract:
 - For confirmed diagnosis assistance_domain MUST be null.
 """
     ).strip()
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Task-scoped storage avoids mixing grounding between concurrent incidents.
+        self._initial_rag_context_by_task: dict[str, dict[str, Any]] = {}
+
+    @classmethod
+    def _build_initial_rag_query(
+        cls,
+        *,
+        agent_role: str,
+        severity: str,
+        entity: str,
+        anomaly: dict[str, Any],
+    ) -> str:
+        """Build a deterministic project-grounding query without LLM-authored facts."""
+
+        anomaly_snapshot = json.dumps(
+            anomaly,
+            default=str,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if len(anomaly_snapshot) > 1100:
+            anomaly_snapshot = anomaly_snapshot[:1100] + "..."
+
+        query = (
+            "Retrieve authoritative monitored-system context for an incident investigation. "
+            f"Specialist role: {agent_role.strip().lower()}. "
+            f"Affected entity: {entity}. Severity: {severity}. "
+            f"Anomaly metadata: {anomaly_snapshot}. "
+            "Prioritize architecture, service dependencies, configuration, telemetry semantics, "
+            "expected service behaviour, endpoint/request flow and relevant diagnostic runbooks. "
+            "Return project-specific facts useful for interpreting later live evidence; do not "
+            "infer current runtime state."
+        )
+        # search_knowledge accepts at most 2000 characters.
+        return query[:2000]
+
+    def _knowledge_tool_name(self) -> str | None:
+        for name in sorted(self._tool_names):
+            normalized = name.strip().lower()
+            if normalized == "search_knowledge" or normalized.endswith("search_knowledge"):
+                return name
+        return None
+
+    def _assignment_with_grounding(self, assignment: dict[str, Any]) -> dict[str, Any]:
+        task_id = str(assignment.get("task_id") or "").strip()
+        grounding = self._initial_rag_context_by_task.get(task_id)
+        if not grounding:
+            return assignment
+
+        enriched = dict(assignment)
+        enriched[self._STATIC_GROUNDING_KEY] = grounding
+        return enriched
+
+    async def _retrieve_initial_rag_grounding(
+        self,
+        *,
+        task_id: str,
+        incident_id: str,
+        agent_role: str,
+        severity: str,
+        entity: str,
+        anomaly: dict[str, Any],
+    ) -> ReActEvidence | None:
+        tool_name = self._knowledge_tool_name()
+        if tool_name is None:
+            await self._emit_trace(
+                action="rag_context_grounding",
+                reason="Initial RAG grounding skipped because search_knowledge is not available.",
+                incident_id=incident_id,
+                task_id=task_id,
+                outcome="rag_tool_unavailable; continue_with_live_diagnostics",
+                details={"react_budget_consumed": False},
+            )
+            return None
+
+        query = self._build_initial_rag_query(
+            agent_role=agent_role,
+            severity=severity,
+            entity=entity,
+            anomaly=anomaly,
+        )
+        item = await self._execute_tool(
+            step=0,
+            tool_name=tool_name,
+            arguments={"query": query, "limit": self.INITIAL_RAG_LIMIT},
+        )
+
+        returned_results = None
+        if isinstance(item.observation, dict):
+            raw_count = item.observation.get("returned_results")
+            if isinstance(raw_count, int):
+                returned_results = raw_count
+
+        await self._emit_trace(
+            action="rag_context_grounding",
+            reason=(
+                "Retrieved project-specific Qdrant context before ReAct step 1."
+                if item.success
+                else "Initial project grounding was unavailable; continue with live diagnostics."
+            ),
+            incident_id=incident_id,
+            task_id=task_id,
+            tool=tool_name,
+            outcome=(
+                f"success={str(item.success).lower()}; results={returned_results}; "
+                "react_budget_consumed=false"
+            ),
+            details={
+                "arguments": dict(item.arguments),
+                "observation": item.observation,
+                "success": item.success,
+                "source": "Qdrant RAG",
+                "evidence_kind": "static_project_grounding",
+                "runtime_evidence": False,
+                "react_budget_consumed": False,
+            },
+        )
+        return item
+
+    async def investigate(
+        self,
+        *,
+        task_id: str,
+        incident_id: str,
+        agent_role: str,
+        severity: str,
+        entity: str,
+        anomaly: dict[str, Any],
+    ) -> ReActInvestigationResult:
+        normalized_task_id = task_id.strip()
+        grounding_item: ReActEvidence | None = None
+
+        try:
+            grounding_item = await self._retrieve_initial_rag_grounding(
+                task_id=normalized_task_id,
+                incident_id=incident_id.strip(),
+                agent_role=agent_role,
+                severity=severity,
+                entity=entity,
+                anomaly=anomaly,
+            )
+
+            if grounding_item is not None and grounding_item.success:
+                self._initial_rag_context_by_task[normalized_task_id] = {
+                    "source": "Qdrant RAG",
+                    "tool": grounding_item.tool,
+                    "runtime_evidence": False,
+                    "usage_rule": (
+                        "Static project context for hypothesis formation and interpretation only; "
+                        "current incident claims require live evidence."
+                    ),
+                    "query": grounding_item.arguments.get("query"),
+                    "retrieval": grounding_item.observation,
+                }
+
+            result = await super().investigate(
+                task_id=task_id,
+                incident_id=incident_id,
+                agent_role=agent_role,
+                severity=severity,
+                entity=entity,
+                anomaly=anomaly,
+            )
+
+            if grounding_item is None:
+                return result
+
+            grounding_record = grounding_item.to_dict()
+            grounding_record.update(
+                {
+                    "source": "Qdrant RAG",
+                    "evidence_kind": "static_project_grounding",
+                    "runtime_evidence": False,
+                    "react_budget_consumed": False,
+                }
+            )
+            tools_used = result.tools_used
+            if grounding_item.tool not in tools_used:
+                tools_used = (grounding_item.tool, *tools_used)
+
+            return replace(
+                result,
+                evidence=(grounding_record, *result.evidence),
+                tools_used=tools_used,
+            )
+        finally:
+            self._initial_rag_context_by_task.pop(normalized_task_id, None)
+
+    async def _reason(
+        self,
+        *,
+        assignment: dict[str, Any],
+        evidence: list[ReActEvidence],
+        decisions: list[Any],
+    ) -> Any:
+        return await super()._reason(
+            assignment=self._assignment_with_grounding(assignment),
+            evidence=evidence,
+            decisions=decisions,
+        )
+
+    async def _select_tool(
+        self,
+        *,
+        assignment: dict[str, Any],
+        evidence_needed: str,
+        evidence: list[ReActEvidence],
+    ) -> tuple[str, dict[str, Any]]:
+        return await super()._select_tool(
+            assignment=self._assignment_with_grounding(assignment),
+            evidence_needed=evidence_needed,
+            evidence=evidence,
+        )
 
     def _build_finalizer(self) -> _PromptGemmaDiagnosticFinalizer:
         return _PromptGemmaDiagnosticFinalizer(
@@ -176,16 +442,19 @@ Peer-assistance output contract:
         evidence: list[ReActEvidence],
         decisions: list[Any],
     ) -> _PromptDiagnosticFinalOutput:
+        grounded_assignment = self._assignment_with_grounding(assignment)
         prompt = (
             f"{self.FINALIZATION_POLICY}\n\n"
-            "Assignment:\n"
-            f"{json.dumps(assignment, default=str, ensure_ascii=False)}\n\n"
+            "Assignment (including static RAG grounding when available):\n"
+            f"{json.dumps(grounded_assignment, default=str, ensure_ascii=False)}\n\n"
             "Operational reasoning summaries:\n"
             f"{json.dumps([item.model_dump() for item in decisions], default=str, ensure_ascii=False)}\n\n"
-            "Collected tool evidence:\n"
+            "Collected live/tool evidence:\n"
             f"{json.dumps([item.to_dict() for item in evidence], default=str, ensure_ascii=False)}"
         )
-        current_domain = _ROLE_DOMAIN.get(str(assignment.get("agent_role") or "").strip().lower())
+        current_domain = _ROLE_DOMAIN.get(
+            str(grounded_assignment.get("agent_role") or "").strip().lower()
+        )
 
         last_error: Exception | None = None
         validation_feedback = ""
@@ -223,7 +492,7 @@ Peer-assistance output contract:
 
                 if current_domain and output.assistance_domain == current_domain:
                     raise ValueError(
-                        f"{assignment.get('agent_role')} cannot request assistance from its own "
+                        f"{grounded_assignment.get('agent_role')} cannot request assistance from its own "
                         f"domain {current_domain!r}; choose a different peer domain or null"
                     )
                 return output
