@@ -213,8 +213,8 @@ Peer-assistance output contract:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        # Task-scoped storage avoids mixing grounding between concurrent incidents.
-        self._initial_rag_context_by_task: dict[str, dict[str, Any]] = {}
+        # Incident/task scoped storage prevents concurrent investigations from sharing context.
+        self._initial_rag_context_by_task: dict[tuple[str, str], dict[str, Any]] = {}
 
     @classmethod
     def _build_initial_rag_query(
@@ -250,6 +250,13 @@ Peer-assistance output contract:
         # search_knowledge accepts at most 2000 characters.
         return query[:2000]
 
+    @staticmethod
+    def _grounding_key(assignment: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(assignment.get("incident_id") or "").strip(),
+            str(assignment.get("task_id") or "").strip(),
+        )
+
     def _knowledge_tool_name(self) -> str | None:
         for name in sorted(self._tool_names):
             normalized = name.strip().lower()
@@ -258,14 +265,49 @@ Peer-assistance output contract:
         return None
 
     def _assignment_with_grounding(self, assignment: dict[str, Any]) -> dict[str, Any]:
-        task_id = str(assignment.get("task_id") or "").strip()
-        grounding = self._initial_rag_context_by_task.get(task_id)
+        grounding = self._initial_rag_context_by_task.get(self._grounding_key(assignment))
         if not grounding:
             return assignment
 
         enriched = dict(assignment)
         enriched[self._STATIC_GROUNDING_KEY] = grounding
         return enriched
+
+    async def _execute_initial_rag_tool(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> ReActEvidence:
+        """Execute initial RAG without the 1200-char live-evidence excerpt.
+
+        The adapted tool already bounds observations to ``max_observation_chars``. Keeping that
+        larger bounded payload here lets Gemma see several retrieved chunks, while normal live
+        evidence continues to use the smaller per-step excerpt in the ReAct loop.
+        """
+
+        tool = self._langchain_tool_by_name[tool_name]
+        raw = await tool.ainvoke(arguments)
+        wrapper = self._decode_tool_result(raw)
+        success = bool(wrapper.get("success", False))
+        observation = (
+            wrapper.get("observation")
+            if success
+            else {"error": str(wrapper.get("error") or "RAG grounding failed")}
+        )
+
+        if success and isinstance(observation, dict):
+            status = str(observation.get("status") or "").strip().lower()
+            if status in {"error", "failed", "failure"}:
+                success = False
+
+        return ReActEvidence(
+            step=0,
+            tool=tool_name,
+            arguments=dict(arguments),
+            observation=observation,
+            success=success,
+        )
 
     async def _retrieve_initial_rag_grounding(
         self,
@@ -295,8 +337,7 @@ Peer-assistance output contract:
             entity=entity,
             anomaly=anomaly,
         )
-        item = await self._execute_tool(
-            step=0,
+        item = await self._execute_initial_rag_tool(
             tool_name=tool_name,
             arguments={"query": query, "limit": self.INITIAL_RAG_LIMIT},
         )
@@ -344,20 +385,26 @@ Peer-assistance output contract:
         anomaly: dict[str, Any],
     ) -> ReActInvestigationResult:
         normalized_task_id = task_id.strip()
+        normalized_incident_id = incident_id.strip()
+        normalized_agent_role = agent_role.strip().lower()
+        if not normalized_task_id or not normalized_incident_id or not normalized_agent_role:
+            raise ValueError("ReAct investigation requires task, incident and agent identity")
+
+        grounding_key = (normalized_incident_id, normalized_task_id)
         grounding_item: ReActEvidence | None = None
 
         try:
             grounding_item = await self._retrieve_initial_rag_grounding(
                 task_id=normalized_task_id,
-                incident_id=incident_id.strip(),
-                agent_role=agent_role,
+                incident_id=normalized_incident_id,
+                agent_role=normalized_agent_role,
                 severity=severity,
                 entity=entity,
                 anomaly=anomaly,
             )
 
             if grounding_item is not None and grounding_item.success:
-                self._initial_rag_context_by_task[normalized_task_id] = {
+                self._initial_rag_context_by_task[grounding_key] = {
                     "source": "Qdrant RAG",
                     "tool": grounding_item.tool,
                     "runtime_evidence": False,
@@ -400,7 +447,7 @@ Peer-assistance output contract:
                 tools_used=tools_used,
             )
         finally:
-            self._initial_rag_context_by_task.pop(normalized_task_id, None)
+            self._initial_rag_context_by_task.pop(grounding_key, None)
 
     async def _reason(
         self,
