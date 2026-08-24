@@ -88,7 +88,7 @@ def test_prompt_contract_uses_initial_rag_without_treating_it_as_live_evidence()
     assert "reported anomaly signal as INVARIANT" in reasoning
 
     assert "static_project_grounding" in selection
-    assert "Do not spend a ReAct step" in selection
+    assert "do not spend a ReAct step" in selection
     assert "incident_anchor" in selection
     assert "test_icmp_reachability" in selection
 
