@@ -229,6 +229,87 @@ def test_runtime_binding_preserves_explicit_cross_domain_path_targets() -> None:
     assert bound["timeout_seconds"] == 2
 
 
+def test_single_process_attribution_tool_is_selected_without_qwen_arguments() -> None:
+    executor = object.__new__(SpecialistReActExecutor)
+    request = _request(kind="process_attribution")
+    executor._active_evidence_request = request
+    tool = SimpleNamespace(
+        name="apm_mcp_get_processes",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "host_id": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": ["host_id"],
+            "additionalProperties": False,
+        },
+    )
+    executor._tool_names = {"apm_mcp_get_processes", "apm_mcp_get_runtime_stats"}
+    executor._langchain_tool_by_name = {"apm_mcp_get_processes": tool}
+    assignment = _selection_assignment(request)
+
+    assert executor._candidate_tool_names_for_request(assignment) == (
+        "apm_mcp_get_processes",
+    )
+    assert executor._deterministic_single_tool_arguments(
+        tool=tool,
+        assignment=assignment,
+        evidence_needed=request.purpose,
+    ) == {"host_id": "processing-service"}
+
+
+def test_single_metric_history_tool_derives_cpu_metric_from_incident_anchor() -> None:
+    executor = object.__new__(SpecialistReActExecutor)
+    request = _request(kind="metric_history", relation="measure_signal")
+    executor._active_evidence_request = request
+    tool = SimpleNamespace(
+        name="apm_mcp_get_metrics",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "host_id": {"type": "string"},
+                "metric": {"type": "string", "enum": ["cpu", "memory"]},
+                "minutes": {"type": "integer", "minimum": 1, "maximum": 120},
+            },
+            "required": ["host_id", "metric"],
+            "additionalProperties": False,
+        },
+    )
+    executor._tool_names = {"apm_mcp_get_metrics", "apm_mcp_get_runtime_stats"}
+    executor._langchain_tool_by_name = {"apm_mcp_get_metrics": tool}
+    assignment = _selection_assignment(request)
+
+    assert executor._candidate_tool_names_for_request(assignment) == (
+        "apm_mcp_get_metrics",
+    )
+    assert executor._deterministic_single_tool_arguments(
+        tool=tool,
+        assignment=assignment,
+        evidence_needed=request.purpose,
+    ) == {
+        "host_id": "processing-service",
+        "metric": "cpu",
+    }
+
+
+def test_network_path_keeps_qwen_when_multiple_tools_are_compatible() -> None:
+    executor = object.__new__(SpecialistReActExecutor)
+    request = _request(
+        kind="network_path",
+        related="data-service",
+        relation="cross_domain_hypothesis",
+    )
+    executor._tool_names = {
+        "apm_mcp_get_network_connections",
+        "apm_mcp_resolve_service_dns",
+        "apm_mcp_test_tcp_connection",
+        "apm_mcp_test_icmp_reachability",
+    }
+
+    assert len(executor._candidate_tool_names_for_request(_selection_assignment(request))) == 4
+
+
 def test_native_schema_exposes_structured_request_instead_of_free_text_evidence_needed() -> None:
     schema = SpecialistReActExecutor._reasoning_json_schema()
     properties = schema["properties"]
