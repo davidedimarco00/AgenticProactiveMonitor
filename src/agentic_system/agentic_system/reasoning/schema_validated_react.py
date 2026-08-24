@@ -17,6 +17,13 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
 
     @staticmethod
     def _validate_tool_args(tool: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """Validate only the declared tool JSON schema.
+
+        Kept static for generic callers and regression tests. Project-specific
+        semantic constraints are applied separately through
+        ``_validate_tool_semantics`` after schema validation.
+        """
+
         schema = getattr(tool, "args_schema", None)
         if isinstance(schema, dict):
             validator = Draft202012Validator(schema)
@@ -30,6 +37,15 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
         input_schema = tool.get_input_schema()
         validated = input_schema.model_validate(args)
         return validated.model_dump(exclude_none=True)
+
+    def _validate_tool_semantics(
+        self,
+        tool: Any,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project extension point for semantic action contracts."""
+
+        return dict(args)
 
     async def _select_tool(
         self,
@@ -81,6 +97,7 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
 
                 tool = self._langchain_tool_by_name[name]
                 clean_args = self._validate_tool_args(tool, args)
+                clean_args = self._validate_tool_semantics(tool, clean_args)
                 duplicate = any(
                     item.success and item.tool == name and item.arguments == clean_args
                     for item in evidence
