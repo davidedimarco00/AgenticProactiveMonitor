@@ -8,6 +8,7 @@ from tools.diagnostic_tools import (
     service_internal_port,
 )
 from tools.docker_tools import ConnectionLimit, ProcessLimit
+from tools.icmp_tools import PingCount, PingTimeoutSeconds
 from tools.opensearch_tools import ResultLimit, TimeWindowMinutes
 from tools.qdrant_tools import KnowledgeLimit, KnowledgeQuery
 
@@ -61,6 +62,16 @@ def test_service_diagnostic_schema_exposes_only_real_application_targets() -> No
     assert path["minLength"] == 1
     assert path["maxLength"] == 256
     assert path["pattern"] == "^/"
+
+
+def test_icmp_tool_schema_keeps_probe_small_and_bounded() -> None:
+    count = _schema(PingCount)
+    timeout = _schema(PingTimeoutSeconds)
+
+    assert count["minimum"] == 1
+    assert count["maximum"] == 4
+    assert timeout["minimum"] == 1
+    assert timeout["maximum"] == 2
 
 
 def test_service_internal_ports_are_authoritative_container_ports() -> None:
