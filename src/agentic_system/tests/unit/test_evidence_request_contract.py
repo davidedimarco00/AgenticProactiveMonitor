@@ -43,6 +43,16 @@ def _request(
     )
 
 
+def _selection_assignment(request: _EvidenceRequest) -> dict:
+    assignment = _cpu_assignment()
+    assignment["evidence_request"] = {
+        **request.model_dump(),
+        "incident_signal": "container_cpu",
+        "anchor_component": "processing-service",
+    }
+    return assignment
+
+
 def test_gather_evidence_requires_structured_evidence_request() -> None:
     with pytest.raises(ValidationError, match="gather_evidence requires evidence_request"):
         _StructuredReasoningDecision(
@@ -122,6 +132,101 @@ def test_tool_family_contract_accepts_process_tool_and_preserves_target() -> Non
 
     with pytest.raises(ValueError, match="must preserve evidence_request.target_component"):
         executor._validate_tool_semantics(tool, {"host_id": "api-gateway"})
+
+
+def test_runtime_binding_replaces_qwen_wrong_primary_target() -> None:
+    executor = object.__new__(SpecialistReActExecutor)
+    request = _request(kind="runtime_resource_state")
+    tool = SimpleNamespace(
+        name="apm_mcp_get_runtime_stats",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "host_id": {
+                    "type": "string",
+                    "enum": [
+                        "traffic-generator",
+                        "api-gateway",
+                        "processing-service",
+                        "data-service",
+                        "worker-service",
+                    ],
+                }
+            },
+            "required": ["host_id"],
+            "additionalProperties": False,
+        },
+    )
+
+    bound = executor._bind_tool_arguments(
+        tool,
+        {"host_id": "api-gateway"},
+        _selection_assignment(request),
+    )
+
+    assert bound == {"host_id": "processing-service"}
+    assert executor._validate_tool_args(tool, bound) == {
+        "host_id": "processing-service"
+    }
+
+
+def test_runtime_binding_supplies_missing_primary_target_before_schema_validation() -> None:
+    executor = object.__new__(SpecialistReActExecutor)
+    request = _request(kind="process_attribution")
+    tool = SimpleNamespace(
+        name="apm_mcp_get_processes",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "host_id": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": ["host_id"],
+            "additionalProperties": False,
+        },
+    )
+
+    bound = executor._bind_tool_arguments(
+        tool,
+        {"limit": 10},
+        _selection_assignment(request),
+    )
+
+    assert bound == {"limit": 10, "host_id": "processing-service"}
+    assert executor._validate_tool_args(tool, bound) == bound
+
+
+def test_runtime_binding_preserves_explicit_cross_domain_path_targets() -> None:
+    executor = object.__new__(SpecialistReActExecutor)
+    request = _request(
+        kind="network_path",
+        target="processing-service",
+        related="data-service",
+        relation="cross_domain_hypothesis",
+    )
+    tool = SimpleNamespace(
+        name="apm_mcp_test_tcp_connection",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "host_id": {"type": "string"},
+                "target_host": {"type": "string"},
+                "timeout_seconds": {"type": "number"},
+            },
+            "required": ["host_id", "target_host"],
+            "additionalProperties": False,
+        },
+    )
+
+    bound = executor._bind_tool_arguments(
+        tool,
+        {"host_id": "api-gateway", "target_host": "api-gateway", "timeout_seconds": 2},
+        _selection_assignment(request),
+    )
+
+    assert bound["host_id"] == "processing-service"
+    assert bound["target_host"] == "data-service"
+    assert bound["timeout_seconds"] == 2
 
 
 def test_native_schema_exposes_structured_request_instead_of_free_text_evidence_needed() -> None:
