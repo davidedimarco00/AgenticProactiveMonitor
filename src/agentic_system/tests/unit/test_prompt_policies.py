@@ -52,6 +52,7 @@ def test_tool_selection_policy_separates_live_evidence_from_rag() -> None:
     assert "Distinguish Docker host-published ports from internal service ports" in policy
     assert "must never be reassigned to another component" in policy
     assert "failed check against an unverified identifier is not evidence" in policy
+    assert "DNS/ICMP/TCP/HTTP connectivity" in policy
 
 
 def test_reasoning_policy_distinguishes_symptom_normal_state_and_root_cause() -> None:
@@ -69,6 +70,8 @@ def test_reasoning_policy_distinguishes_symptom_normal_state_and_root_cause() ->
     assert "Diagnostic-tool failure policy" in policy
     assert "failure of the diagnostic process is NOT a root cause" in policy
     assert "Treat a failed diagnostic action as missing/unavailable evidence" in policy
+    assert "DNS/ICMP/TCP/HTTP connectivity" in policy
+    assert "DNS/ICMP/TCP/sockets/routes/connectivity/network latency" in policy
 
 
 def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> None:
