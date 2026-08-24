@@ -125,6 +125,23 @@ class _PromptGemmaDiagnosticFinalizer:
 class SpecialistReActExecutor(_PromptEngineeredExecutor):
     """Prompt-engineered executor with a non-contradictory collaboration contract."""
 
+    TOOL_SELECTION_POLICY = _PromptEngineeredExecutor.TOOL_SELECTION_POLICY.replace(
+        "DNS/TCP/HTTP connectivity",
+        "DNS/ICMP/TCP/HTTP connectivity",
+    )
+
+    REASONING_POLICY = (
+        _PromptEngineeredExecutor.REASONING_POLICY
+        .replace(
+            "sockets, DNS/TCP/HTTP\nconnectivity between monitored services",
+            "sockets, DNS/ICMP/TCP/HTTP\nconnectivity between monitored services",
+        )
+        .replace(
+            "network =\n  DNS/TCP/sockets/routes/connectivity/network latency",
+            "network =\n  DNS/ICMP/TCP/sockets/routes/connectivity/network latency",
+        )
+    )
+
     FINALIZATION_POLICY = (
         _PromptEngineeredExecutor.FINALIZATION_POLICY
         .replace("assistance_required=false.", "assistance_domain=null.")
