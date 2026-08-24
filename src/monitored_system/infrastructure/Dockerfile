@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     sysstat \
     net-tools \
     iproute2 \
+    iputils-ping \
     dnsutils \
     jq \
     python3 \
