@@ -205,8 +205,18 @@ def test_hybrid_react_uses_gemma_reasoning_qwen_action_and_gemma_finalization() 
     assert "Operational reasoning summaries" in str(finalizer.calls[0])
 
     actions = [item["action"] for item in traces]
-    assert actions == ["react_started", "reason", "select_tool", "observe", "reason", "diagnosis"]
-    assert traces[2]["tool"] == "get_system_load"
+    assert actions == [
+        "rag_context_grounding",
+        "react_started",
+        "reason",
+        "select_tool",
+        "observe",
+        "reason",
+        "diagnosis",
+    ]
+    assert traces[0]["outcome"] == "rag_tool_unavailable; continue_with_live_diagnostics"
+    assert traces[0]["details"]["react_budget_consumed"] is False
+    assert traces[3]["tool"] == "get_system_load"
 
 
 def test_langchain_tool_adapter_executes_existing_spade_mcp_tool() -> None:
