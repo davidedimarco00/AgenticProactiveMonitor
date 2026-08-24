@@ -9,9 +9,9 @@ pytestmark = pytest.mark.integration
 
 def test_parse_ping_output_keeps_negative_reachability_as_observation():
     payload = _parse_ping_output(
-        """PING processing-service (172.20.0.4) 56(84) bytes of data.\n\n"
+        "PING processing-service (172.20.0.4) 56(84) bytes of data.\n\n"
         "--- processing-service ping statistics ---\n"
-        "3 packets transmitted, 0 received, 100% packet loss, time 2046ms\n"""
+        "3 packets transmitted, 0 received, 100% packet loss, time 2046ms\n"
     )
 
     assert payload is not None
