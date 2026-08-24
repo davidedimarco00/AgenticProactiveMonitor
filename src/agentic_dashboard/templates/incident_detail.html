@@ -3,7 +3,7 @@
 {% block page_title %}Incident {{ incident.incident_id }}{% endblock %}
 {% block page_actions %}
 <a class="secondary-button" href="/incidents/{{ incident.incident_id }}/report.pdf">Download PDF report</a>
-<a class="secondary-button" href="/">Back to incidents</a>
+<a class="secondary-button" href="/incidents">Back to incidents</a>
 {% endblock %}
 
 {% block content %}
@@ -119,6 +119,36 @@
       <p>The Technical Lead creates the investigation task after BDI triage selects the primary investigator.</p>
     </div>
   {% endif %}
+</section>
+
+<section class="panel incident-tools-panel" id="incident-tools-panel" data-incident-id="{{ incident.incident_id }}">
+  <div class="section-header compact incident-tools-header">
+    <div>
+      <span class="eyebrow">DIAGNOSTIC TOOLING</span>
+      <h2>Tools used during diagnosis</h2>
+      <p class="section-description">Unique diagnostic tools observed in this incident's persisted agent timeline. The list updates while the investigation is running.</p>
+    </div>
+    <div class="incident-tools-summary" aria-label="Diagnostic tool usage summary">
+      <div>
+        <span>Distinct tools</span>
+        <strong id="incident-tools-distinct-count">—</strong>
+      </div>
+      <div>
+        <span>Observed uses</span>
+        <strong id="incident-tools-call-count">—</strong>
+      </div>
+      <div class="incident-tools-updated">
+        <span>Incident updated</span>
+        <strong id="incident-tools-updated">{{ incident.updated_at|human_time }}</strong>
+      </div>
+    </div>
+  </div>
+
+  <div class="incident-tools-grid" id="incident-tools-grid" hidden></div>
+  <div class="incident-tools-empty" id="incident-tools-empty">
+    <strong>Loading diagnostic tool history…</strong>
+    <p>Tool calls are reconstructed from the structured incident timeline and ReAct result payloads.</p>
+  </div>
 </section>
 
 <section class="panel diagnosis-section">
@@ -278,4 +308,8 @@
   <div class="empty-state"><p>No structured agent activity is available yet.</p></div>
   {% endif %}
 </details>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/incident_tools.js') }}"></script>
 {% endblock %}
