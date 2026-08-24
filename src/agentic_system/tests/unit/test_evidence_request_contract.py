@@ -104,40 +104,24 @@ def test_explicit_cross_domain_cpu_hypothesis_can_request_network_evidence() -> 
 def test_tool_family_contract_rejects_tcp_for_process_attribution() -> None:
     executor = object.__new__(SpecialistReActExecutor)
     executor._active_evidence_request = _request()
-    tool = SimpleNamespace(
-        name="apm_mcp_test_tcp_connection",
-        args_schema={
-            "type": "object",
-            "properties": {"host_id": {"type": "string"}},
-            "required": ["host_id"],
-            "additionalProperties": False,
-        },
-    )
+    tool = SimpleNamespace(name="apm_mcp_test_tcp_connection")
 
     with pytest.raises(ValueError, match="incompatible with evidence_request.kind"):
-        executor._validate_tool_args(tool, {"host_id": "processing-service"})
+        executor._validate_tool_semantics(tool, {"host_id": "processing-service"})
 
 
 def test_tool_family_contract_accepts_process_tool_and_preserves_target() -> None:
     executor = object.__new__(SpecialistReActExecutor)
     executor._active_evidence_request = _request()
-    tool = SimpleNamespace(
-        name="apm_mcp_get_processes",
-        args_schema={
-            "type": "object",
-            "properties": {"host_id": {"type": "string"}},
-            "required": ["host_id"],
-            "additionalProperties": False,
-        },
-    )
+    tool = SimpleNamespace(name="apm_mcp_get_processes")
 
-    assert executor._validate_tool_args(
+    assert executor._validate_tool_semantics(
         tool,
         {"host_id": "processing-service"},
     ) == {"host_id": "processing-service"}
 
     with pytest.raises(ValueError, match="must preserve evidence_request.target_component"):
-        executor._validate_tool_args(tool, {"host_id": "api-gateway"})
+        executor._validate_tool_semantics(tool, {"host_id": "api-gateway"})
 
 
 def test_native_schema_exposes_structured_request_instead_of_free_text_evidence_needed() -> None:
@@ -145,4 +129,5 @@ def test_native_schema_exposes_structured_request_instead_of_free_text_evidence_
     properties = schema["properties"]
 
     assert "evidence_request" in properties
+    assert "evidence_request" in schema["required"]
     assert "evidence_needed" not in properties
