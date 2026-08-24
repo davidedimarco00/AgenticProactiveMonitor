@@ -20,7 +20,9 @@ from .models import RoleLLMProvider
 from .observation_aware_react import SpecialistReActExecutor as _CoreReActExecutor
 from .react_contracts import (
     _ContextAwarePromptGemmaDiagnosticFinalizer,
+    _EvidenceRequest,
     _PromptDiagnosticFinalOutput,
+    _StructuredReasoningDecision,
     _configured_ollama_context,
 )
 from .react_policies import FINALIZATION_POLICY, REASONING_POLICY, TOOL_SELECTION_POLICY
@@ -52,6 +54,36 @@ class SpecialistReActExecutor(_CoreReActExecutor):
     _DUPLICATE_SELECTION_MARKER = "same successful diagnostic call was already executed"
     _EMPTY_CAUSE_MARKERS = {"", "none", "null", "unknown", "unconfirmed", "n/a"}
 
+    # Semantic action families are tool capabilities, not scenario workflows.
+    # Gemma chooses one evidence family; Qwen remains free to select one of the
+    # compatible bound tools in that family.
+    _EVIDENCE_KIND_TOOL_SUFFIXES: dict[str, tuple[str, ...]] = {
+        "metric_history": ("get_metrics",),
+        "runtime_resource_state": ("get_runtime_stats",),
+        "process_attribution": ("get_processes",),
+        "process_detail": ("inspect_process", "get_process_threads", "get_process_tree"),
+        "log_evidence": ("get_logs", "search_logs"),
+        "network_path": (
+            "get_network_connections",
+            "resolve_service_dns",
+            "test_tcp_connection",
+            "test_icmp_reachability",
+        ),
+        "application_endpoint": ("check_http_endpoint",),
+        "storage_state": ("get_disk_usage",),
+        "static_knowledge": ("search_knowledge",),
+    }
+    _RESOURCE_SIGNAL_FAMILIES = {"container_cpu", "container_memory"}
+    _RESOURCE_CROSS_DOMAIN_KINDS = {"network_path", "application_endpoint"}
+    _PRIMARY_TARGET_ARGUMENTS = (
+        "host_id",
+        "service",
+        "service_name",
+        "component",
+        "container_name",
+    )
+    _RELATED_TARGET_ARGUMENTS = ("target_host", "target_service", "dependency")
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         tools = kwargs.get("tools")
         if tools is not None:
@@ -59,7 +91,10 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         super().__init__(*args, **kwargs)
         self._initial_rag_context_by_task: dict[tuple[str, str], dict[str, Any]] = {}
         self._bounded_evidence_snapshot: list[ReActEvidence] = []
-        self._bounded_decisions_snapshot: list[_ReasoningDecision] = []
+        self._bounded_decisions_snapshot: list[Any] = []
+        self._active_reasoning_assignment: dict[str, Any] | None = None
+        self._active_selection_assignment: dict[str, Any] | None = None
+        self._active_evidence_request: _EvidenceRequest | None = None
 
     # ------------------------------------------------------------------
     # Deterministic incident focus
@@ -365,6 +400,111 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         return item
 
     # ------------------------------------------------------------------
+    # Structured Gemma -> Qwen evidence contract
+    # ------------------------------------------------------------------
+    @classmethod
+    def _tool_matches_evidence_kind(cls, tool_name: str, evidence_kind: str) -> bool:
+        normalized = str(tool_name or "").strip().lower()
+        suffixes = cls._EVIDENCE_KIND_TOOL_SUFFIXES.get(evidence_kind, ())
+        return any(normalized == suffix or normalized.endswith(suffix) for suffix in suffixes)
+
+    @classmethod
+    def _normalize_and_validate_evidence_request(
+        cls,
+        request: _EvidenceRequest,
+        assignment: dict[str, Any],
+    ) -> _EvidenceRequest:
+        anchor_raw = assignment.get("incident_anchor")
+        anchor = dict(anchor_raw) if isinstance(anchor_raw, dict) else {}
+        affected_component = str(anchor.get("affected_component") or "").strip()
+        detector_name = str(anchor.get("detector_name") or "").strip()
+        reported_entity = str(anchor.get("reported_entity") or "").strip()
+        observed_signal = str(anchor.get("observed_signal") or "unknown").strip()
+
+        normalized = request
+        if (
+            affected_component
+            and affected_component != "unknown"
+            and request.target_component in {detector_name, reported_entity}
+            and request.target_component != affected_component
+        ):
+            normalized = request.model_copy(update={"target_component": affected_component})
+
+        if observed_signal in cls._RESOURCE_SIGNAL_FAMILIES:
+            if (
+                affected_component
+                and affected_component != "unknown"
+                and normalized.target_component != affected_component
+                and normalized.causal_relation != "cross_domain_hypothesis"
+            ):
+                raise ValueError(
+                    "resource-anomaly evidence cannot silently pivot from anchor component "
+                    f"{affected_component!r} to {normalized.target_component!r}; use "
+                    "causal_relation=cross_domain_hypothesis and state the causal link"
+                )
+            if (
+                normalized.kind in cls._RESOURCE_CROSS_DOMAIN_KINDS
+                and normalized.causal_relation != "cross_domain_hypothesis"
+            ):
+                raise ValueError(
+                    f"evidence kind {normalized.kind!r} crosses away from a resource anomaly; "
+                    "use causal_relation=cross_domain_hypothesis and state how it can produce "
+                    "the anchored CPU/memory signal"
+                )
+
+        return normalized
+
+    @staticmethod
+    def _evidence_request_payload(
+        request: _EvidenceRequest,
+        assignment: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = request.model_dump()
+        anchor_raw = assignment.get("incident_anchor")
+        anchor = dict(anchor_raw) if isinstance(anchor_raw, dict) else {}
+        payload["incident_signal"] = str(anchor.get("observed_signal") or "unknown")
+        payload["anchor_component"] = str(anchor.get("affected_component") or "unknown")
+        return payload
+
+    def _validate_tool_args(self, tool: Any, args: dict[str, Any]) -> dict[str, Any]:
+        clean_args = super()._validate_tool_args(tool, args)
+        request = self._active_evidence_request
+        if request is None:
+            # Compatibility path for injected/offline providers that still emit
+            # the historical free-text _ReasoningDecision contract.
+            return clean_args
+
+        tool_name = str(getattr(tool, "name", "")).strip()
+        if not self._tool_matches_evidence_kind(tool_name, request.kind):
+            raise ValueError(
+                f"tool {tool_name!r} is incompatible with evidence_request.kind={request.kind!r}; "
+                "preserve Gemma's evidence family instead of changing diagnostic direction"
+            )
+
+        expected_primary = request.target_component
+        for field in self._PRIMARY_TARGET_ARGUMENTS:
+            if field not in clean_args:
+                continue
+            actual = str(clean_args.get(field) or "").strip()
+            if actual and actual != expected_primary:
+                raise ValueError(
+                    f"{field} must preserve evidence_request.target_component={expected_primary!r}; "
+                    f"received {actual!r}"
+                )
+
+        if request.related_component:
+            for field in self._RELATED_TARGET_ARGUMENTS:
+                if field not in clean_args:
+                    continue
+                actual = str(clean_args.get(field) or "").strip()
+                if actual and actual != request.related_component:
+                    raise ValueError(
+                        f"{field} must preserve evidence_request.related_component="
+                        f"{request.related_component!r}; received {actual!r}"
+                    )
+        return clean_args
+
+    # ------------------------------------------------------------------
     # Structured Gemma reasoning
     # ------------------------------------------------------------------
     @staticmethod
@@ -373,15 +513,12 @@ class SpecialistReActExecutor(_CoreReActExecutor):
 
     @staticmethod
     def _reasoning_json_schema() -> dict[str, Any]:
-        schema = _ReasoningDecision.model_json_schema()
-        required = list(schema.get("required") or [])
-        if "evidence_needed" not in required:
-            required.append("evidence_needed")
-        schema["required"] = required
-        return schema
+        return _StructuredReasoningDecision.model_json_schema(mode="validation")
 
     @staticmethod
     def _normalize_reasoning_payload(payload: Any) -> dict[str, Any]:
+        """Keep injected/offline providers compatible with the legacy test contract."""
+
         if not isinstance(payload, dict):
             raise ValueError("Gemma reasoning output must be a JSON object")
         normalized = dict(payload)
@@ -453,7 +590,7 @@ class SpecialistReActExecutor(_CoreReActExecutor):
     async def _native_reasoning_request(
         self,
         messages: list[dict[str, str]],
-    ) -> _ReasoningDecision:
+    ) -> Any:
         if not isinstance(self.reasoning_provider, RoleLLMProvider):
             return await self._provider_reasoning_request(messages)
 
@@ -465,7 +602,9 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                 "role": "system",
                 "content": (
                     "Return exactly one JSON object conforming to the following JSON Schema. "
-                    "Do not add prose, Markdown fences, comments, or extra fields. JSON Schema: "
+                    "For gather_evidence, evidence_request is the binding semantic contract passed "
+                    "to Qwen; do not name a tool. Do not add prose, Markdown fences, comments, or "
+                    "extra fields. JSON Schema: "
                     + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
                 ),
             },
@@ -502,7 +641,15 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                 "Ollama reasoning step returned invalid JSON "
                 f"(content_chars={len(content)}, done_reason={done_reason}, num_ctx={context_size})"
             ) from exc
-        return _ReasoningDecision.model_validate(self._normalize_reasoning_payload(raw))
+
+        decision = _StructuredReasoningDecision.model_validate(raw)
+        if decision.evidence_request is not None and self._active_reasoning_assignment is not None:
+            normalized_request = self._normalize_and_validate_evidence_request(
+                decision.evidence_request,
+                self._active_reasoning_assignment,
+            )
+            decision = decision.model_copy(update={"evidence_request": normalized_request})
+        return decision
 
     async def _reason(
         self,
@@ -510,12 +657,20 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         assignment: dict[str, Any],
         evidence: list[ReActEvidence],
         decisions: list[Any],
-    ) -> _ReasoningDecision:
-        decision = await super()._reason(
-            assignment=self._assignment_with_grounding(assignment),
-            evidence=evidence,
-            decisions=decisions,
-        )
+    ) -> Any:
+        grounded_assignment = self._assignment_with_grounding(assignment)
+        self._active_reasoning_assignment = grounded_assignment
+        try:
+            decision = await super()._reason(
+                assignment=grounded_assignment,
+                evidence=evidence,
+                decisions=decisions,
+            )
+        finally:
+            self._active_reasoning_assignment = None
+
+        request = getattr(decision, "evidence_request", None)
+        self._active_evidence_request = request if isinstance(request, _EvidenceRequest) else None
         self._bounded_evidence_snapshot = list(evidence)
         self._bounded_decisions_snapshot = [*decisions, decision]
         return decision
@@ -527,10 +682,46 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         evidence_needed: str,
         evidence: list[ReActEvidence],
     ) -> tuple[str, dict[str, Any]]:
+        grounded_assignment = self._assignment_with_grounding(assignment)
+        if self._active_evidence_request is not None:
+            grounded_assignment["evidence_request"] = self._evidence_request_payload(
+                self._active_evidence_request,
+                grounded_assignment,
+            )
+        self._active_selection_assignment = grounded_assignment
         return await super()._select_tool(
-            assignment=self._assignment_with_grounding(assignment),
+            assignment=grounded_assignment,
             evidence_needed=evidence_needed,
             evidence=evidence,
+        )
+
+    async def _emit_trace(
+        self,
+        *,
+        action: str,
+        reason: str,
+        incident_id: str,
+        task_id: str,
+        outcome: str,
+        tool: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        enriched = dict(details or {})
+        if action == "select_tool" and self._active_evidence_request is not None:
+            assignment = self._active_selection_assignment or {}
+            enriched["evidence_request"] = self._evidence_request_payload(
+                self._active_evidence_request,
+                assignment,
+            )
+            enriched["semantic_contract_enforced"] = True
+        await super()._emit_trace(
+            action=action,
+            reason=reason,
+            incident_id=incident_id,
+            task_id=task_id,
+            outcome=outcome,
+            tool=tool,
+            details=enriched,
         )
 
     # ------------------------------------------------------------------
@@ -633,7 +824,7 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         return str(value or "").strip().lower() not in cls._EMPTY_CAUSE_MARKERS
 
     @classmethod
-    def _best_available_hypothesis(cls, decisions: list[_ReasoningDecision]) -> str | None:
+    def _best_available_hypothesis(cls, decisions: list[Any]) -> str | None:
         for decision in reversed(decisions):
             hypothesis = str(decision.current_hypothesis or "").strip()
             if cls._is_concrete_cause(hypothesis):
@@ -791,6 +982,9 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         grounding_item: ReActEvidence | None = None
         self._bounded_evidence_snapshot = []
         self._bounded_decisions_snapshot = []
+        self._active_reasoning_assignment = None
+        self._active_selection_assignment = None
+        self._active_evidence_request = None
 
         try:
             grounding_item = await self._retrieve_initial_rag_grounding(
@@ -858,3 +1052,6 @@ class SpecialistReActExecutor(_CoreReActExecutor):
             )
         finally:
             self._initial_rag_context_by_task.pop(grounding_key, None)
+            self._active_reasoning_assignment = None
+            self._active_selection_assignment = None
+            self._active_evidence_request = None
