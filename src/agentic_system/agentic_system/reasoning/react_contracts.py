@@ -113,7 +113,7 @@ class _StructuredReasoningDecision(BaseModel):
     action: ReasoningAction
     decision_summary: str
     current_hypothesis: str | None = None
-    evidence_request: _EvidenceRequest | None = None
+    evidence_request: _EvidenceRequest | None
 
     @computed_field(return_type=str | None)
     @property
