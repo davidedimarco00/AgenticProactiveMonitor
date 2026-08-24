@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from io import BytesIO
 
 import requests
@@ -50,14 +51,55 @@ def anomalies_page():
     )
 
 
+def _configured_ollama_models() -> list[dict[str, str]]:
+    """Models configured by the current project defaults.
+
+    Environment overrides are honored when they are explicitly provided to the
+    dashboard container. The fallbacks mirror the agentic backend and RAG
+    configuration in docker-compose.yml.
+    """
+    return [
+        {
+            "role": "Reasoning",
+            "name": os.getenv("OLLAMA_REASONING_MODEL")
+            or os.getenv("OLLAMA_CHAT_MODEL")
+            or "gemma4:e2b",
+        },
+        {
+            "role": "Tool calling",
+            "name": os.getenv("OLLAMA_TOOL_MODEL") or "qwen3.5:4b",
+        },
+        {
+            "role": "Tool fallback",
+            "name": os.getenv("OLLAMA_FALLBACK_TOOL_MODEL") or "qwen2.5:latest",
+        },
+        {
+            "role": "Embeddings",
+            "name": os.getenv("OLLAMA_EMBEDDING_MODEL") or "ibm/granite-embedding:30m",
+        },
+    ]
+
+
+def _ollama_model_name(raw: dict[str, object]) -> str:
+    return str(raw.get("name") or raw.get("model") or "").strip()
+
+
 def ollama_loaded_models():
-    """Return only models that Ollama currently keeps loaded in memory."""
+    """Return configured models plus Ollama's current in-memory state."""
     try:
-        response = requests.get(f"{OLLAMA_URL}/api/ps", timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        payload = response.json()
+        ps_response = requests.get(f"{OLLAMA_URL}/api/ps", timeout=REQUEST_TIMEOUT)
+        ps_response.raise_for_status()
+        ps_payload = ps_response.json()
+
+        tags_response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=REQUEST_TIMEOUT)
+        tags_response.raise_for_status()
+        tags_payload = tags_response.json()
     except (requests.RequestException, ValueError) as exc:
-        app.logger.warning("Could not query loaded Ollama models: %s", exc)
+        app.logger.warning("Could not query Ollama model state: %s", exc)
+        configured = [
+            {**model, "loaded": False, "available": None}
+            for model in _configured_ollama_models()
+        ]
         return (
             jsonify(
                 {
@@ -65,20 +107,23 @@ def ollama_loaded_models():
                     "status": "offline",
                     "count": 0,
                     "models": [],
+                    "configured_models": configured,
                 }
             ),
             503,
         )
 
-    models: list[dict[str, object]] = []
-    for raw in payload.get("models", []) if isinstance(payload, dict) else []:
+    loaded_models: list[dict[str, object]] = []
+    loaded_names: set[str] = set()
+    for raw in ps_payload.get("models", []) if isinstance(ps_payload, dict) else []:
         if not isinstance(raw, dict):
             continue
-        name = str(raw.get("name") or raw.get("model") or "").strip()
+        name = _ollama_model_name(raw)
         if not name:
             continue
+        loaded_names.add(name)
         details = raw.get("details") if isinstance(raw.get("details"), dict) else {}
-        models.append(
+        loaded_models.append(
             {
                 "name": name,
                 "model": raw.get("model") or name,
@@ -90,12 +135,31 @@ def ollama_loaded_models():
             }
         )
 
+    available_names: set[str] = set()
+    for raw in tags_payload.get("models", []) if isinstance(tags_payload, dict) else []:
+        if isinstance(raw, dict):
+            name = _ollama_model_name(raw)
+            if name:
+                available_names.add(name)
+
+    configured_models = []
+    for model in _configured_ollama_models():
+        name = model["name"]
+        configured_models.append(
+            {
+                **model,
+                "loaded": name in loaded_names,
+                "available": name in available_names,
+            }
+        )
+
     return jsonify(
         {
             "generated_at": utc_now(),
             "status": "online",
-            "count": len(models),
-            "models": models,
+            "count": len(loaded_models),
+            "models": loaded_models,
+            "configured_models": configured_models,
         }
     )
 
