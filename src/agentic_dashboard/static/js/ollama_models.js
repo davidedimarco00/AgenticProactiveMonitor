@@ -6,12 +6,14 @@
   if (!ollamaState) return;
 
   const host = document.createElement("div");
-  host.className = "ollama-runtime-models";
+  host.className = "ollama-model-monitor";
   host.id = "ollama-runtime-models";
   host.setAttribute("aria-live", "polite");
   host.innerHTML = `
-    <span class="ollama-runtime-label">Loaded</span>
-    <span class="ollama-runtime-empty">Checking…</span>
+    <div class="ollama-model-row">
+      <span class="ollama-runtime-label">Configured</span>
+      <span class="ollama-runtime-empty">Checking…</span>
+    </div>
   `;
 
   const wrapper = document.createElement("div");
@@ -35,35 +37,78 @@
     return `${amount.toFixed(decimals)} ${units[unit]}`;
   };
 
+  const createText = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    node.textContent = text;
+    return node;
+  };
+
+  const createConfiguredChip = (model) => {
+    const chip = document.createElement("span");
+    const loaded = Boolean(model?.loaded);
+    const available = model?.available;
+    chip.className = `ollama-configured-chip ${loaded ? "loaded" : available === false ? "missing" : "standby"}`;
+
+    const role = createText("span", "ollama-model-role", model?.role || "Model");
+    const name = createText("strong", "ollama-model-name", model?.name || "unknown");
+    const state = createText(
+      "span",
+      "ollama-model-state",
+      loaded ? "LOADED" : available === false ? "NOT INSTALLED" : "STANDBY",
+    );
+
+    chip.append(role, name, state);
+    chip.title = loaded
+      ? `${model?.role || "Model"}: ${model?.name || "unknown"} · currently loaded in Ollama memory`
+      : available === false
+        ? `${model?.role || "Model"}: ${model?.name || "unknown"} · configured but not installed in Ollama`
+        : `${model?.role || "Model"}: ${model?.name || "unknown"} · configured, not currently loaded`;
+    return chip;
+  };
+
+  const createRuntimeChip = (model) => {
+    const chip = document.createElement("span");
+    chip.className = "ollama-model-chip";
+    const name = String(model?.name || model?.model || "model");
+    chip.textContent = name;
+
+    const detail = model?.size_vram ? ` · VRAM ${formatBytes(model.size_vram)}` : "";
+    const expires = model?.expires_at ? ` · loaded until ${model.expires_at}` : "";
+    chip.title = `${name}${detail}${expires}`;
+    return chip;
+  };
+
+  const appendRow = (labelText, className = "") => {
+    const row = document.createElement("div");
+    row.className = `ollama-model-row ${className}`.trim();
+    row.appendChild(createText("span", "ollama-runtime-label", labelText));
+    host.appendChild(row);
+    return row;
+  };
+
   const render = (payload) => {
     host.replaceChildren();
-    const label = document.createElement("span");
-    label.className = "ollama-runtime-label";
-    label.textContent = "Loaded";
-    host.appendChild(label);
 
-    const models = Array.isArray(payload?.models) ? payload.models : [];
-    if (!models.length) {
-      const empty = document.createElement("span");
-      empty.className = "ollama-runtime-empty";
-      empty.textContent = payload?.status === "offline"
-        ? "Unavailable"
-        : "No model in memory";
-      host.appendChild(empty);
-      return;
+    const configuredRow = appendRow("Configured", "configured");
+    const configured = Array.isArray(payload?.configured_models) ? payload.configured_models : [];
+    if (!configured.length) {
+      configuredRow.appendChild(createText("span", "ollama-runtime-empty", "Configuration unavailable"));
+    } else {
+      configured.forEach((model) => configuredRow.appendChild(createConfiguredChip(model)));
     }
 
-    models.forEach((model) => {
-      const chip = document.createElement("span");
-      chip.className = "ollama-model-chip";
-      const name = String(model?.name || model?.model || "model");
-      chip.textContent = name;
-
-      const detail = model?.size_vram ? ` · VRAM ${formatBytes(model.size_vram)}` : "";
-      const expires = model?.expires_at ? ` · loaded until ${model.expires_at}` : "";
-      chip.title = `${name}${detail}${expires}`;
-      host.appendChild(chip);
-    });
+    const loadedRow = appendRow("Loaded now", "runtime");
+    const loaded = Array.isArray(payload?.models) ? payload.models : [];
+    if (!loaded.length) {
+      loadedRow.appendChild(createText(
+        "span",
+        "ollama-runtime-empty",
+        payload?.status === "offline" ? "Ollama unavailable" : "No model in memory",
+      ));
+    } else {
+      loaded.forEach((model) => loadedRow.appendChild(createRuntimeChip(model)));
+    }
   };
 
   const refresh = async () => {
@@ -71,13 +116,10 @@
     requestInFlight = true;
     try {
       const response = await fetch("/api/ollama-loaded-models", { cache: "no-store" });
-      if (!response.ok) {
-        render({ status: "offline", models: [] });
-        return;
-      }
-      render(await response.json());
+      const payload = await response.json().catch(() => ({ status: "offline", models: [] }));
+      render(payload);
     } catch (_) {
-      render({ status: "offline", models: [] });
+      render({ status: "offline", models: [], configured_models: [] });
     } finally {
       requestInFlight = false;
     }
