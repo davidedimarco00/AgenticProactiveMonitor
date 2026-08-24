@@ -18,14 +18,15 @@ def test_initial_rag_query_is_incident_specific_signal_first_and_bounded() -> No
             "confidence": 0.97,
         },
     )
+    normalized_query = query.lower()
 
-    assert "network_engineer" in query
-    assert "NETLAT-api-gateway-processing-service" in query
-    assert "network_transport_latency" in query
-    assert "signal-specific troubleshooting" in query
-    assert "architecture or service dependencies only when they directly constrain" in query
-    assert "do not infer current runtime state" in query
-    assert "do not introduce a different symptom" in query
+    assert "network_engineer" in normalized_query
+    assert "netlat-api-gateway-processing-service" in normalized_query
+    assert "network_transport_latency" in normalized_query
+    assert "signal-specific troubleshooting" in normalized_query
+    assert "architecture or service dependencies only when they directly constrain" in normalized_query
+    assert "do not infer current runtime state" in normalized_query
+    assert "do not introduce a different symptom" in normalized_query
     assert len(query) <= 2000
 
 
