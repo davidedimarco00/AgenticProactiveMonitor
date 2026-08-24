@@ -1,0 +1,69 @@
+.ollama-service-stack {
+  display: grid;
+  justify-items: stretch;
+  gap: 5px;
+}
+
+.ollama-service-stack > .service-state {
+  justify-content: center;
+}
+
+.ollama-runtime-models {
+  max-width: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 18px;
+}
+
+.ollama-runtime-label {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.ollama-runtime-empty {
+  color: var(--subtle);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.ollama-model-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 19px;
+  max-width: 220px;
+  padding: 0 7px 0 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--text-2);
+  background: var(--panel-soft);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ollama-model-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, .12);
+}
+
+@media (max-width: 900px) {
+  .ollama-runtime-models {
+    max-width: 240px;
+  }
+}
