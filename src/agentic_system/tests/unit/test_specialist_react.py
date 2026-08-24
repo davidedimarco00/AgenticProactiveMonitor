@@ -206,6 +206,7 @@ def test_hybrid_react_uses_gemma_reasoning_qwen_action_and_gemma_finalization() 
 
     actions = [item["action"] for item in traces]
     assert actions == [
+        "incident_anchor",
         "rag_context_grounding",
         "react_started",
         "reason",
@@ -214,9 +215,12 @@ def test_hybrid_react_uses_gemma_reasoning_qwen_action_and_gemma_finalization() 
         "reason",
         "diagnosis",
     ]
-    assert traces[0]["outcome"] == "rag_tool_unavailable; continue_with_live_diagnostics"
+    assert traces[0]["details"]["observed_signal"] == "container_cpu"
+    assert traces[0]["details"]["affected_component"] == "processing-service"
     assert traces[0]["details"]["react_budget_consumed"] is False
-    assert traces[3]["tool"] == "get_system_load"
+    assert traces[1]["outcome"] == "rag_tool_unavailable; continue_with_live_diagnostics"
+    assert traces[1]["details"]["react_budget_consumed"] is False
+    assert traces[4]["tool"] == "get_system_load"
 
 
 def test_langchain_tool_adapter_executes_existing_spade_mcp_tool() -> None:
