@@ -15,6 +15,19 @@ from .langchain_agent import ReActEvidence, ReActInvestigationError
 class SpecialistReActExecutor(_EvidenceFirstExecutor):
     """Evidence-first ReAct with pre-execution JSON-Schema tool validation."""
 
+    _PRIMARY_TARGET_ARGUMENTS = (
+        "host_id",
+        "service",
+        "service_name",
+        "component",
+        "container_name",
+    )
+    _RELATED_TARGET_ARGUMENTS = (
+        "target_host",
+        "target_service",
+        "dependency",
+    )
+
     @staticmethod
     def _validate_tool_args(tool: Any, args: dict[str, Any]) -> dict[str, Any]:
         """Validate only the declared tool JSON schema.
@@ -38,21 +51,58 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
         validated = input_schema.model_validate(args)
         return validated.model_dump(exclude_none=True)
 
+    @staticmethod
+    def _tool_schema_properties(tool: Any) -> dict[str, Any]:
+        schema = getattr(tool, "args_schema", None)
+        if isinstance(schema, dict):
+            properties = schema.get("properties")
+            return dict(properties) if isinstance(properties, dict) else {}
+
+        try:
+            input_schema = tool.get_input_schema()
+            model_schema = input_schema.model_json_schema()
+        except Exception:
+            return {}
+        properties = model_schema.get("properties")
+        return dict(properties) if isinstance(properties, dict) else {}
+
     def _bind_tool_arguments(
         self,
         tool: Any,
         args: dict[str, Any],
+        assignment: dict[str, Any],
     ) -> dict[str, Any]:
-        """Project extension point for deterministic argument binding.
+        """Bind target identifiers already fixed by the evidence contract.
 
-        The generic engine leaves model-produced arguments untouched. A
-        project-specific executor may bind authoritative arguments, such as an
-        evidence target already selected by the reasoning contract, before JSON
-        Schema validation. This avoids asking the action model to re-decide facts
-        that are already fixed elsewhere in the workflow.
+        Qwen decides which compatible tool to use and may supply non-authoritative
+        optional arguments. It must not be responsible for repeating the target
+        component already selected by Gemma. If ``assignment.evidence_request``
+        is present, the runtime injects its primary and secondary targets into
+        the corresponding declared tool arguments before JSON-Schema validation.
         """
 
-        return dict(args)
+        clean_args = dict(args)
+        request = assignment.get("evidence_request")
+        if not isinstance(request, dict):
+            return clean_args
+
+        properties = self._tool_schema_properties(tool)
+        target_component = str(request.get("target_component") or "").strip()
+        related_component = str(request.get("related_component") or "").strip()
+
+        if target_component:
+            for field in self._PRIMARY_TARGET_ARGUMENTS:
+                if field in properties:
+                    clean_args[field] = target_component
+                    break
+
+        if related_component:
+            for field in self._RELATED_TARGET_ARGUMENTS:
+                if field in properties:
+                    clean_args[field] = related_component
+                    break
+
+        return clean_args
 
     def _validate_tool_semantics(
         self,
@@ -112,7 +162,7 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                     raise RuntimeError("Qwen tool arguments are not a JSON object")
 
                 tool = self._langchain_tool_by_name[name]
-                bound_args = self._bind_tool_arguments(tool, dict(args))
+                bound_args = self._bind_tool_arguments(tool, dict(args), assignment)
                 clean_args = self._validate_tool_args(tool, bound_args)
                 clean_args = self._validate_tool_semantics(tool, clean_args)
                 duplicate = any(
@@ -136,8 +186,9 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                             "content": (
                                 "The proposed tool call was rejected BEFORE MCP execution. Repair "
                                 "the tool choice or non-authoritative arguments without changing "
-                                "Gemma's evidence goal. Authoritative target arguments are bound "
-                                "deterministically by the runtime. Validation feedback: "
+                                "Gemma's evidence goal. The runtime binds target identifiers from "
+                                "assignment.evidence_request deterministically, so do not choose a "
+                                "different target. Validation feedback: "
                                 f"{exc}. Select exactly one bound tool with valid arguments."
                             ),
                         }
