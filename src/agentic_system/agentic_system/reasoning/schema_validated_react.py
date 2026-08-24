@@ -17,7 +17,15 @@ LOGGER = logging.getLogger("agentic_system.reasoning.schema_validated_react")
 
 
 class SpecialistReActExecutor(_EvidenceFirstExecutor):
-    """Evidence-first ReAct with pre-execution JSON-Schema tool validation."""
+    """Evidence-first ReAct with pre-execution JSON-Schema tool validation.
+
+    The action model is used only when a structured evidence request leaves a
+    genuine choice between multiple compatible tools. When exactly one bound
+    tool can satisfy the evidence family, the runtime selects it
+    deterministically and only binds authoritative arguments before MCP
+    execution. This keeps Qwen as a semantic tool disambiguator rather than a
+    second source of diagnostic intent.
+    """
 
     _PRIMARY_TARGET_ARGUMENTS = (
         "host_id",
@@ -140,6 +148,90 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
 
         return dict(args)
 
+    def _candidate_tool_names_for_request(self, assignment: dict[str, Any]) -> tuple[str, ...]:
+        """Return bound tools compatible with the structured evidence family.
+
+        The concrete project executor defines ``_EVIDENCE_KIND_TOOL_SUFFIXES``.
+        Keeping the lookup capability-based avoids encoding scenario-specific
+        workflows in the generic selection engine.
+        """
+
+        request = assignment.get("evidence_request")
+        if not isinstance(request, dict):
+            return ()
+        evidence_kind = str(request.get("kind") or "").strip()
+        families = getattr(self, "_EVIDENCE_KIND_TOOL_SUFFIXES", {})
+        suffixes = families.get(evidence_kind, ()) if isinstance(families, dict) else ()
+        if not suffixes:
+            return ()
+
+        candidates: list[str] = []
+        for name in sorted(self._tool_names):
+            normalized = str(name).strip().lower()
+            if any(normalized == suffix or normalized.endswith(suffix) for suffix in suffixes):
+                candidates.append(name)
+        return tuple(candidates)
+
+    @staticmethod
+    def _metric_name_from_assignment(assignment: dict[str, Any]) -> str | None:
+        anchor = assignment.get("incident_anchor")
+        if not isinstance(anchor, dict):
+            return None
+        signal = str(anchor.get("observed_signal") or "").strip().lower()
+        if signal == "container_cpu":
+            return "cpu"
+        if signal == "container_memory":
+            return "memory"
+        return None
+
+    def _deterministic_single_tool_arguments(
+        self,
+        *,
+        tool: Any,
+        assignment: dict[str, Any],
+        evidence_needed: str,
+    ) -> dict[str, Any] | None:
+        """Build arguments when a single compatible tool is unambiguous.
+
+        Only facts already fixed by the incident/evidence contract are injected.
+        If a required argument cannot be derived authoritatively, ``None`` is
+        returned and Qwen remains responsible for the unresolved choice.
+        """
+
+        args = self._bind_tool_arguments(tool, {}, assignment)
+        tool_name = str(getattr(tool, "name", "")).strip().lower()
+        request = assignment.get("evidence_request")
+        request_dict = request if isinstance(request, dict) else {}
+
+        if tool_name.endswith("get_metrics"):
+            metric = self._metric_name_from_assignment(assignment)
+            if metric is None:
+                return None
+            args["metric"] = metric
+        elif tool_name.endswith("search_knowledge"):
+            query = str(request_dict.get("purpose") or evidence_needed or "").strip()
+            if not query:
+                return None
+            args["query"] = query
+
+        try:
+            clean_args = self._validate_tool_args(tool, args)
+            return self._validate_tool_semantics(tool, clean_args)
+        except (ValidationError, RuntimeError, ValueError):
+            return None
+
+    @staticmethod
+    def _is_duplicate_call(
+        *,
+        name: str,
+        arguments: dict[str, Any],
+        evidence: list[ReActEvidence],
+    ) -> bool:
+        return any(
+            item.success and item.tool == name and item.arguments == arguments
+            for item in evidence
+        )
+
     async def _select_tool(
         self,
         *,
@@ -147,6 +239,39 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
         evidence_needed: str,
         evidence: list[ReActEvidence],
     ) -> tuple[str, dict[str, Any]]:
+        candidates = self._candidate_tool_names_for_request(assignment)
+        if len(candidates) == 1:
+            name = candidates[0]
+            tool = self._langchain_tool_by_name[name]
+            deterministic_args = self._deterministic_single_tool_arguments(
+                tool=tool,
+                assignment=assignment,
+                evidence_needed=evidence_needed,
+            )
+            if deterministic_args is not None:
+                if self._is_duplicate_call(
+                    name=name,
+                    arguments=deterministic_args,
+                    evidence=evidence,
+                ):
+                    raise ReActInvestigationError(
+                        "Tool selection failed: The same successful diagnostic call was already "
+                        "executed; the structured evidence request is saturated and must be "
+                        "refined before another observation."
+                    )
+                request = assignment.get("evidence_request")
+                evidence_kind = (
+                    str(request.get("kind") or "").strip()
+                    if isinstance(request, dict)
+                    else "unknown"
+                )
+                LOGGER.info(
+                    "Deterministically selected sole compatible tool: evidence_kind=%s tool=%s",
+                    evidence_kind,
+                    name,
+                )
+                return name, deterministic_args
+
         previous_calls = [
             {"tool": item.tool, "arguments": item.arguments, "success": item.success}
             for item in evidence[-6:]
@@ -159,6 +284,7 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                     {
                         "assignment": assignment,
                         "evidence_requested_by_gemma": evidence_needed,
+                        "allowed_tool_names": list(candidates),
                         "previous_tool_calls": previous_calls,
                     },
                     default=str,
@@ -184,6 +310,11 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                 name = str(call.get("name") or "").strip()
                 if name not in self._tool_names:
                     raise RuntimeError(f"Qwen selected unavailable tool: {name!r}")
+                if candidates and name not in candidates:
+                    raise ValueError(
+                        f"Qwen selected tool {name!r} outside the compatible evidence family; "
+                        f"allowed tools are {list(candidates)!r}"
+                    )
                 args = call.get("args") or {}
                 if not isinstance(args, dict):
                     raise RuntimeError("Qwen tool arguments are not a JSON object")
@@ -192,9 +323,10 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                 bound_args = self._bind_tool_arguments(tool, dict(args), assignment)
                 clean_args = self._validate_tool_args(tool, bound_args)
                 clean_args = self._validate_tool_semantics(tool, clean_args)
-                duplicate = any(
-                    item.success and item.tool == name and item.arguments == clean_args
-                    for item in evidence
+                duplicate = self._is_duplicate_call(
+                    name=name,
+                    arguments=clean_args,
+                    evidence=evidence,
                 )
                 if duplicate:
                     raise RuntimeError(
@@ -215,8 +347,8 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                                 "the tool choice or non-authoritative arguments without changing "
                                 "Gemma's evidence goal. The runtime binds target identifiers from "
                                 "assignment.evidence_request deterministically, so do not choose a "
-                                "different target. Validation feedback: "
-                                f"{exc}. Select exactly one bound tool with valid arguments."
+                                "different target or evidence family. Validation feedback: "
+                                f"{exc}. Select exactly one allowed bound tool with valid arguments."
                             ),
                         }
                     )
