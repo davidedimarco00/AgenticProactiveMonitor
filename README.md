@@ -24,22 +24,22 @@ Component overview (mermaid):
 ```mermaid
 graph TD
   subgraph Monitored_System
-    TG[Traffic Generator]
-    AGW[API Gateway]
-    APP[Processing & Data Services]
-    WORK[Worker Service]
+    TG["Traffic Generator"]
+    AGW["API Gateway"]
+    APP["Processing & Data Services"]
+    WORK["Worker Service"]
   end
 
   subgraph Infrastructure
-    OL[Ollama]
-    OS[OpenSearch]
-    OD[OpenSearch Dashboards]
-    QR[Qdrant]
-    MDB[MongoDB]
-    MCP[MCP Server]
-    XMPP[Prosody XMPP]
-    BE[Agentic Backend (SPADE + FastAPI)]
-    DASH[Operator Dashboard]
+    OL["Ollama"]
+    OS["OpenSearch"]
+    OD["OpenSearch Dashboards"]
+    QR["Qdrant"]
+    MDB["MongoDB"]
+    MCP["MCP Server"]
+    XMPP["Prosody XMPP"]
+    BE["Agentic Backend (SPADE + FastAPI)"]
+    DASH["Operator Dashboard"]
   end
 
   TG --> AGW --> APP --> WORK
@@ -59,12 +59,12 @@ Flusso di telemetria e gestione incidenti:
 
 ```mermaid
 flowchart LR
-  Monitored[Monitored System] -->|metrics, logs| Telegraf[Telegraf / Fluent Bit] --> OpenSearch[OpenSearch]
-  OpenSearch -->|anomaly event| AgenticBackend[Agentic Backend (autonomous agents)]
-  AgenticBackend -->|incident write| MongoDB[(MongoDB)]
-  AgenticBackend -->|RAG| Qdrant[(Qdrant)]
-  AgenticBackend -->|notifications| Notifier[Notifier / Action Agent] -->|webhook/email/chat| Ops[Operator / Pager]
-  AgenticBackend -->|observability| OperatorDashboard[Operator Dashboard (read-only)]
+  Monitored["Monitored System"] -->|metrics, logs| Telegraf["Telegraf / Fluent Bit"] --> OpenSearch["OpenSearch"]
+  OpenSearch -->|anomaly event| AgenticBackend["Agentic Backend (autonomous agents)"]
+  AgenticBackend -->|incident write| MongoDB["MongoDB"]
+  AgenticBackend -->|RAG| Qdrant["Qdrant"]
+  AgenticBackend -->|notifications| Notifier["Notifier / Action Agent"] -->|webhook/email/chat| Ops["Operator / Pager"]
+  AgenticBackend -->|observability| OperatorDashboard["Operator Dashboard (read-only)"]
 ```
 
 Nota: Ollama è in esecuzione nativa sul host Windows e viene usata come modello LLM locale.
