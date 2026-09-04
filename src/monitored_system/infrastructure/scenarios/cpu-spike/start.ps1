@@ -1,5 +1,5 @@
 param(
-    [ValidateRange(1, 8)]
+    [ValidateRange(1, 12)]
     [int]$Workers = 4
 )
 
