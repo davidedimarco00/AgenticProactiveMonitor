@@ -90,7 +90,7 @@ def test_python_agentspeak_specialist_accepts_task_and_commits_investigation() -
     assert result.investigation_intention == "investigate_incident"
 
 
-def test_python_agentspeak_specialist_commits_peer_collaboration_intention() -> None:
+def test_python_agentspeak_specialist_commits_peer_help_intention() -> None:
     runtime = AgentSpeakBDIRuntime(
         specialist_asl=str(_specialist_plan_path()),
         action_timeout_seconds=5.0,
@@ -98,17 +98,17 @@ def test_python_agentspeak_specialist_commits_peer_collaboration_intention() -> 
     )
 
     result = asyncio.run(
-        runtime.accept_specialist_task(
-            task_id="TASK-PEER-002",
+        runtime.deliberate_peer_help(
+            help_id="peer-help:INC-PEER-001:abc123",
             incident_id="INC-PEER-001",
             role="application_engineer",
-            task_type="INVESTIGATE_INCIDENT",
             peer_role="system_engineer",
         )
     )
 
-    assert result.task_id == "TASK-PEER-002"
+    assert result.task_id == "peer-help:INC-PEER-001:abc123"
+    assert result.incident_id == "INC-PEER-001"
     assert result.role == "application_engineer"
-    assert result.goal == "handle_investigation_task"
-    assert result.acceptance_intention == "accept_task"
-    assert result.investigation_intention == "investigate_with_peer"
+    assert result.goal == "provide_peer_help"
+    assert result.acceptance_intention == "accept_peer_help"
+    assert result.investigation_intention == "provide_peer_help"

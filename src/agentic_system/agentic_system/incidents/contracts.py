@@ -113,6 +113,7 @@ class InvestigationTaskResultReceipt:
     react_steps: int = 0
     tools_used: tuple[str, ...] = ()
     conversation_id: str | None = None
+    peer_consultation: dict[str, Any] | None = None
     error: str | None = None
     retryable: bool = True
 
@@ -155,6 +156,9 @@ class InvestigationTaskResultReceipt:
             "react_steps": self.react_steps,
             "tools_used": list(self.tools_used),
             "conversation_id": self.conversation_id,
+            "peer_consultation": (
+                dict(self.peer_consultation) if self.peer_consultation is not None else None
+            ),
         }
 
 
@@ -170,8 +174,6 @@ class TechnicalLeadReviewReceipt:
     rationale: str
     remediation_summary: str
     remediation_steps: tuple[str, ...]
-    support_domain: str | None
-    support_reason: str | None
     bdi_goal: str
     bdi_review_intention: str
     bdi_decision_intention: str

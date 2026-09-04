@@ -14,12 +14,6 @@ from .tasks import AgentTaskState, normalize_task_state
 
 
 LOGGER = logging.getLogger("agentic_system.incidents.react_coordinator")
-SUPPORT_ROLE_BY_DOMAIN = {
-    "system": "system_engineer",
-    "network": "network_engineer",
-    "application": "application_engineer",
-    "software": "software_developer",
-}
 
 
 class ReActIncidentCoordinator(IncidentCoordinator):
@@ -31,8 +25,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         self.react_results_failed_count = 0
         self.technical_lead_reviews_completed_count = 0
         self.technical_lead_reviews_failed_count = 0
-        self.peer_collaborations_started_count = 0
-        self.peer_collaborations_failed_count = 0
+        self.peer_consultations_logged_count = 0
 
     async def wait_until_workflow_terminal(
         self,
@@ -197,6 +190,8 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             receipt.assistance_domain if receipt.assistance_required else "none",
         )
 
+        await self._log_peer_consultation(incident_id, receipt, task_id=task_id)
+
         try:
             review = await self._review_specialist_result(updated, receipt)
             await self._persist_technical_lead_review(
@@ -216,23 +211,50 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             )
             return
 
-        if str(review.decision).strip().lower() == "request_support":
-            try:
-                await self._start_peer_support_round(
-                    updated,
-                    receipt,
-                    review,
-                    completed_task_id=task_id,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                await self._persist_peer_collaboration_failure(
-                    incident_id,
-                    specialist_receipt=receipt,
-                    task_id=task_id,
-                    error=exc,
-                )
+    async def _log_peer_consultation(
+        self,
+        incident_id: str,
+        receipt: Any,
+        *,
+        task_id: str,
+    ) -> None:
+        """Record an autonomous specialist-to-specialist consultation centrally.
+
+        The requesting specialist already contacted the peer directly and folded
+        the evidence in; this only preserves the audit trail on the incident.
+        """
+
+        consultation = getattr(receipt, "peer_consultation", None)
+        if not isinstance(consultation, dict) or not consultation.get("requested"):
+            return
+
+        await self.repository.add_event(
+            incident_id,
+            {
+                "event_type": "PEER_CONSULTATION",
+                "agent_role": receipt.agent_role,
+                "agent_jid": receipt.agent_jid,
+                "action": "autonomous_peer_consultation",
+                "reason": str(consultation.get("reason") or ""),
+                "status": "UNDER_ANALYSIS",
+                "task_id": task_id,
+                "outcome": {
+                    "from_role": receipt.agent_role,
+                    "to_role": consultation.get("target_role"),
+                    "status": consultation.get("status"),
+                    "peer_confidence": consultation.get("peer_confidence"),
+                    "peer_findings_count": consultation.get("peer_findings_count"),
+                },
+            },
+        )
+        self.peer_consultations_logged_count += 1
+        LOGGER.warning(
+            "Autonomous peer consultation logged: incident=%s %s -> %s status=%s",
+            incident_id,
+            receipt.agent_role,
+            consultation.get("target_role"),
+            consultation.get("status"),
+        )
 
     async def _review_specialist_result(
         self,
@@ -276,13 +298,14 @@ class ReActIncidentCoordinator(IncidentCoordinator):
         if decision not in {"resolve", "operator_action_required", "request_support"}:
             raise RuntimeError(f"Unsupported Technical Lead review decision: {decision}")
 
-        # Defense in depth: OPERATOR_ACTION_REQUIRED is no longer a terminal
-        # state of the autonomous diagnostic pipeline. Human actions remain
-        # advisory remediation steps attached to a resolved diagnosis.
-        if decision == "operator_action_required":
+        # Defense in depth. Neither an operator escalation nor a Technical Lead
+        # authorized support round is a state of the autonomous pipeline: peer
+        # collaboration happens between specialists before the review, and human
+        # actions stay advisory remediation attached to a resolved diagnosis.
+        if decision in {"operator_action_required", "request_support"}:
             LOGGER.error(
-                "Technical Lead returned legacy operator_action_required; normalizing to resolve: "
-                "incident=%s",
+                "Technical Lead returned legacy decision %s; normalizing to resolve: incident=%s",
+                decision,
                 incident_id,
             )
             decision = "resolve"
@@ -304,28 +327,14 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             "status": "ADVISORY",
         }
 
-        if decision == "resolve":
-            status = "RESOLVED"
-            validation = {
-                "status": "EVIDENCE_REVIEWED",
-                "summary": (
-                    "The Technical Lead accepted the combined specialist evidence and preserved "
-                    "the best evidence-backed diagnosis. Any human actions are advisory only."
-                ),
-            }
-            active_agents: list[str] = []
-            peer_state = "COMPLETED"
-        else:
-            status = "UNDER_ANALYSIS"
-            validation = {
-                "status": "MORE_EVIDENCE_REQUIRED",
-                "summary": (
-                    "The Technical Lead authorized another specialist to join the same "
-                    "incident and exchange evidence directly with the current specialist."
-                ),
-            }
-            active_agents = ["technical_lead", *involved_roles]
-            peer_state = "REQUESTED"
+        status = "RESOLVED"
+        validation = {
+            "status": "EVIDENCE_REVIEWED",
+            "summary": (
+                "The Technical Lead accepted the combined specialist evidence and preserved "
+                "the best evidence-backed diagnosis. Any human actions are advisory only."
+            ),
+        }
 
         updated = await self.repository.update_incident(
             incident_id,
@@ -336,7 +345,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 "validation": validation,
                 "agentic": {
                     "current_agent": "technical_lead",
-                    "active_agents": active_agents,
+                    "active_agents": [],
                     "review_state": "COMPLETED",
                     "review_decision": decision,
                     "review_confidence": review.confidence,
@@ -344,12 +353,9 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "bdi_review_goal": review.bdi_goal,
                     "bdi_review_intention": review.bdi_review_intention,
                     "bdi_review_decision_intention": review.bdi_decision_intention,
-                    "support_requested": decision == "request_support",
-                    "support_domain": review.support_domain if decision == "request_support" else None,
-                    "support_reason": review.support_reason if decision == "request_support" else None,
                     "collaboration_roles": involved_roles,
                     "collaboration_round": max(len(involved_roles) - 1, 0),
-                    "peer_collaboration_state": peer_state,
+                    "peer_collaboration_state": "COMPLETED",
                 },
             },
         )
@@ -371,14 +377,12 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "decision": decision,
                     "confidence": review.confidence,
                     "diagnosis_summary": review.diagnosis_summary,
-                    "support_domain": review.support_domain if decision == "request_support" else None,
                     "specialists_involved": involved_roles,
                 },
             },
         )
         self.technical_lead_reviews_completed_count += 1
-        if decision != "request_support":
-            self._apply_agent_activity(incident_id, decision=decision)
+        self._release_agents(incident_id)
         LOGGER.warning(
             "Technical Lead BDI review persisted: incident=%s decision=%s status=%s "
             "confidence=%.3f specialists=%s",
@@ -388,133 +392,6 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             review.confidence,
             ",".join(involved_roles) or "none",
         )
-
-    async def _start_peer_support_round(
-        self,
-        incident: dict[str, Any],
-        specialist_receipt: Any,
-        review: Any,
-        *,
-        completed_task_id: str,
-    ) -> None:
-        incident_id = str(incident["incident_id"])
-        support_domain = str(review.support_domain or "").strip().lower()
-        support_reason = str(review.support_reason or "").strip()
-        support_role = SUPPORT_ROLE_BY_DOMAIN.get(support_domain)
-        if support_role is None:
-            raise RuntimeError(f"Unsupported support domain: {support_domain!r}")
-        if not support_reason:
-            raise RuntimeError("Technical Lead support decision did not include a reason")
-
-        involved = await self._involved_specialist_roles(incident_id)
-        if support_role in involved:
-            raise RuntimeError(
-                f"Technical Lead requested {support_role}, but that specialist already "
-                "participated in this incident; another support round would not add a new domain"
-            )
-
-        specialist_getter = getattr(self.assignee, "_specialist_by_role", None)
-        if not callable(specialist_getter):
-            raise RuntimeError("Runtime does not expose specialist peer collaboration")
-        peer = specialist_getter(specialist_receipt.agent_role)
-        support = specialist_getter(support_role)
-        if not support.xmpp_connected or not support.communication_ok:
-            raise RuntimeError(f"Requested support specialist {support_role} is not reachable")
-        if not peer.xmpp_connected or not peer.communication_ok:
-            raise RuntimeError(
-                f"Current specialist {specialist_receipt.agent_role} cannot share peer evidence"
-            )
-
-        support_task = await self.task_workflow.create_investigation_task(
-            incident,
-            primary_investigator=support_role,
-            created_by="technical_lead",
-        )
-        support_task_id = str(support_task["task_id"])
-
-        # The TL authorizes participation, but the evidence transfer itself is a
-        # direct specialist-to-specialist XMPP exchange.
-        acknowledgement = await peer.share_peer_context(
-            receiver=str(support.jid),
-            incident_id=incident_id,
-            support_task_id=support_task_id,
-            target_role=support_role,
-            support_domain=support_domain,
-            support_reason=support_reason,
-            specialist_result=specialist_receipt.task_outcome(),
-            timeout=10.0,
-        )
-
-        collaboration_roles = [*involved, support_role]
-        updated = await self.repository.update_incident(
-            incident_id,
-            {
-                "status": "UNDER_ANALYSIS",
-                "agentic": {
-                    "current_agent": support_role,
-                    "active_agents": ["technical_lead", *collaboration_roles],
-                    # This pointer identifies the one durable task currently
-                    # advancing. Older completed tasks stay in agent_tasks and
-                    # form the durable collaboration history for the incident.
-                    "investigation_task_id": support_task_id,
-                    "task_state": support_task.get("state"),
-                    "support_requested": True,
-                    "support_domain": support_domain,
-                    "support_reason": support_reason,
-                    "collaboration_roles": collaboration_roles,
-                    "collaboration_round": max(len(collaboration_roles) - 1, 1),
-                    "peer_collaboration_state": "ACTIVE",
-                },
-            },
-        )
-        if updated is None:
-            raise RuntimeError(
-                f"Incident disappeared while starting peer collaboration: {incident_id}"
-            )
-
-        await self.repository.add_event(
-            incident_id,
-            {
-                "event_type": "PEER_COLLABORATION_AUTHORIZED",
-                "agent_role": "technical_lead",
-                "action": "authorize_direct_specialist_collaboration",
-                "reason": support_reason,
-                "status": "UNDER_ANALYSIS",
-                "task_id": support_task_id,
-                "outcome": {
-                    "from_role": specialist_receipt.agent_role,
-                    "to_role": support_role,
-                    "support_domain": support_domain,
-                    "completed_task_id": completed_task_id,
-                    "peer_correlation_id": acknowledgement.correlation_id,
-                    "collaboration_roles": collaboration_roles,
-                },
-            },
-        )
-
-        technical_lead_getter = getattr(self.assignee, "_technical_lead", None)
-        if callable(technical_lead_getter):
-            technical_lead_getter().set_activity(
-                "WAITING",
-                incident_id=incident_id,
-                detail="peer_collaboration_in_progress",
-            )
-        peer.set_activity(
-            "WAITING",
-            incident_id=incident_id,
-            detail=f"collaborating_with_{support_role}",
-        )
-
-        self.peer_collaborations_started_count += 1
-        LOGGER.warning(
-            "Direct peer collaboration authorized: incident=%s %s -> %s support_task=%s domain=%s",
-            incident_id,
-            specialist_receipt.agent_role,
-            support_role,
-            support_task_id,
-            support_domain,
-        )
-        await self._advance_investigation_task(updated)
 
     async def _advance_investigation_task(
         self,
@@ -682,9 +559,6 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "active_agents": [],
                     "review_state": "FALLBACK_COMPLETED",
                     "review_decision": "resolve",
-                    "support_requested": False,
-                    "support_domain": None,
-                    "support_reason": None,
                     "peer_collaboration_state": "COMPLETED",
                 },
             },
@@ -709,7 +583,7 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 },
             },
         )
-        self._apply_agent_activity(incident_id, decision="resolve")
+        self._release_agents(incident_id)
 
     async def _persist_technical_lead_review_failure(
         self,
@@ -737,35 +611,6 @@ class ReActIncidentCoordinator(IncidentCoordinator):
             ),
             event_type="TECHNICAL_LEAD_REVIEW_FALLBACK",
             event_action="preserve_specialist_diagnosis",
-            reason=str(error),
-        )
-
-    async def _persist_peer_collaboration_failure(
-        self,
-        incident_id: str,
-        *,
-        specialist_receipt: Any,
-        task_id: str,
-        error: Exception,
-    ) -> None:
-        self.peer_collaborations_failed_count += 1
-        LOGGER.exception(
-            "Peer collaboration could not start; preserving current diagnosis instead of operator "
-            "escalation: incident=%s error=%s",
-            incident_id,
-            error,
-        )
-        await self._persist_diagnosis_fallback(
-            incident_id,
-            specialist_receipt=specialist_receipt,
-            task_id=task_id,
-            validation_status="PEER_COLLABORATION_FALLBACK",
-            validation_summary=(
-                "Additional peer evidence could not be collected, so the system preserved the "
-                "best diagnosis already supported by the current specialist evidence."
-            ),
-            event_type="PEER_COLLABORATION_FALLBACK",
-            event_action="preserve_current_diagnosis",
             reason=str(error),
         )
 
@@ -807,7 +652,6 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                     "active_agents": [],
                     "review_state": "DIAGNOSTIC_FAILURE_RECORDED",
                     "review_decision": "resolve",
-                    "support_requested": False,
                     "peer_collaboration_state": "COMPLETED",
                 },
             },
@@ -825,25 +669,19 @@ class ReActIncidentCoordinator(IncidentCoordinator):
                 "task_id": task_id,
             },
         )
-        self._apply_agent_activity(incident_id, decision="resolve")
+        self._release_agents(incident_id)
         return dict(updated)
 
-    def _apply_agent_activity(self, incident_id: str, *, decision: str) -> None:
+    def _release_agents(self, incident_id: str) -> None:
+        """Every agent goes idle: the review that just ran is terminal."""
+
         agents = getattr(self.assignee, "agents", None)
         if not isinstance(agents, list):
             return
         for agent in agents:
             if getattr(agent, "activity_incident_id", None) != incident_id:
                 continue
-            role = str(getattr(agent, "role", ""))
-            if decision == "request_support" and role == "technical_lead":
-                agent.set_activity(
-                    "WAITING",
-                    incident_id=incident_id,
-                    detail="support_coordination_pending",
-                )
-            else:
-                agent.set_activity("IDLE")
+            agent.set_activity("IDLE")
 
     async def _persist_failed_react_result(
         self,

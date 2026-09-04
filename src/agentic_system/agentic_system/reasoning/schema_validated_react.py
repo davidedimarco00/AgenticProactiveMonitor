@@ -220,6 +220,51 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
         except (ValidationError, RuntimeError, ValueError):
             return None
 
+    def _unsatisfiable_target(
+        self,
+        candidates: tuple[str, ...],
+        assignment: dict[str, Any],
+    ) -> str | None:
+        """Detect a target no compatible tool can address.
+
+        The runtime rebinds the primary target argument from the evidence
+        request and then requires the executed call to preserve it, so a target
+        outside every candidate's declared vocabulary cannot be repaired by the
+        tool-selection model. Reporting it immediately avoids spending three
+        inferences on an unwinnable selection.
+        """
+
+        request = assignment.get("evidence_request")
+        if not isinstance(request, dict) or not candidates:
+            return None
+        target = str(request.get("target_component") or "").strip()
+        if not target:
+            return None
+
+        declared: list[tuple[str, str, list[str]]] = []
+        for name in candidates:
+            tool = self._langchain_tool_by_name.get(name)
+            if tool is None:
+                continue
+            properties = self._tool_schema_properties(tool)
+            for field in self._PRIMARY_TARGET_ARGUMENTS:
+                schema = properties.get(field)
+                if not isinstance(schema, dict):
+                    continue
+                allowed = [str(value) for value in schema.get("enum") or ()]
+                if allowed:
+                    declared.append((name, field, allowed))
+                break
+
+        if not declared or any(target in allowed for _, _, allowed in declared):
+            return None
+
+        name, field, allowed = declared[0]
+        return (
+            f"evidence_request.target_component={target!r} is not an addressable monitored "
+            f"component; {field} of {name} accepts {allowed!r}"
+        )
+
     @staticmethod
     def _is_duplicate_call(
         *,
@@ -272,6 +317,11 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
                 )
                 return name, deterministic_args
 
+        unsatisfiable = self._unsatisfiable_target(candidates, assignment)
+        if unsatisfiable is not None:
+            raise ReActInvestigationError(f"Tool selection failed: {unsatisfiable}")
+
+        selector = self._selector_for_tools(candidates)
         previous_calls = [
             {"tool": item.tool, "arguments": item.arguments, "success": item.success}
             for item in evidence[-6:]
@@ -299,7 +349,7 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
             try:
                 response = await self._invoke_with_provider_slot(
                     self.tool_provider,
-                    self._tool_selector.ainvoke(messages),
+                    selector.ainvoke(messages),
                 )
                 if not isinstance(response, AIMessage):
                     raise RuntimeError("Qwen tool selector returned a non-AI message")

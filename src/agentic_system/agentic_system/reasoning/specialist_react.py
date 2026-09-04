@@ -83,6 +83,9 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         "container_name",
     )
     _RELATED_TARGET_ARGUMENTS = ("target_host", "target_service", "dependency")
+    # Latency detectors observe a path, not a single container. Their name
+    # carries both endpoints: <PREFIX>-<source>-<destination>.
+    _PATH_DETECTOR_PREFIXES = ("NETLAT-", "APPLAT-")
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         tools = kwargs.get("tools")
@@ -95,6 +98,7 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         self._active_reasoning_assignment: dict[str, Any] | None = None
         self._active_selection_assignment: dict[str, Any] | None = None
         self._active_evidence_request: _EvidenceRequest | None = None
+        self._component_vocabulary: tuple[str, ...] | None = None
 
     # ------------------------------------------------------------------
     # Deterministic incident focus
@@ -143,13 +147,88 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                 return family, "detector_naming_contract"
         return "unknown", "unclassified_detector_metadata"
 
+    def _component_vocabulary_from_tools(self) -> tuple[str, ...]:
+        """Components the MCP tools actually accept, read from their schemas.
+
+        The agentic system deliberately does not hardcode the monitored
+        topology. The authoritative list of addressable components is the
+        enumeration the diagnostic tools declare for their target arguments, so
+        it is discovered at runtime and cached per executor.
+        """
+
+        cached = getattr(self, "_component_vocabulary", None)
+        if cached is not None:
+            return cached
+
+        values: list[str] = []
+        for tool in getattr(self, "_langchain_tools", ()):
+            properties = self._tool_schema_properties(tool)
+            for field in (*self._PRIMARY_TARGET_ARGUMENTS, *self._RELATED_TARGET_ARGUMENTS):
+                schema = properties.get(field)
+                if not isinstance(schema, dict):
+                    continue
+                for value in schema.get("enum") or ():
+                    text = str(value).strip()
+                    if text and text not in values:
+                        values.append(text)
+
+        # Longest first: a component name can be a prefix of another one.
+        vocabulary = tuple(sorted(values, key=lambda item: (-len(item), item)))
+        self._component_vocabulary = vocabulary
+        return vocabulary
+
     @classmethod
-    def _affected_component(cls, *, entity: str, anomaly: dict[str, Any]) -> str:
+    def _path_endpoints(
+        cls,
+        *,
+        detector_name: str,
+        known_components: tuple[str, ...],
+    ) -> tuple[str, str] | None:
+        """Split a path detector name into its source and destination service.
+
+        Service names contain hyphens, so ``NETLAT-a-b-c-d`` cannot be split
+        syntactically. The boundary is resolved against the components the MCP
+        tools accept; without that vocabulary the split is not attempted.
+        """
+
+        if not known_components:
+            return None
+
+        upper = detector_name.upper()
+        for prefix in cls._PATH_DETECTOR_PREFIXES:
+            if not upper.startswith(prefix):
+                continue
+            remainder = detector_name[len(prefix) :]
+            for source in known_components:
+                marker = f"{source}-"
+                if not remainder.startswith(marker):
+                    continue
+                destination = remainder[len(marker) :]
+                if destination in known_components:
+                    return source, destination
+            return None
+        return None
+
+    @classmethod
+    def _affected_component(
+        cls,
+        *,
+        entity: str,
+        anomaly: dict[str, Any],
+        known_components: tuple[str, ...] = (),
+    ) -> str:
         detector_name = cls._detector_name(entity=entity, anomaly=anomaly)
         upper = detector_name.upper()
         for prefix in ("CPU-", "RAM-"):
             if upper.startswith(prefix) and len(detector_name) > len(prefix):
                 return detector_name[len(prefix) :]
+        endpoints = cls._path_endpoints(
+            detector_name=detector_name,
+            known_components=known_components,
+        )
+        if endpoints is not None:
+            # The observing side of the path is where diagnostic tools run.
+            return endpoints[0]
         return str(anomaly.get("affected_component") or entity or "unknown").strip()
 
     @classmethod
@@ -159,11 +238,26 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         agent_role: str,
         entity: str,
         anomaly: dict[str, Any],
+        known_components: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         family, family_source = cls._signal_family(entity=entity, anomaly=anomaly)
         detector_name = cls._detector_name(entity=entity, anomaly=anomaly)
-        component = cls._affected_component(entity=entity, anomaly=anomaly)
+        component = cls._affected_component(
+            entity=entity,
+            anomaly=anomaly,
+            known_components=known_components,
+        )
+        endpoints = cls._path_endpoints(
+            detector_name=detector_name,
+            known_components=known_components,
+        )
+        related_component = endpoints[1] if endpoints is not None else None
 
+        path_suffix = (
+            f" on the path from {component} to {related_component}"
+            if related_component
+            else ""
+        )
         guidance: dict[str, tuple[str, list[str]]] = {
             "container_cpu": (
                 f"What abnormal process, workload or runtime/resource mechanism on {component} produced the reported CPU anomaly?",
@@ -186,7 +280,8 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                 ],
             ),
             "network_transport_latency": (
-                "What transport/path mechanism produced the detector-reported network connection latency anomaly?",
+                "What transport/path mechanism produced the detector-reported network connection "
+                f"latency anomaly{path_suffix}?",
                 [
                     "detector-aligned transport-latency history around the anomaly",
                     "name resolution and IP reachability when relevant",
@@ -196,7 +291,8 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                 ],
             ),
             "application_service_latency": (
-                "What application/service mechanism produced the detector-reported HTTP response latency anomaly?",
+                "What application/service mechanism produced the detector-reported HTTP response "
+                f"latency anomaly{path_suffix}?",
                 [
                     "detector-aligned application-latency history around the anomaly",
                     "HTTP/service behaviour on the affected request path",
@@ -226,6 +322,7 @@ class SpecialistReActExecutor(_CoreReActExecutor):
             "feature_name": str(anomaly.get("feature_name") or "").strip() or None,
             "feature_field": str(anomaly.get("feature_field") or "").strip() or None,
             "affected_component": component,
+            "related_component": related_component,
             "reported_entity": entity,
             "data_start_time": anomaly.get("data_start_time"),
             "data_end_time": anomaly.get("data_end_time"),
@@ -249,11 +346,13 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         severity: str,
         entity: str,
         anomaly: dict[str, Any],
+        known_components: tuple[str, ...] = (),
     ) -> str:
         anchor = cls._build_incident_anchor(
             agent_role=agent_role,
             entity=entity,
             anomaly=anomaly,
+            known_components=known_components,
         )
         compact_anchor = json.dumps(
             {
@@ -300,6 +399,7 @@ class SpecialistReActExecutor(_CoreReActExecutor):
             agent_role=str(enriched.get("agent_role") or ""),
             entity=str(enriched.get("entity") or "unknown"),
             anomaly=anomaly_dict,
+            known_components=self._component_vocabulary_from_tools(),
         )
         grounding = self._initial_rag_context_by_task.get(self._grounding_key(enriched))
         if grounding:
@@ -363,6 +463,7 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                     severity=severity,
                     entity=entity,
                     anomaly=anomaly,
+                    known_components=self._component_vocabulary_from_tools(),
                 ),
                 "limit": self.INITIAL_RAG_LIMIT,
             },
@@ -429,6 +530,13 @@ class SpecialistReActExecutor(_CoreReActExecutor):
             and request.target_component != affected_component
         ):
             normalized = request.model_copy(update={"target_component": affected_component})
+
+        # A path detector already names its far endpoint. Keeping it in the
+        # request lets the runtime bind the tool's target argument instead of
+        # asking the tool-selection model to rediscover it.
+        anchor_related = str(anchor.get("related_component") or "").strip()
+        if anchor_related and not str(normalized.related_component or "").strip():
+            normalized = normalized.model_copy(update={"related_component": anchor_related})
 
         if observed_signal in cls._RESOURCE_SIGNAL_FAMILIES:
             if (
@@ -784,9 +892,20 @@ class SpecialistReActExecutor(_CoreReActExecutor):
 
         last_error: Exception | None = None
         validation_feedback = ""
+        concise_retry = False
         for _attempt in range(3):
             final_prompt = prompt
-            if validation_feedback:
+            if concise_retry:
+                # The previous attempt was cut off before the JSON closed. Do not
+                # grow the prompt with feedback (that only truncates sooner); ask
+                # for the smallest valid object instead.
+                final_prompt += (
+                    "\n\nThe previous attempt was cut off before the JSON ended. Return the "
+                    "SMALLEST object that still satisfies the schema: one short sentence per "
+                    "string field, at most two items per list, and make sure every string and "
+                    "bracket is closed."
+                )
+            elif validation_feedback:
                 final_prompt += (
                     "\n\nThe previous structured result was rejected. Correct ONLY the final "
                     "diagnostic object using the same evidence; do not gather or invent evidence. "
@@ -825,12 +944,15 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                 raise
             except ValidationError as exc:
                 last_error = exc
+                concise_retry = False
                 validation_feedback = "; ".join(
                     str(item.get("msg") or item) for item in exc.errors()
                 )
             except Exception as exc:
                 last_error = exc
-                validation_feedback = str(exc)
+                message = str(exc)
+                concise_retry = "invalid JSON syntax" in message
+                validation_feedback = "" if concise_retry else message
 
         raise ReActInvestigationError(
             "Gemma structured diagnostic finalization failed: "
@@ -968,6 +1090,92 @@ class SpecialistReActExecutor(_CoreReActExecutor):
         )
 
     # ------------------------------------------------------------------
+    # Autonomous peer consultation merge
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _dedup(*sources: Any) -> tuple[str, ...]:
+        seen: list[str] = []
+        for source in sources:
+            for raw in source or ():
+                value = str(raw).strip()
+                if value and value not in seen:
+                    seen.append(value)
+        return tuple(seen)
+
+    @classmethod
+    def finalize_with_peer_help(
+        cls,
+        *,
+        cached_result: ReActInvestigationResult,
+        peer_result: dict[str, Any],
+        peer_role: str,
+        reason: str,
+    ) -> ReActInvestigationResult:
+        """Fold a peer specialist's investigation into one combined result.
+
+        The merge is deterministic (no extra LLM call): the Technical Lead review
+        still performs the Gemma synthesis over the combined evidence. Peer help
+        has been consumed, so the combined result never asks for more assistance.
+        """
+
+        peer_status = str(peer_result.get("diagnosis_status") or "inconclusive").strip().lower()
+        own_status = str(cached_result.diagnosis_status or "inconclusive").strip().lower()
+        rank = {"inconclusive": 0, "probable": 1, "confirmed": 2}
+        combined_status = own_status if rank.get(own_status, 0) >= rank.get(peer_status, 0) else peer_status
+
+        root_cause = cached_result.root_cause or (
+            str(peer_result.get("root_cause") or "").strip() or None
+        )
+        causal_chain = cached_result.causal_chain or tuple(
+            str(item).strip() for item in (peer_result.get("causal_chain") or []) if str(item).strip()
+        )
+        try:
+            peer_confidence = float(peer_result.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            peer_confidence = 0.0
+
+        peer_findings = tuple(peer_result.get("findings") or ())
+        peer_summary = str(peer_result.get("summary") or "").strip()
+        combined_summary = cached_result.summary
+        if peer_summary:
+            combined_summary = (
+                f"{cached_result.summary} Cross-domain corroboration from {peer_role}: {peer_summary}"
+            )
+
+        peer_consultation = {
+            "requested": True,
+            "target_role": peer_role,
+            "reason": reason,
+            "status": "completed",
+            "peer_confidence": round(peer_confidence, 4),
+            "peer_findings_count": len(peer_findings),
+        }
+
+        return replace(
+            cached_result,
+            summary=combined_summary,
+            diagnosis_status=combined_status,
+            root_cause=root_cause,
+            causal_chain=causal_chain,
+            confidence=max(float(cached_result.confidence), peer_confidence),
+            findings=cls._dedup(cached_result.findings, peer_findings),
+            evidence=(
+                *cached_result.evidence,
+                *(dict(item) for item in (peer_result.get("evidence") or ())),
+            ),
+            hypotheses=cls._dedup(
+                cached_result.hypotheses, peer_result.get("hypotheses") or ()
+            ),
+            recommended_next_steps=cls._dedup(
+                cached_result.recommended_next_steps,
+                peer_result.get("recommended_next_steps") or (),
+            ),
+            assistance_required=False,
+            assistance_domain=None,
+            peer_consultation=peer_consultation,
+        )
+
+    # ------------------------------------------------------------------
     # Public investigation entry point
     # ------------------------------------------------------------------
     async def investigate(
@@ -990,6 +1198,7 @@ class SpecialistReActExecutor(_CoreReActExecutor):
             agent_role=normalized_agent_role,
             entity=entity,
             anomaly=anomaly,
+            known_components=self._component_vocabulary_from_tools(),
         )
         await self._emit_trace(
             action="incident_anchor",

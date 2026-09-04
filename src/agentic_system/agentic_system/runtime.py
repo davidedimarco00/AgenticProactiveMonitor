@@ -319,6 +319,13 @@ class AgentRuntime:
         if assistance_domain in {"", "none", "null"}:
             assistance_domain = None
 
+        peer_consultation_raw = payload.get("peer_consultation")
+        peer_consultation = (
+            dict(peer_consultation_raw)
+            if isinstance(peer_consultation_raw, dict)
+            else None
+        )
+
         if diagnosis_status in {"confirmed", "probable"}:
             if not root_cause:
                 raise RuntimeError(
@@ -363,6 +370,7 @@ class AgentRuntime:
             react_steps=react_steps,
             tools_used=strings("tools_used"),
             conversation_id=str(payload.get("conversation_id") or "").strip() or None,
+            peer_consultation=peer_consultation,
             retryable=False,
         )
 
@@ -389,6 +397,14 @@ class AgentRuntime:
             )
 
         LOGGER.info("All %d SPADE-LLM agents are connected", len(self.agents))
+
+        # Give each specialist the address book of its peers so it can contact
+        # one directly for autonomous collaboration. This is pure address
+        # resolution - no authorization, no LLM.
+        specialists = self._specialists()
+        peer_directory = {s.role: str(s.jid) for s in specialists}
+        for specialist in specialists:
+            specialist.set_peer_directory(peer_directory)
 
         # Specialist results are asynchronous INFORM/FAILURE messages that arrive
         # after the initial task AGREE. Install the TL result inbox before any

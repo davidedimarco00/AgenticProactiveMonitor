@@ -34,29 +34,16 @@ def _operator_step() -> dict:
 
 
 def _valid_review_payload(*, decision: str = "resolve") -> dict:
-    support = decision == "request_support"
     return {
         "decision": decision,
         "confidence": 0.91,
-        "diagnosis_summary": (
-            "The current diagnosis needs another domain before acceptance."
-            if support
-            else "The reported CPU anomaly has an evidence-backed explanation."
-        ),
+        "diagnosis_summary": "The reported CPU anomaly has an evidence-backed explanation.",
         "root_cause": "A CPU-bound workload caused the observed CPU saturation.",
-        "rationale": (
-            "Application evidence is required to validate the remaining uncertainty."
-            if support
-            else "Current runtime and metric evidence supports the causal explanation."
-        ),
+        "rationale": "Current runtime and metric evidence supports the causal explanation.",
         "remediation_summary": (
-            "Do not apply corrective changes before additional diagnosis."
-            if support
-            else "Verify the diagnosed workload before applying operator-approved remediation."
+            "Verify the diagnosed workload before applying operator-approved remediation."
         ),
-        "remediation_steps": [] if support else [_operator_step()],
-        "support_domain": "application" if support else None,
-        "support_reason": "Application evidence is still required." if support else None,
+        "remediation_steps": [_operator_step()],
     }
 
 
@@ -112,27 +99,19 @@ def test_review_parser_accepts_resolve_decision() -> None:
 
     assert result.decision == "resolve"
     assert result.confidence == 0.91
-    assert result.support_domain is None
     assert result.remediation_steps == (_operator_step(),)
 
 
-def test_review_structured_schema_constrains_decision_support_and_remediation() -> None:
+def test_review_structured_schema_constrains_decision_and_remediation() -> None:
     schema = _TechnicalLeadReviewOutput.model_json_schema()
     properties = schema["properties"]
 
-    # operator_action_required remains parse-compatible with older persisted/model
-    # outputs, but the diagnosis-first policy normalizes it to resolve before the
-    # autonomous workflow can persist a terminal decision.
-    assert set(properties["decision"]["enum"]) == {
-        "resolve",
-        "operator_action_required",
-        "request_support",
-    }
-    support_schema = properties["support_domain"]
-    enum_values = set()
-    for option in support_schema.get("anyOf", []):
-        enum_values.update(option.get("enum", []))
-    assert enum_values == {"system", "network", "application", "software"}
+    # The review is terminal: the schema pins the decision to resolve, so the
+    # model is never offered another specialist round.
+    decision_schema = properties["decision"]
+    assert set(decision_schema.get("enum", [decision_schema.get("const")])) == {"resolve"}
+    assert "support_domain" not in properties
+    assert "support_reason" not in properties
     assert properties["confidence"]["minimum"] == 0.0
     assert properties["confidence"]["maximum"] == 1.0
     assert properties["remediation_steps"]["type"] == "array"
@@ -201,43 +180,9 @@ def test_review_reasoner_prefers_structured_provider_output() -> None:
     assert result.remediation_steps[0]["command"].startswith("docker exec processing-service")
 
 
-def test_review_retries_when_probable_result_explicitly_requires_support() -> None:
-    class FakeProvider:
-        def __init__(self) -> None:
-            self.calls = 0
+def test_legacy_support_request_resolves_without_burning_another_inference() -> None:
+    """A model that still asks for a peer must not cost a retry on the shared GPU."""
 
-        async def get_llm_response(
-            self,
-            context,
-            tools=None,
-            conversation_id=None,
-            output_schema=None,
-        ):
-            self.calls += 1
-            decision = "operator_action_required" if self.calls == 1 else "request_support"
-            payload = _valid_review_payload(decision=decision)
-            if output_schema is not None:
-                return {"text": None, "structured": output_schema(**payload)}
-            return {"text": json.dumps(payload), "structured": None}
-
-    provider = FakeProvider()
-    reasoner = TechnicalLeadReviewReasoner(provider, max_attempts=3)  # type: ignore[arg-type]
-
-    result = asyncio.run(
-        reasoner.assess(
-            incident=_incident(),
-            specialist_result=_specialist_result(diagnosis_status="probable"),
-        )
-    )
-
-    # The legacy operator decision is first normalized to resolve, then rejected
-    # because this specialist explicitly asked for the one allowed support round.
-    assert provider.calls == 2
-    assert result.decision == "request_support"
-    assert result.support_domain == "application"
-
-
-def test_review_redirects_support_to_explicit_requested_eligible_domain() -> None:
     class FakeProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -251,17 +196,13 @@ def test_review_redirects_support_to_explicit_requested_eligible_domain() -> Non
         ):
             self.calls += 1
             payload = _valid_review_payload(decision="request_support")
-            payload["support_domain"] = "network"
-            payload["support_reason"] = "The model initially selected a different domain."
-            if output_schema is not None:
-                return {"text": None, "structured": output_schema(**payload)}
+            payload["support_domain"] = "application"
+            payload["support_reason"] = "The model still believes another domain is needed."
             return {"text": json.dumps(payload), "structured": None}
 
     provider = FakeProvider()
     reasoner = TechnicalLeadReviewReasoner(provider, max_attempts=3)  # type: ignore[arg-type]
     specialist_result = _specialist_result(diagnosis_status="probable")
-    specialist_result["specialists_already_involved"] = ["network_engineer"]
-    specialist_result["assistance_domain"] = "system"
 
     result = asyncio.run(
         reasoner.assess(
@@ -270,11 +211,9 @@ def test_review_redirects_support_to_explicit_requested_eligible_domain() -> Non
         )
     )
 
-    # The deterministic collaboration policy does not waste another LLM call:
-    # the specialist explicitly requested system evidence and system is eligible.
     assert provider.calls == 1
-    assert result.decision == "request_support"
-    assert result.support_domain == "system"
+    assert result.decision == "resolve"
+    assert result.root_cause
 
 
 def test_operator_decision_is_normalized_to_resolve_when_no_peer_support_is_requested() -> None:
@@ -343,15 +282,11 @@ def test_review_model_failure_returns_diagnostic_fallback_not_operator_escalatio
 
 
 def test_terminal_review_validation_requires_confirmed_root_cause_and_causal_chain() -> None:
-    assessment = TechnicalLeadReviewReasoner._parse_response(_valid_review_json())
     incomplete = _specialist_result()
     incomplete["causal_chain"] = []
 
     with pytest.raises(RuntimeError, match="root_cause and causal_chain"):
-        TechnicalLeadReviewReasoner._validate_decision_against_specialist_result(
-            assessment,
-            specialist_result=incomplete,
-        )
+        TechnicalLeadReviewReasoner._validate_specialist_result(incomplete)
 
 
 def test_agentspeak_review_commits_critic_decision() -> None:
@@ -362,15 +297,13 @@ def test_agentspeak_review_commits_critic_decision() -> None:
 
     async def fake_review() -> BDIReviewAssessment:
         return BDIReviewAssessment(
-            decision="request_support",
+            decision="resolve",
             confidence=0.73,
-            diagnosis_summary="The current evidence is not sufficient for a final diagnosis.",
+            diagnosis_summary="The bounded investigation produced the best available diagnosis.",
             root_cause="Root cause remains unconfirmed.",
-            rationale="Application behaviour must be correlated before accepting the hypothesis.",
-            remediation_summary="Do not apply corrective changes before additional evidence.",
+            rationale="The collected evidence is preserved as the terminal diagnosis.",
+            remediation_summary="Do not apply corrective changes before operator verification.",
             remediation_steps=(),
-            support_domain="application",
-            support_reason="Application logs and service behaviour must be reviewed.",
         )
 
     result = asyncio.run(
@@ -384,5 +317,4 @@ def test_agentspeak_review_commits_critic_decision() -> None:
     assert result.goal == "review_investigation"
     assert result.review_intention == "review_specialist_result"
     assert result.decision_intention == "commit_review_decision"
-    assert result.decision == "request_support"
-    assert result.support_domain == "application"
+    assert result.decision == "resolve"

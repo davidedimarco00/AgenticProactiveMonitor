@@ -81,6 +81,8 @@ def build_agents(config: RuntimeConfig) -> list[BaseAgent]:
                 agentspeak_specialist_asl=config.agentspeak_specialist_asl,
                 agentspeak_action_timeout_seconds=config.agentspeak_action_timeout_seconds,
                 agentspeak_bdi_max_concurrency=config.agentspeak_bdi_max_concurrency,
+                peer_help_enabled=config.peer_help_enabled,
+                peer_help_response_timeout_seconds=config.peer_help_response_timeout_seconds,
                 **common_kwargs,
             )
             specialist.configure_react(

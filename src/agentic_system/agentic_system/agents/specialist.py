@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -16,14 +17,11 @@ from ..reasoning import (
 )
 from .base import BaseAgent
 from .collaboration import (
-    PEER_COLLABORATION_CONTEXT_ACCEPTED_TYPE,
-    PEER_COLLABORATION_CONTEXT_TYPE,
-    PEER_COLLABORATION_RESULT_TYPE,
-    PeerCollaborationAcknowledgementBehaviour,
-    PeerCollaborationContextBehaviour,
-    PeerCollaborationResultBehaviour,
-    send_peer_result,
-    share_peer_context,
+    PEER_HELP_REQUEST_TYPE,
+    PEER_HELP_RESPONSE_TYPE,
+    PeerHelpRequestBehaviour,
+    PeerHelpResponseBehaviour,
+    request_peer_help,
 )
 from .commands import SpecialistTaskAssignment
 from .messages import (
@@ -32,9 +30,11 @@ from .messages import (
     Performative,
     parse_spade_message,
 )
+from .peer_help import DOMAIN_ROLE, PeerHelpReasoner
 
 
 LOGGER = logging.getLogger("agentic_system.agents.specialist")
+PEER_HELP_RESPONSE_TIMEOUT_SECONDS_DEFAULT = 180.0
 HEALTH_PROBE_MESSAGE_TYPE = "runtime_connectivity_probe"
 INVESTIGATION_TASK_MESSAGE_TYPE = "investigation_task_assignment"
 INVESTIGATION_TASK_ACCEPTED_TYPE = "investigation_task_accepted"
@@ -118,34 +118,15 @@ class SpecialistAgent(BaseAgent):
             assignment = self.assignment
             try:
                 cached = self.agent._completed_react_results.get(assignment.task_id)
-                peer_context = self.agent._peer_context_by_task.get(assignment.task_id)
                 if cached is None:
                     executor = self.agent._react_executor
                     if executor is None:
                         raise RuntimeError("Specialist ReAct executor was not initialized")
 
-                    anomaly = dict(assignment.anomaly)
-                    if peer_context is not None:
-                        anomaly["peer_collaboration_context"] = {
-                            "peer_role": peer_context["peer_role"],
-                            "support_domain": peer_context.get("support_domain"),
-                            "support_reason": peer_context.get("support_reason"),
-                            "specialist_result": dict(peer_context["specialist_result"]),
-                            "instruction": (
-                                "Treat this as direct evidence and hypotheses shared by a peer "
-                                "specialist. Correlate it with your own MCP/RAG observations; "
-                                "do not assume peer hypotheses are facts."
-                            ),
-                        }
-
                     self.agent.set_activity(
                         "WORKING",
                         incident_id=assignment.incident_id,
-                        detail=(
-                            "peer_collaborative_react_investigation"
-                            if peer_context is not None
-                            else "react_investigation"
-                        ),
+                        detail="react_investigation",
                     )
                     result = await executor.investigate(
                         task_id=assignment.task_id,
@@ -153,7 +134,7 @@ class SpecialistAgent(BaseAgent):
                         agent_role=self.agent.role,
                         severity=assignment.severity,
                         entity=assignment.entity,
-                        anomaly=anomaly,
+                        anomaly=dict(assignment.anomaly),
                     )
                     self.agent._completed_react_results[assignment.task_id] = result
                     self.agent.tasks_react_completed += 1
@@ -162,18 +143,11 @@ class SpecialistAgent(BaseAgent):
                 else:
                     result = cached
 
-                # The collaboration data plane is peer-to-peer. The support
-                # specialist sends its evidence to its peer directly while the
-                # TL separately receives the durable task result as control-plane
-                # information for coordination and final review.
-                if peer_context is not None:
-                    await send_peer_result(
-                        self.agent,
-                        receiver=str(peer_context["peer_jid"]),
-                        result_payload=result.to_payload(),
-                        correlation_id=self.correlation_id,
-                    )
-                    self.agent.peer_results_sent += 1
+                # Autonomous peer collaboration: the specialist decides on its
+                # own whether one peer domain should also investigate, contacts
+                # that peer directly, and folds the evidence into one combined
+                # result. The Technical Lead is not involved in this step.
+                result = await self.agent._consult_peer_if_needed(assignment, result)
 
                 envelope = AgentMessage.create(
                     type=INVESTIGATION_TASK_RESULT_TYPE,
@@ -189,21 +163,20 @@ class SpecialistAgent(BaseAgent):
                 self.agent.set_activity(
                     "WAITING",
                     incident_id=assignment.incident_id,
-                    detail=(
-                        "peer_result_shared_awaiting_tl_review"
-                        if peer_context is not None
-                        else "awaiting_technical_lead_review"
-                    ),
+                    detail="awaiting_technical_lead_review",
                 )
+                consultation = result.peer_consultation or {}
                 LOGGER.warning(
-                    "%s completed ReAct task=%s incident=%s steps=%d tools=%s confidence=%.3f peer=%s",
+                    "%s completed ReAct task=%s incident=%s steps=%d tools=%s confidence=%.3f peer_consult=%s",
                     self.agent.display_name,
                     assignment.task_id,
                     assignment.incident_id,
                     result.react_steps,
                     ",".join(result.tools_used) or "none",
                     result.confidence,
-                    peer_context["peer_role"] if peer_context is not None else "none",
+                    f"{consultation.get('target_role')}:{consultation.get('status')}"
+                    if consultation
+                    else "none",
                 )
             except Exception as exc:
                 self.agent.last_react_error = str(exc)
@@ -275,7 +248,6 @@ class SpecialistAgent(BaseAgent):
                         f"not {self.agent.role}"
                     )
 
-                peer_context = self.agent._peer_context_by_task.get(assignment.task_id)
                 deliberation = self.agent._accepted_tasks.get(assignment.task_id)
                 if deliberation is None:
                     self.agent.set_activity(
@@ -288,11 +260,6 @@ class SpecialistAgent(BaseAgent):
                         incident_id=assignment.incident_id,
                         role=self.agent.role,
                         task_type=assignment.task_type,
-                        peer_role=(
-                            str(peer_context["peer_role"])
-                            if peer_context is not None
-                            else None
-                        ),
                     )
                     self.agent._accepted_tasks[assignment.task_id] = deliberation
                     self.agent.tasks_accepted += 1
@@ -309,20 +276,13 @@ class SpecialistAgent(BaseAgent):
                         ),
                         "incident_id": assignment.incident_id,
                         "task_id": assignment.task_id,
-                        "outcome": (
-                            f"acceptance={deliberation.acceptance_intention}; "
-                            f"peer={peer_context['peer_role'] if peer_context is not None else 'none'}"
-                        ),
+                        "outcome": f"acceptance={deliberation.acceptance_intention}",
                     }
                 )
                 self.agent.set_activity(
                     "WORKING",
                     incident_id=assignment.incident_id,
-                    detail=(
-                        "collaborative_investigation_intention_committed"
-                        if peer_context is not None
-                        else "investigation_intention_committed"
-                    ),
+                    detail="investigation_intention_committed",
                 )
 
                 acknowledgement = AgentMessage.create(
@@ -338,7 +298,6 @@ class SpecialistAgent(BaseAgent):
                         "bdi_goal": deliberation.goal,
                         "bdi_acceptance_intention": deliberation.acceptance_intention,
                         "bdi_investigation_intention": deliberation.investigation_intention,
-                        "peer_collaboration": peer_context is not None,
                     },
                 )
                 await self.agent.send_agent_message(
@@ -351,13 +310,12 @@ class SpecialistAgent(BaseAgent):
                     correlation_id=request.correlation_id,
                 )
                 LOGGER.warning(
-                    "%s accepted task=%s incident=%s through BDI goal=%s intention=%s; ReAct scheduled peer=%s",
+                    "%s accepted task=%s incident=%s through BDI goal=%s intention=%s; ReAct scheduled",
                     self.agent.display_name,
                     assignment.task_id,
                     assignment.incident_id,
                     deliberation.goal,
                     deliberation.investigation_intention,
-                    peer_context["peer_role"] if peer_context is not None else "none",
                 )
             except Exception as exc:
                 self.agent.last_request_error = str(exc)
@@ -413,6 +371,8 @@ class SpecialistAgent(BaseAgent):
         agentspeak_specialist_asl: str,
         agentspeak_action_timeout_seconds: float,
         agentspeak_bdi_max_concurrency: int,
+        peer_help_enabled: bool = True,
+        peer_help_response_timeout_seconds: float = PEER_HELP_RESPONSE_TIMEOUT_SECONDS_DEFAULT,
     ) -> None:
         super().__init__(
             jid,
@@ -441,22 +401,26 @@ class SpecialistAgent(BaseAgent):
         self._react_executor: SpecialistReActExecutor | None = None
         self._react_max_steps = 6
         self._react_tool_timeout_seconds = 30.0
-        self._peer_context_by_task: dict[str, dict[str, Any]] = {}
-        self._pending_peer_acknowledgements: dict[str, Any] = {}
-        self._peer_results_by_incident: dict[str, list[dict[str, Any]]] = {}
+        if peer_help_response_timeout_seconds <= 0:
+            raise ValueError("peer_help_response_timeout_seconds must be greater than zero")
+        self._peer_help_enabled = bool(peer_help_enabled)
+        self._peer_help_response_timeout_seconds = float(peer_help_response_timeout_seconds)
+        self._peer_help_reasoner = PeerHelpReasoner(role, provider)
+        self._peer_directory: dict[str, str] = {}
+        self._pending_peer_help: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._peer_help_by_incident: set[str] = set()
         self.tasks_accepted = 0
         self.tasks_react_completed = 0
-        self.peer_contexts_received = 0
-        self.peer_results_sent = 0
-        self.peer_results_received = 0
+        self.peer_help_requests_sent = 0
+        self.peer_help_requests_served = 0
+        self.peer_help_timeouts = 0
         self.last_received_request: AgentMessage | None = None
         self.last_request_error: str | None = None
         self.last_task_assignment: SpecialistTaskAssignment | None = None
         self.last_bdi_task_result: BDISpecialistTaskResult | None = None
         self.last_react_result: ReActInvestigationResult | None = None
         self.last_react_error: str | None = None
-        self.last_peer_context: dict[str, Any] | None = None
-        self.last_peer_result: dict[str, Any] | None = None
+        self.last_peer_consultation: dict[str, Any] | None = None
 
     def configure_react(
         self,
@@ -496,51 +460,158 @@ class SpecialistAgent(BaseAgent):
         task_template.set_metadata("message_type", INVESTIGATION_TASK_MESSAGE_TYPE)
         self.add_behaviour(self.InvestigationTaskBehaviour(), task_template)
 
-        peer_context_template = Template()
-        peer_context_template.set_metadata("protocol", AGENTIC_PROTOCOL)
-        peer_context_template.set_metadata("performative", Performative.REQUEST.value)
-        peer_context_template.set_metadata("message_type", PEER_COLLABORATION_CONTEXT_TYPE)
-        self.add_behaviour(PeerCollaborationContextBehaviour(), peer_context_template)
+        peer_help_request_template = Template()
+        peer_help_request_template.set_metadata("protocol", AGENTIC_PROTOCOL)
+        peer_help_request_template.set_metadata("performative", Performative.REQUEST.value)
+        peer_help_request_template.set_metadata("message_type", PEER_HELP_REQUEST_TYPE)
+        self.add_behaviour(PeerHelpRequestBehaviour(), peer_help_request_template)
 
-        peer_ack_template = Template()
-        peer_ack_template.set_metadata("protocol", AGENTIC_PROTOCOL)
-        peer_ack_template.set_metadata(
-            "message_type", PEER_COLLABORATION_CONTEXT_ACCEPTED_TYPE
-        )
-        self.add_behaviour(
-            PeerCollaborationAcknowledgementBehaviour(),
-            peer_ack_template,
-        )
+        for performative in (Performative.INFORM, Performative.FAILURE):
+            peer_help_response_template = Template()
+            peer_help_response_template.set_metadata("protocol", AGENTIC_PROTOCOL)
+            peer_help_response_template.set_metadata("performative", performative.value)
+            peer_help_response_template.set_metadata("message_type", PEER_HELP_RESPONSE_TYPE)
+            self.add_behaviour(PeerHelpResponseBehaviour(), peer_help_response_template)
 
-        peer_result_template = Template()
-        peer_result_template.set_metadata("protocol", AGENTIC_PROTOCOL)
-        peer_result_template.set_metadata("performative", Performative.INFORM.value)
-        peer_result_template.set_metadata("message_type", PEER_COLLABORATION_RESULT_TYPE)
-        self.add_behaviour(PeerCollaborationResultBehaviour(), peer_result_template)
+    def set_peer_directory(self, directory: dict[str, str]) -> None:
+        """Address book of role -> jid, populated by the runtime after connect."""
 
-    async def share_peer_context(
+        self._peer_directory = {
+            str(role).strip().lower(): str(jid)
+            for role, jid in directory.items()
+            if str(role).strip().lower() != self.role and str(jid).strip()
+        }
+
+    async def _consult_peer_if_needed(
         self,
-        *,
-        receiver: str,
-        incident_id: str,
-        support_task_id: str,
-        target_role: str,
-        support_domain: str,
-        support_reason: str,
-        specialist_result: dict[str, Any],
-        timeout: float = 10.0,
-    ) -> AgentMessage:
-        return await share_peer_context(
-            self,
-            receiver=receiver,
-            incident_id=incident_id,
-            support_task_id=support_task_id,
-            target_role=target_role,
-            support_domain=support_domain,
-            support_reason=support_reason,
-            specialist_result=specialist_result,
-            timeout=timeout,
+        assignment: SpecialistTaskAssignment,
+        result: ReActInvestigationResult,
+    ) -> ReActInvestigationResult:
+        """Decide with the specialist's own LLM whether to consult one peer, then do so."""
+
+        incident_id = assignment.incident_id
+        if not self._peer_help_enabled:
+            return result
+        if not result.assistance_required:
+            return result
+        if str(assignment.task_id).startswith("peer-help:"):
+            return result
+        if incident_id in self._peer_help_by_incident:
+            return result
+
+        self._peer_help_by_incident.add(incident_id)
+        consultation: dict[str, Any] = {
+            "requested": False,
+            "target_role": None,
+            "reason": "",
+            "status": "skipped",
+        }
+        try:
+            decision = await self._peer_help_reasoner.assess(
+                incident_id=incident_id,
+                result=result.to_payload(),
+            )
+            if not decision.needs_help or decision.target_domain is None:
+                consultation["status"] = "skipped"
+                return self._attach_consultation(result, consultation)
+
+            target_role = DOMAIN_ROLE[decision.target_domain]
+            peer_jid = self._peer_directory.get(target_role)
+            consultation.update(
+                {
+                    "requested": True,
+                    "target_role": target_role,
+                    "reason": decision.reason,
+                }
+            )
+            if not peer_jid:
+                consultation["status"] = "unavailable"
+                LOGGER.warning(
+                    "%s wanted peer help from %s for incident=%s but has no address",
+                    self.display_name,
+                    target_role,
+                    incident_id,
+                )
+                return self._attach_consultation(result, consultation)
+
+            self.peer_help_requests_sent += 1
+            self.set_activity(
+                "WORKING",
+                incident_id=incident_id,
+                detail=f"consulting_{target_role}",
+            )
+            LOGGER.warning(
+                "%s consulting peer %s for incident=%s: %s",
+                self.display_name,
+                target_role,
+                incident_id,
+                decision.reason,
+            )
+            peer_payload = await request_peer_help(
+                self,
+                receiver=peer_jid,
+                incident_id=incident_id,
+                requester_role=self.role,
+                reason=decision.reason,
+                requester_result=result.to_payload(),
+                severity=assignment.severity,
+                entity=assignment.entity,
+                anomaly=dict(assignment.anomaly),
+                timeout=self._peer_help_response_timeout_seconds,
+            )
+            combined = self._react_executor.finalize_with_peer_help(
+                cached_result=result,
+                peer_result=peer_payload,
+                peer_role=target_role,
+                reason=decision.reason,
+            )
+            self._completed_react_results[assignment.task_id] = combined
+            self.last_peer_consultation = combined.peer_consultation
+            self.last_react_result = combined
+            LOGGER.warning(
+                "%s folded peer %s evidence into incident=%s combined confidence=%.3f",
+                self.display_name,
+                target_role,
+                incident_id,
+                combined.confidence,
+            )
+            return combined
+        except (TimeoutError, asyncio.TimeoutError):
+            self.peer_help_timeouts += 1
+            consultation["status"] = "unavailable"
+            LOGGER.warning(
+                "%s peer help timed out for incident=%s target=%s",
+                self.display_name,
+                incident_id,
+                consultation.get("target_role"),
+            )
+            return self._attach_consultation(result, consultation)
+        except Exception as exc:  # noqa: BLE001 - best-effort: keep the solo result
+            consultation["status"] = "unavailable"
+            LOGGER.exception(
+                "%s peer consultation failed for incident=%s, keeping solo result: %s",
+                self.display_name,
+                incident_id,
+                exc,
+            )
+            return self._attach_consultation(result, consultation)
+
+    def _attach_consultation(
+        self,
+        result: ReActInvestigationResult,
+        consultation: dict[str, Any],
+    ) -> ReActInvestigationResult:
+        from dataclasses import replace
+
+        self.last_peer_consultation = dict(consultation)
+        # A consultation was attempted for this incident; do not ask again.
+        updated = replace(
+            result,
+            assistance_required=False,
+            assistance_domain=None,
+            peer_consultation=dict(consultation),
         )
+        return updated
 
     def start_react_investigation(
         self,
@@ -559,3 +630,20 @@ class SpecialistAgent(BaseAgent):
                 correlation_id=correlation_id,
             )
         )
+
+    def health_snapshot(self) -> dict[str, Any]:
+        snapshot = super().health_snapshot()
+        snapshot.update(
+            {
+                "tasks_accepted": self.tasks_accepted,
+                "tasks_react_completed": self.tasks_react_completed,
+                "peer_help_enabled": self._peer_help_enabled,
+                "peer_help_requests_sent": self.peer_help_requests_sent,
+                "peer_help_requests_served": self.peer_help_requests_served,
+                "peer_help_timeouts": self.peer_help_timeouts,
+                "peer_directory_roles": sorted(self._peer_directory),
+                "last_peer_consultation": self.last_peer_consultation,
+                "last_react_error": self.last_react_error,
+            }
+        )
+        return snapshot

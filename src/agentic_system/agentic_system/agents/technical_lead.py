@@ -303,8 +303,6 @@ class TechnicalLeadAgent(BaseAgent):
                 rationale=assessment.rationale,
                 remediation_summary=assessment.remediation_summary,
                 remediation_steps=assessment.remediation_steps,
-                support_domain=assessment.support_domain,
-                support_reason=assessment.support_reason,
             )
 
         deliberation = None
@@ -366,8 +364,6 @@ class TechnicalLeadAgent(BaseAgent):
             rationale=deliberation.rationale,
             remediation_summary=deliberation.remediation_summary,
             remediation_steps=deliberation.remediation_steps,
-            support_domain=deliberation.support_domain,
-            support_reason=deliberation.support_reason,
             bdi_goal=deliberation.goal,
             bdi_review_intention=deliberation.review_intention,
             bdi_decision_intention=deliberation.decision_intention,
@@ -378,11 +374,7 @@ class TechnicalLeadAgent(BaseAgent):
         self.set_activity(
             "WAITING",
             incident_id=incident_id,
-            detail=(
-                "support_coordination_pending"
-                if decision.decision == "request_support"
-                else "review_decision_committed"
-            ),
+            detail="review_decision_committed",
         )
         LOGGER.warning(
             "Technical Lead AgentSpeak review completed incident=%s goal=%s "

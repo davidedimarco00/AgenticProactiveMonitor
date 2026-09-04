@@ -242,8 +242,13 @@ class _PromptGemmaDiagnosticFinalizer:
         )
         return normalized
 
+    # Guarantee the schema-constrained object can be emitted in full. Without an
+    # explicit num_predict, Ollama can stop generation early (done_reason=length)
+    # and return a truncated, unparseable JSON body.
+    _FINALIZER_NUM_PREDICT = 2048
+
     def _options(self) -> dict[str, Any]:
-        return {"temperature": 0}
+        return {"temperature": 0, "num_predict": self._FINALIZER_NUM_PREDICT}
 
     async def ainvoke(self, messages: list[dict[str, Any]]) -> _PromptDiagnosticFinalOutput:
         payload = {
@@ -285,7 +290,14 @@ class _ContextAwarePromptGemmaDiagnosticFinalizer(_PromptGemmaDiagnosticFinalize
         self.context_size = context_size
 
     def _options(self) -> dict[str, Any]:
-        return {"temperature": 0, "num_ctx": self.context_size}
+        # Reserve generation budget for the structured object while keeping room
+        # in the context window for the (larger) evidence-rich prompt.
+        num_predict = max(1024, min(self._FINALIZER_NUM_PREDICT, self.context_size // 4))
+        return {
+            "temperature": 0,
+            "num_ctx": self.context_size,
+            "num_predict": num_predict,
+        }
 
     async def ainvoke(self, messages: list[dict[str, Any]]) -> _PromptDiagnosticFinalOutput:
         payload = {
