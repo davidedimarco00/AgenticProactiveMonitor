@@ -1,27 +1,33 @@
-{% extends "base.html" %}
-{% block title %}Operations · {{ app_name }}{% endblock %}
-{% block page_title %}Operations{% endblock %}
-
-{% block content %}
-{% set effective_workflow_state = 'RECOVERY' if workflow.state == 'IDLE' and workflow.active_incident_id and workflow.task and not workflow.active_anomaly else workflow.state %}
-{% set active_incident = workflow.active_incident or {} %}
-{% set live_diagnosis = active_incident.diagnosis or {} %}
-{% set live_agentic = active_incident.agentic or {} %}
-{% set live_timeline = active_incident.timeline or [] %}
-{% set latest_event = live_timeline[-1] if live_timeline else {} %}
+{% extends "base.html" %} {% block title %}Operations · {{ app_name }}{%
+endblock %} {% block page_title %}Operations{% endblock %} {% block content %}
+{% set effective_workflow_state = 'RECOVERY' if workflow.state == 'IDLE' and
+workflow.active_incident_id and workflow.task and not workflow.active_anomaly
+else workflow.state %} {% set active_incident = workflow.active_incident or {}
+%} {% set live_diagnosis = active_incident.diagnosis or {} %} {% set
+live_agentic = active_incident.agentic or {} %} {% set live_timeline =
+active_incident.timeline or [] %} {% set latest_event = live_timeline[-1] if
+live_timeline else {} %}
 <section class="status-panel panel">
   <div class="status-summary">
-    <span class="status-dot {{ 'online' if overall_online else 'offline' }}"></span>
+    <span
+      class="status-dot {{ 'online' if overall_online else 'offline' }}"
+    ></span>
     <div>
       <span class="label">Agentic system</span>
-      <strong id="system-overall-state">{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</strong>
+      <strong id="system-overall-state"
+        >{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</strong
+      >
       <small>Infrastructure and agent health</small>
     </div>
   </div>
 
   <div class="service-strip" id="service-strip">
     {% for service in services %}
-    <div class="service-state" data-service-name="{{ service.name }}" title="{{ service.role }}">
+    <div
+      class="service-state"
+      data-service-name="{{ service.name }}"
+      title="{{ service.role }}"
+    >
       <span class="status-dot small {{ service.status|lower }}"></span>
       <span>{{ service.name }}</span>
     </div>
@@ -29,15 +35,26 @@
   </div>
 </section>
 
-<section class="workflow-panel panel workflow-panel-live" id="workflow-panel" data-workflow-state="{{ effective_workflow_state }}">
+<section
+  class="workflow-panel panel workflow-panel-live"
+  id="workflow-panel"
+  data-workflow-state="{{ effective_workflow_state }}"
+>
   <div class="workflow-header workflow-header-live">
     <div>
       <span class="eyebrow">EXCLUSIVE AGENTIC WORKFLOW</span>
       <h2>Current anomaly processing</h2>
-      <p class="section-description">Live operational view of the anomaly currently owned by the multi-agent team and the diagnosis being built from collected evidence.</p>
+      <p class="section-description">
+        Live operational view of the anomaly currently owned by the multi-agent
+        team and the diagnosis being built from collected evidence.
+      </p>
     </div>
     <div class="workflow-header-actions">
-      <a class="workflow-queue-link" href="/anomalies" title="Open the durable waiting anomaly queue">
+      <a
+        class="workflow-queue-link"
+        href="/anomalies"
+        title="Open the durable waiting anomaly queue"
+      >
         <span>Waiting queue</span>
         <strong id="workflow-queue-depth">{{ workflow.queue_depth }}</strong>
       </a>
@@ -52,7 +69,9 @@
   <div class="workflow-live-grid">
     <article class="workflow-primary workflow-overview-card">
       <div class="workflow-state-line workflow-state-line-live">
-        <span class="workflow-state-dot state-{{ 'queued' if effective_workflow_state == 'RECOVERY' else effective_workflow_state|lower }}"></span>
+        <span
+          class="workflow-state-dot state-{{ 'queued' if effective_workflow_state == 'RECOVERY' else effective_workflow_state|lower }}"
+        ></span>
         <div class="workflow-state-copy">
           <span class="label">Workflow state</span>
           <strong id="workflow-state">{{ effective_workflow_state }}</strong>
@@ -64,10 +83,16 @@
       <div class="current-anomaly-hero">
         <span class="label">Current anomaly</span>
         <strong id="workflow-anomaly">
-          {% if workflow.active_anomaly %}{{ workflow.active_anomaly.detector_name or workflow.active_anomaly.detector_id }}{% else %}No active anomaly{% endif %}
+          {% if workflow.active_anomaly %}{{
+          workflow.active_anomaly.detector_name or
+          workflow.active_anomaly.detector_id }}{% else %}No active anomaly{%
+          endif %}
         </strong>
         <small id="workflow-result-id">
-          {% if workflow.active_anomaly %}{{ workflow.active_anomaly.result_id }}{% elif effective_workflow_state == 'RECOVERY' %}Persisted workflow from an earlier runtime{% else %}The team is ready for the next anomaly{% endif %}
+          {% if workflow.active_anomaly %}{{ workflow.active_anomaly.result_id
+          }}{% elif effective_workflow_state == 'RECOVERY' %}Persisted workflow
+          from an earlier runtime{% else %}The team is ready for the next
+          anomaly{% endif %}
         </small>
       </div>
 
@@ -75,20 +100,31 @@
         <div>
           <span>Active incident</span>
           {% if workflow.active_incident_id %}
-          <a id="workflow-incident" href="/incidents/{{ workflow.active_incident_id }}"><strong>{{ workflow.active_incident_id }}</strong></a>
+          <a
+            id="workflow-incident"
+            href="/incidents/{{ workflow.active_incident_id }}"
+            ><strong>{{ workflow.active_incident_id }}</strong></a
+          >
           {% else %}
           <strong id="workflow-incident">—</strong>
           {% endif %}
         </div>
         <div>
           <span>Assigned role</span>
-          <strong id="workflow-assignee">{{ workflow.assigned_to|replace('_', ' ')|title if workflow.assigned_to else '—' }}</strong>
+          <strong id="workflow-assignee"
+            >{{ workflow.assigned_to|replace('_', ' ')|title if
+            workflow.assigned_to else '—' }}</strong
+          >
         </div>
         <div>
           <span>Agent task</span>
-          <strong id="workflow-task-state">{{ workflow.task.state if workflow.task else '—' }}</strong>
+          <strong id="workflow-task-state"
+            >{{ workflow.task.state if workflow.task else '—' }}</strong
+          >
           <small id="workflow-task-attempt">
-            {% if workflow.task %}Attempt {{ workflow.task.attempt }} / {{ workflow.task.max_attempts }}{% else %}Created after Technical Lead triage{% endif %}
+            {% if workflow.task %}Attempt {{ workflow.task.attempt }} / {{
+            workflow.task.max_attempts }}{% else %}Created after Technical Lead
+            triage{% endif %}
           </small>
         </div>
       </div>
@@ -99,33 +135,70 @@
             <span class="label">Investigation progress</span>
             <strong id="diagnosis-progress-label">{{ workflow.phase }}</strong>
           </div>
-          <small>Updated from the persisted incident and live workflow state</small>
+          <small
+            >Updated from the persisted incident and live workflow state</small
+          >
         </div>
-        <div class="diagnosis-progress" id="diagnosis-progress" aria-label="Live diagnosis progress">
-          <div class="diagnosis-stage" data-stage-index="0"><span>1</span><strong>Intake</strong><small>Anomaly accepted</small></div>
+        <div
+          class="diagnosis-progress"
+          id="diagnosis-progress"
+          aria-label="Live diagnosis progress"
+        >
+          <div class="diagnosis-stage" data-stage-index="0">
+            <span>1</span><strong>Intake</strong><small>Anomaly accepted</small>
+          </div>
           <i></i>
-          <div class="diagnosis-stage" data-stage-index="1"><span>2</span><strong>Triage</strong><small>BDI selection</small></div>
+          <div class="diagnosis-stage" data-stage-index="1">
+            <span>2</span><strong>Triage</strong><small>BDI selection</small>
+          </div>
           <i></i>
-          <div class="diagnosis-stage" data-stage-index="2"><span>3</span><strong>Investigation</strong><small>ReAct + tools</small></div>
+          <div class="diagnosis-stage" data-stage-index="2">
+            <span>3</span><strong>Investigation</strong
+            ><small>ReAct + tools</small>
+          </div>
           <i></i>
-          <div class="diagnosis-stage" data-stage-index="3"><span>4</span><strong>Review</strong><small>Team validation</small></div>
+          <div class="diagnosis-stage" data-stage-index="3">
+            <span>4</span><strong>Review</strong><small>Team validation</small>
+          </div>
           <i></i>
-          <div class="diagnosis-stage" data-stage-index="4"><span>5</span><strong>Conclusion</strong><small>Diagnosis ready</small></div>
+          <div class="diagnosis-stage" data-stage-index="4">
+            <span>5</span><strong>Conclusion</strong
+            ><small>Diagnosis ready</small>
+          </div>
         </div>
       </div>
 
       {% if effective_workflow_state == 'RECOVERY' %}
       <div class="workflow-error">
         <strong>Persisted workflow awaiting recovery ownership</strong>
-        <span>This incident has non-terminal durable work but no current in-memory anomaly owner.</span>
-        <small>This state can exist for records created by an earlier backend runtime; it must not be confused with an IDLE workflow.</small>
+        <span
+          >This incident has non-terminal durable work but no current in-memory
+          anomaly owner.</span
+        >
+        <small
+          >This state can exist for records created by an earlier backend
+          runtime; it must not be confused with an IDLE workflow.</small
+        >
       </div>
       {% endif %}
 
-      <div class="workflow-error" id="workflow-error" {% if not workflow.last_error %}hidden{% endif %}>
+      <div
+        class="workflow-error"
+        id="workflow-error"
+        {%
+        if
+        not
+        workflow.last_error
+        %}hidden{%
+        endif
+        %}
+      >
         <strong>Last workflow error</strong>
         <span id="workflow-error-message">{{ workflow.last_error or '' }}</span>
-        <small>The failed work item can be retried without taking the agent team offline.</small>
+        <small
+          >The failed work item can be retried without taking the agent team
+          offline.</small
+        >
       </div>
     </article>
 
@@ -135,19 +208,23 @@
           <span class="eyebrow">LIVE DIAGNOSIS</span>
           <h3>Diagnostic state</h3>
         </div>
-        <span id="diagnosis-live-status" class="status-pill status-{{ (active_incident.status or 'new')|lower|replace('_','-') }}">
-          {{ (active_incident.status or 'NO ACTIVE INCIDENT')|replace('_',' ') }}
+        <span
+          id="diagnosis-live-status"
+          class="status-pill status-{{ (active_incident.status or 'new')|lower|replace('_','-') }}"
+        >
+          {{ (active_incident.status or 'NO ACTIVE INCIDENT')|replace('_',' ')
+          }}
         </span>
       </div>
 
       <div class="diagnosis-live-summary">
         <span class="label">Current assessment</span>
         <p id="diagnosis-live-summary">
-          {% if active_incident %}
-            {{ live_diagnosis.summary or 'The agents are still collecting and correlating evidence. No stable diagnosis has been persisted yet.' }}
-          {% else %}
-            No anomaly is currently being processed. The live diagnostic summary will appear here when the team takes an anomaly in charge.
-          {% endif %}
+          {% if active_incident %} {{ live_diagnosis.summary or 'The agents are
+          still collecting and correlating evidence. No stable diagnosis has
+          been persisted yet.' }} {% else %} No anomaly is currently being
+          processed. The live diagnostic summary will appear here when the team
+          takes an anomaly in charge. {% endif %}
         </p>
       </div>
 
@@ -155,50 +232,86 @@
         <div>
           <span>Confidence</span>
           <strong id="diagnosis-live-confidence">
-            {% if live_diagnosis.confidence is defined and live_diagnosis.confidence is not none %}{{ live_diagnosis.confidence|confidence }}{% else %}—{% endif %}
+            {% if live_diagnosis.confidence is defined and
+            live_diagnosis.confidence is not none %}{{
+            live_diagnosis.confidence|confidence }}{% else %}—{% endif %}
           </strong>
         </div>
         <div>
           <span>Evidence</span>
-          <strong id="diagnosis-live-evidence">{{ (live_diagnosis.evidence or [])|length }}</strong>
+          <strong id="diagnosis-live-evidence"
+            >{{ (live_diagnosis.evidence or [])|length }}</strong
+          >
         </div>
         <div>
           <span>Team activity</span>
-          <strong id="diagnosis-live-agents">{{ workflow.assigned_to|replace('_', ' ')|title if workflow.assigned_to else 'Idle' }}</strong>
+          <strong id="diagnosis-live-agents"
+            >{{ workflow.assigned_to|replace('_', ' ')|title if
+            workflow.assigned_to else 'Idle' }}</strong
+          >
         </div>
         <div>
           <span>Updated</span>
-          <strong id="diagnosis-live-updated">{{ active_incident.updated_at|human_time if active_incident.updated_at else '—' }}</strong>
+          <strong id="diagnosis-live-updated"
+            >{{ active_incident.updated_at|human_time if
+            active_incident.updated_at else '—' }}</strong
+          >
         </div>
       </div>
 
       <div class="diagnosis-root-cause-live">
         <span class="label">Root-cause candidate</span>
-        <p id="diagnosis-live-root-cause">{{ live_diagnosis.root_cause or 'No root-cause candidate has been confirmed yet.' }}</p>
+        <p id="diagnosis-live-root-cause">
+          {{ live_diagnosis.root_cause or 'No root-cause candidate has been
+          confirmed yet.' }}
+        </p>
       </div>
 
       <div class="diagnosis-latest-event">
         <div class="diagnosis-latest-heading">
           <span class="label">Latest diagnostic activity</span>
-          <small id="diagnosis-latest-time">{{ latest_event.timestamp|human_time if latest_event.timestamp else '—' }}</small>
+          <small id="diagnosis-latest-time"
+            >{{ latest_event.timestamp|human_time if latest_event.timestamp else
+            '—' }}</small
+          >
         </div>
-        <strong id="diagnosis-latest-title">{{ latest_event.action or latest_event.event_type or 'Waiting for agent activity' }}</strong>
-        <p id="diagnosis-latest-copy">{{ latest_event.reason or latest_event.description or 'The latest agent observation will appear here as the investigation progresses.' }}</p>
+        <strong id="diagnosis-latest-title"
+          >{{ latest_event.action or latest_event.event_type or 'Waiting for
+          agent activity' }}</strong
+        >
+        <p id="diagnosis-latest-copy">
+          {{ latest_event.reason or latest_event.description or 'The latest
+          agent observation will appear here as the investigation progresses.'
+          }}
+        </p>
       </div>
 
       <div class="diagnosis-collaboration-line">
         <span class="label">Collaboration</span>
         <strong id="diagnosis-live-collaboration">
-          {% if live_agentic.peer_collaboration_state %}{{ live_agentic.peer_collaboration_state|replace('_',' ')|title }}{% elif live_agentic.support_requested %}Support requested{% else %}Primary investigator workflow{% endif %}
+          {% if live_agentic.peer_collaboration_state %}{{
+          live_agentic.peer_collaboration_state|replace('_',' ')|title }}{% else
+          %}Primary investigator workflow{% endif %}
         </strong>
       </div>
 
-      <a id="diagnosis-open-incident" class="secondary-button diagnosis-open-incident {% if not workflow.active_incident_id %}is-disabled{% endif %}" href="{% if workflow.active_incident_id %}/incidents/{{ workflow.active_incident_id }}{% else %}#{% endif %}" {% if not workflow.active_incident_id %}aria-disabled="true"{% endif %}>
+      <a
+        id="diagnosis-open-incident"
+        class="secondary-button diagnosis-open-incident {% if not workflow.active_incident_id %}is-disabled{% endif %}"
+        href="{% if workflow.active_incident_id %}/incidents/{{ workflow.active_incident_id }}{% else %}#{% endif %}"
+        {%
+        if
+        not
+        workflow.active_incident_id
+        %}aria-disabled="true"
+        {%
+        endif
+        %}
+      >
         Open full incident details
       </a>
     </aside>
   </div>
 </section>
 
-{% include "_agent_network.html" %}
-{% endblock %}
+{% include "_agent_network.html" %} {% endblock %}

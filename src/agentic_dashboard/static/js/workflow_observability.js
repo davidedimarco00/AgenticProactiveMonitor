@@ -16,9 +16,10 @@
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   };
 
-  const humanizeStatus = (value) => String(value || "—")
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const humanizeStatus = (value) =>
+    String(value || "—")
+      .replaceAll("_", " ")
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
   const formatTimestamp = (value) => {
     if (!value) return "—";
@@ -49,15 +50,26 @@
 
   const compactStructured = (value, fallback = "—") => {
     if (value === null || value === undefined || value === "") return fallback;
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
       return String(value);
     }
     if (typeof value === "object") {
-      const preferred = value.summary || value.message || value.reason || value.root_cause || value.status;
+      const preferred =
+        value.summary ||
+        value.message ||
+        value.reason ||
+        value.root_cause ||
+        value.status;
       if (preferred) return String(preferred);
       try {
         const serialized = JSON.stringify(value);
-        return serialized.length > 260 ? `${serialized.slice(0, 257)}…` : serialized;
+        return serialized.length > 260
+          ? `${serialized.slice(0, 257)}…`
+          : serialized;
       } catch (_) {
         return fallback;
       }
@@ -118,20 +130,28 @@
 
   const setStatusPill = (node, status) => {
     if (!node) return;
-    const normalized = String(status || "NO ACTIVE INCIDENT").trim().toUpperCase();
+    const normalized = String(status || "NO ACTIVE INCIDENT")
+      .trim()
+      .toUpperCase();
     node.className = `status-pill status-${normalized.toLowerCase().replaceAll("_", "-").replaceAll(" ", "-")}`;
     node.textContent = normalized.replaceAll("_", " ");
   };
 
   const progressStage = (workflow, incident) => {
-    if (!incident || !Object.keys(incident).length) return workflow?.active_anomaly ? 0 : -1;
+    if (!incident || !Object.keys(incident).length)
+      return workflow?.active_anomaly ? 0 : -1;
 
     const status = String(incident.status || "NEW").toUpperCase();
     const agentic = incident.agentic || {};
     const task = workflow?.task || null;
     const reviewState = String(agentic.review_state || "").toUpperCase();
 
-    if (["DIAGNOSED", "OPERATOR_ACTION_REQUIRED", "RESOLVED", "CLOSED"].includes(status)) return 4;
+    if (
+      ["DIAGNOSED", "OPERATOR_ACTION_REQUIRED", "RESOLVED", "CLOSED"].includes(
+        status,
+      )
+    )
+      return 4;
     if (status === "UNDER_ANALYSIS") {
       if (reviewState && reviewState !== "NOT_STARTED") return 3;
       if (String(task?.state || "").toUpperCase() === "COMPLETED") return 3;
@@ -154,7 +174,10 @@
     });
 
     const label = byId("diagnosis-progress-label");
-    if (label) label.textContent = workflow?.phase || (current < 0 ? "Waiting for anomaly" : "Anomaly intake");
+    if (label)
+      label.textContent =
+        workflow?.phase ||
+        (current < 0 ? "Waiting for anomaly" : "Anomaly intake");
   };
 
   const renderLiveDiagnosis = (workflow, team) => {
@@ -167,46 +190,70 @@
     const latest = timeline.length ? timeline[timeline.length - 1] : null;
     const state = effectiveState(workflow);
 
-    const status = incident?.status || (workflow?.active_anomaly ? "STARTING" : "NO ACTIVE INCIDENT");
+    const status =
+      incident?.status ||
+      (workflow?.active_anomaly ? "STARTING" : "NO ACTIVE INCIDENT");
     setStatusPill(byId("diagnosis-live-status"), status);
 
     const summary = byId("diagnosis-live-summary");
     if (summary) {
       summary.textContent = incident
-        ? diagnosis.summary || "The agents are still collecting and correlating evidence. No stable diagnosis has been persisted yet."
+        ? diagnosis.summary ||
+          "The agents are still collecting and correlating evidence. No stable diagnosis has been persisted yet."
         : workflow?.active_anomaly
           ? "The anomaly has been admitted to the workflow. Incident creation and Technical Lead triage are starting."
           : "No anomaly is currently being processed. The live diagnostic summary will appear here when the team takes an anomaly in charge.";
     }
 
     const confidence = byId("diagnosis-live-confidence");
-    if (confidence) confidence.textContent = formatConfidence(diagnosis.confidence);
+    if (confidence)
+      confidence.textContent = formatConfidence(diagnosis.confidence);
 
     const evidence = byId("diagnosis-live-evidence");
-    if (evidence) evidence.textContent = String(Array.isArray(diagnosis.evidence) ? diagnosis.evidence.length : 0);
+    if (evidence)
+      evidence.textContent = String(
+        Array.isArray(diagnosis.evidence) ? diagnosis.evidence.length : 0,
+      );
 
     const workingMembers = Array.isArray(team?.members)
-      ? team.members.filter((member) => String(member.activity || "").toUpperCase() === "WORKING")
+      ? team.members.filter(
+          (member) => String(member.activity || "").toUpperCase() === "WORKING",
+        )
       : [];
     const waitingMembers = Array.isArray(team?.members)
-      ? team.members.filter((member) => String(member.activity || "").toUpperCase() === "WAITING")
+      ? team.members.filter(
+          (member) => String(member.activity || "").toUpperCase() === "WAITING",
+        )
       : [];
     const agents = byId("diagnosis-live-agents");
     if (agents) {
       if (workingMembers.length) {
-        agents.textContent = workingMembers.map((member) => member.name || humanizeRole(member.backend_role || member.key)).join(", ");
+        agents.textContent = workingMembers
+          .map(
+            (member) =>
+              member.name || humanizeRole(member.backend_role || member.key),
+          )
+          .join(", ");
       } else if (waitingMembers.length) {
         agents.textContent = `${waitingMembers.map((member) => member.name || humanizeRole(member.backend_role || member.key)).join(", ")} waiting`;
       } else {
-        agents.textContent = workflow?.assigned_to ? humanizeRole(workflow.assigned_to) : "Idle";
+        agents.textContent = workflow?.assigned_to
+          ? humanizeRole(workflow.assigned_to)
+          : "Idle";
       }
     }
 
     const updated = byId("diagnosis-live-updated");
-    if (updated) updated.textContent = formatTimestamp(incident?.updated_at || latest?.timestamp);
+    if (updated)
+      updated.textContent = formatTimestamp(
+        incident?.updated_at || latest?.timestamp,
+      );
 
     const rootCause = byId("diagnosis-live-root-cause");
-    if (rootCause) rootCause.textContent = diagnosis.root_cause || "No root-cause candidate has been confirmed yet.";
+    if (rootCause)
+      rootCause.textContent =
+        diagnosis.root_cause ||
+        "No root-cause candidate has been confirmed yet.";
 
     const latestTitle = byId("diagnosis-latest-title");
     const latestCopy = byId("diagnosis-latest-copy");
@@ -217,16 +264,29 @@
         latestTitle.textContent = `${latest.action || latest.event_type || "Agent activity"}${actor ? ` · ${humanizeRole(actor)}` : ""}`;
       }
       if (latestCopy) {
-        latestCopy.textContent = latest.reason
-          || latest.description
-          || compactStructured(latest.outcome, "Agent activity recorded without an operator summary.");
+        latestCopy.textContent =
+          latest.reason ||
+          latest.description ||
+          compactStructured(
+            latest.outcome,
+            "Agent activity recorded without an operator summary.",
+          );
       }
-      if (latestTime) latestTime.textContent = formatTimestamp(latest.timestamp || latest.created_at);
+      if (latestTime)
+        latestTime.textContent = formatTimestamp(
+          latest.timestamp || latest.created_at,
+        );
     } else {
-      if (latestTitle) latestTitle.textContent = state === "IDLE" ? "Waiting for agent activity" : "Investigation starting";
-      if (latestCopy) latestCopy.textContent = state === "IDLE"
-        ? "The latest agent observation will appear here as the investigation progresses."
-        : "The team has not persisted a diagnostic event for this incident yet.";
+      if (latestTitle)
+        latestTitle.textContent =
+          state === "IDLE"
+            ? "Waiting for agent activity"
+            : "Investigation starting";
+      if (latestCopy)
+        latestCopy.textContent =
+          state === "IDLE"
+            ? "The latest agent observation will appear here as the investigation progresses."
+            : "The team has not persisted a diagnostic event for this incident yet.";
       if (latestTime) latestTime.textContent = "—";
     }
 
@@ -235,13 +295,11 @@
       const peerState = String(agentic.peer_collaboration_state || "").trim();
       collaboration.textContent = peerState
         ? humanizeStatus(peerState)
-        : agentic.support_requested
-          ? "Support requested"
-          : workingMembers.length > 1
-            ? "Collaborative specialist investigation"
-            : workflow?.assigned_to
-              ? `Primary investigator: ${humanizeRole(workflow.assigned_to)}`
-              : "Primary investigator workflow";
+        : workingMembers.length > 1
+          ? "Collaborative specialist investigation"
+          : workflow?.assigned_to
+            ? `Primary investigator: ${humanizeRole(workflow.assigned_to)}`
+            : "Primary investigator workflow";
     }
 
     const incidentLink = byId("diagnosis-open-incident");
@@ -272,7 +330,9 @@
     const dot = panel.querySelector(".workflow-state-dot");
     if (dot) {
       dot.classList.remove("state-idle", "state-processing", "state-queued");
-      dot.classList.add(state === "RECOVERY" ? "state-queued" : `state-${state.toLowerCase()}`);
+      dot.classList.add(
+        state === "RECOVERY" ? "state-queued" : `state-${state.toLowerCase()}`,
+      );
     }
 
     const phase = byId("workflow-phase");
@@ -283,13 +343,15 @@
     const anomaly = workflow.active_anomaly || null;
     const anomalyNode = byId("workflow-anomaly");
     const resultNode = byId("workflow-result-id");
-    if (anomalyNode) anomalyNode.textContent = anomaly?.detector_name || anomaly?.detector_id || "No active anomaly";
+    if (anomalyNode)
+      anomalyNode.textContent =
+        anomaly?.detector_name || anomaly?.detector_id || "No active anomaly";
     if (resultNode) {
-      resultNode.textContent = anomaly?.result_id || (
-        state === "RECOVERY"
+      resultNode.textContent =
+        anomaly?.result_id ||
+        (state === "RECOVERY"
           ? "Persisted workflow from an earlier runtime"
-          : "The team is ready for the next anomaly"
-      );
+          : "The team is ready for the next anomaly");
     }
 
     const assignee = byId("workflow-assignee");
@@ -306,7 +368,8 @@
     }
 
     const runtimeDepth = Math.max(Number(workflow.queue_depth || 0), 0);
-    const queueDepth = durableWaitingCount === null ? runtimeDepth : durableWaitingCount;
+    const queueDepth =
+      durableWaitingCount === null ? runtimeDepth : durableWaitingCount;
     const depthNode = byId("workflow-queue-depth");
     if (depthNode) depthNode.textContent = String(queueDepth);
 
@@ -325,7 +388,11 @@
   };
 
   const dismissWaitingAnomaly = async (anomaly, button) => {
-    const label = anomaly.detector_name || anomaly.detector_id || anomaly.result_id || "this anomaly";
+    const label =
+      anomaly.detector_name ||
+      anomaly.detector_id ||
+      anomaly.result_id ||
+      "this anomaly";
     const confirmed = window.confirm(
       `Remove ${label} from the waiting queue as a false positive?\n\nThis action is allowed only before the agentic team takes the anomaly in charge.`,
     );
@@ -359,7 +426,9 @@
   };
 
   const renderAnomalyInbox = (payload) => {
-    const anomalies = Array.isArray(payload?.anomalies) ? payload.anomalies : [];
+    const anomalies = Array.isArray(payload?.anomalies)
+      ? payload.anomalies
+      : [];
     const summary = payload?.summary || {};
     const body = byId("anomaly-inbox-body");
     const table = byId("anomaly-inbox-table");
@@ -368,9 +437,12 @@
     const waitingCount = byId("anomaly-inbox-waiting-count");
     const processingCount = byId("anomaly-inbox-processing-count");
     const recoveryCount = byId("anomaly-inbox-recovery-count");
-    if (waitingCount) waitingCount.textContent = String(Number(summary.waiting || 0));
-    if (processingCount) processingCount.textContent = String(Number(summary.processing || 0));
-    if (recoveryCount) recoveryCount.textContent = String(Number(summary.recovery || 0));
+    if (waitingCount)
+      waitingCount.textContent = String(Number(summary.waiting || 0));
+    if (processingCount)
+      processingCount.textContent = String(Number(summary.processing || 0));
+    if (recoveryCount)
+      recoveryCount.textContent = String(Number(summary.recovery || 0));
     syncDurableQueueCount(summary);
 
     if (!body || !table || !empty) return;
@@ -391,7 +463,8 @@
 
       const detectorCell = appendTextCell(row, "");
       const detectorStrong = document.createElement("strong");
-      detectorStrong.textContent = anomaly.detector_name || anomaly.detector_id || "Unknown detector";
+      detectorStrong.textContent =
+        anomaly.detector_name || anomaly.detector_id || "Unknown detector";
       detectorCell.appendChild(detectorStrong);
 
       if (anomaly.detector_name && anomaly.detector_id) {
@@ -434,13 +507,18 @@
         dismissButton.type = "button";
         dismissButton.className = "anomaly-dismiss-button";
         dismissButton.title = "Dismiss as false positive";
-        dismissButton.setAttribute("aria-label", `Dismiss ${anomaly.detector_name || anomaly.detector_id || "anomaly"} as false positive`);
+        dismissButton.setAttribute(
+          "aria-label",
+          `Dismiss ${anomaly.detector_name || anomaly.detector_id || "anomaly"} as false positive`,
+        );
         dismissButton.innerHTML = `
           <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-2 6h10l-1 11H8L7 9Zm3 2v6h2v-6h-2Zm4 0v6h2v-6h-2Z"></path>
           </svg>
         `;
-        dismissButton.addEventListener("click", () => dismissWaitingAnomaly(anomaly, dismissButton));
+        dismissButton.addEventListener("click", () =>
+          dismissWaitingAnomaly(anomaly, dismissButton),
+        );
         actionCell.appendChild(dismissButton);
       } else {
         const owned = document.createElement("small");
@@ -483,5 +561,6 @@
   refreshWorkflow();
   refreshAnomalyInbox();
   if (panel) window.setInterval(refreshWorkflow, 4000);
-  if (anomalyInboxBody || queueDepthDisplay) window.setInterval(refreshAnomalyInbox, 8000);
+  if (anomalyInboxBody || queueDepthDisplay)
+    window.setInterval(refreshAnomalyInbox, 8000);
 })();
