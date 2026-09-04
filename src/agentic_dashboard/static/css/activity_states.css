@@ -1,0 +1,25 @@
+.activity-state.waiting {
+  color: var(--warning);
+}
+
+.agent-network.waiting .agent-links line {
+  stroke: #f59e0b;
+}
+
+.agent-node.waiting .agent-avatar,
+.agent-node.waiting .agent-circle {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 5px rgba(245, 158, 11, .08), 0 10px 24px rgba(146, 64, 14, .10);
+}
+
+.activity-pill.waiting {
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fbbf24;
+}
+
+.legend-dot.waiting {
+  background: #f59e0b;
+}

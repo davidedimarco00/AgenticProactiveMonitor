@@ -15,9 +15,12 @@ agentic-proactive-monitor-infrastructure
   - OpenSearch
   - OpenSearch Dashboards
   - Qdrant
+  - MongoDB
   - Open WebUI
   - Prosody XMPP
   - MCP Server
+  - Agentic Backend (SPADE/SPADE-LLM + FastAPI)
+  - Agentic Operator Dashboard
   - OpenSearch bootstrap services
 
 monitored-system
@@ -29,6 +32,18 @@ monitored-system
 ```
 
 The monitored services are **not defined in the infrastructure Compose file**. Ollama is also intentionally outside Docker so Docker Desktop can use the Hyper-V/LinuxKit backend required by the validated `tc/netem` network-fault scenario while Ollama continues to use the host NVIDIA GPU.
+
+## Data responsibility
+
+The infrastructure keeps monitoring data and agentic application data separated:
+
+```text
+OpenSearch -> metrics, logs, SINGLE_ENTITY anomaly detection
+MongoDB    -> incidents, diagnoses, remediations, validation and incident history
+Qdrant     -> monitored-system RAG knowledge base
+```
+
+Raw metrics and logs are not copied into MongoDB or the operator dashboard.
 
 ## Integration boundary
 
@@ -48,7 +63,7 @@ http://host.docker.internal:11434
 
 The monitored system owns a separate private network, `monitored-system-net`, for application-to-application communication.
 
-## Telemetry flow
+## Telemetry and incident flow
 
 ```text
 monitored-system
@@ -58,8 +73,14 @@ monitored-system
      +-- Fluent Bit --> OpenSearch
                          |
                          +--> Dashboards
-                         +--> Anomaly Detection
-                         +--> Agentic System / MCP
+                         +--> SINGLE_ENTITY Anomaly Detection
+                         +--> autonomous Agentic Backend / MCP
+                                      |
+                                      +--> MongoDB incident history
+                                      +--> FastAPI :8082
+                                              |
+                                              +--> Operator Dashboard :5050
+                                              +--> PDF incident report
 ```
 
 Metrics and logs are stored using the service name:
@@ -87,13 +108,7 @@ cd src\infrastructure
 .\ollama\init\setup-windows.ps1
 ```
 
-The script:
-
-- configures `OLLAMA_HOST=0.0.0.0:11434` for the current Windows user;
-- configures `OLLAMA_KEEP_ALIVE=5m` and `OLLAMA_NUM_PARALLEL=1`;
-- pulls `gemma4:e2b`, `qwen3.5:4b`, `qwen2.5:latest` and `ibm/granite-embedding:30m` by default.
-
-After the script completes, quit Ollama from the Windows tray and start it again so it inherits the new environment variables.
+The script configures the host Ollama endpoint and pulls the models configured by the infrastructure.
 
 Verify the host API:
 
@@ -116,11 +131,7 @@ cd src\infrastructure
 Copy-Item .env.example .env
 ```
 
-The default `.env.example` uses:
-
-```text
-OLLAMA_HOST_URL=http://host.docker.internal:11434
-```
+Before a non-local deployment, replace the default MongoDB and XMPP passwords in `.env`.
 
 Validate the Compose configuration:
 
@@ -144,12 +155,17 @@ cd ..\monitored_system
 docker compose up -d --build
 ```
 
-Docker Desktop should now show two separate sections:
+## Main local endpoints
 
 ```text
-agentic-proactive-monitor-infrastructure
-monitored-system
+OpenSearch:          http://127.0.0.1:9200
+OpenSearch Dashboard http://127.0.0.1:5601
+MongoDB:             mongodb://127.0.0.1:27017
+Agentic API Swagger: http://127.0.0.1:8082/docs
+Operator Dashboard:  http://127.0.0.1:5050
 ```
+
+The public FastAPI/Swagger contract is read-only for the operator. The dashboard cannot start an investigation; investigations originate from anomaly events handled by the autonomous agentic core.
 
 ## Verify the separation
 
@@ -160,21 +176,20 @@ cd src\infrastructure
 docker compose ps
 ```
 
+MongoDB and backend API:
+
+```powershell
+docker compose ps mongodb agentic-backend
+docker compose logs -f mongodb
+docker compose logs -f agentic-backend
+curl.exe http://127.0.0.1:8082/health
+```
+
 Monitored system:
 
 ```powershell
 cd src\monitored_system
 docker compose ps
-```
-
-Expected monitored containers:
-
-```text
-traffic-generator
-api-gateway
-processing-service
-data-service
-worker-service
 ```
 
 Ollama must not appear as a Docker container.
@@ -191,8 +206,6 @@ OpenSearch Dashboards is available at:
 http://localhost:5601
 ```
 
-The bootstrap creates one metric and one log data view for each monitored service.
-
 ## Anomaly detectors
 
 CPU and RAM detectors are created for all five monitored services. Network-latency detectors cover the three critical application links. Every detector is **SINGLE_ENTITY** and reads only the dedicated source-service metrics index.
@@ -207,20 +220,14 @@ docker compose up opensearch-dashboards-init opensearch-detectors-init
 
 ## Useful commands
 
-Agentic logs:
-
 ```powershell
 cd src\infrastructure
 docker compose logs -f opensearch
+docker compose logs -f mongodb
 docker compose logs -f mcp-server
 docker compose logs -f xmpp
-```
-
-Monitored service logs:
-
-```powershell
-cd src\monitored_system
-docker compose logs -f processing-service
+docker compose logs -f agentic-backend
+docker compose logs -f agentic-system-dashboard
 ```
 
 Normal stop while preserving volumes:

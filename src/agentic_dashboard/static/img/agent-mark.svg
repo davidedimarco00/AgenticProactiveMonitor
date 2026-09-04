@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Agent</title>
+  <desc id="desc">Stylised autonomous software agent icon</desc>
+  <g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 8v8"/>
+    <circle cx="32" cy="6" r="2" fill="currentColor" stroke="none"/>
+    <rect x="14" y="17" width="36" height="30" rx="9"/>
+    <path d="M14 29H8v9h6M50 29h6v9h-6"/>
+    <circle cx="25" cy="31" r="3" fill="currentColor" stroke="none"/>
+    <circle cx="39" cy="31" r="3" fill="currentColor" stroke="none"/>
+    <path d="M24 40c2.4 2 5 3 8 3s5.6-1 8-3"/>
+    <path d="M22 50v6M42 50v6M22 56h20"/>
+  </g>
+</svg>

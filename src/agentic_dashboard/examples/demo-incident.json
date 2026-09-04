@@ -1,0 +1,252 @@
+{
+  "incident_id": "DEMO-CPU-001",
+  "created_at": "2026-08-10T12:32:10+00:00",
+  "status": "OPERATOR_ACTION_REQUIRED",
+  "severity": "HIGH",
+  "entity": "processing-service",
+  "service": "processing-service",
+  "machine_role": "backend-processing",
+  "host_id": "processing-service",
+  "takeover_reason": "The single-entity CPU detector reported a high-grade deviation with sufficient confidence and the abnormal CPU level persisted across consecutive observations, so the anomaly was accepted for autonomous investigation.",
+  "takeover_factors": [
+    "OpenSearch anomaly grade 1.0",
+    "AD confidence above triage threshold",
+    "CPU deviation persisted",
+    "Monitored backend service affected"
+  ],
+  "anomaly": {
+    "detector_id": "Dlkh4p8BVlYqtOWfwgBF",
+    "metric": "docker_container_cpu.usage_percent",
+    "grade": 1.0,
+    "confidence": 0.7633,
+    "observed_value": 391.81,
+    "baseline_value": 18.2
+  },
+  "agentic": {
+    "current_agent": "coordinator@xmpp",
+    "iterations": 5,
+    "loop": "ReAct"
+  },
+  "agent_events": [
+    {
+      "event_id": "AEV-DEMO-001",
+      "timestamp": "2026-08-10T12:32:11+00:00",
+      "agent_jid": "coordinator@xmpp",
+      "agent_name": "Technical Lead",
+      "action": "Triage anomaly and open incident",
+      "called_by": "opensearch-ad",
+      "reason": "A high-grade single-entity CPU anomaly exceeded the triage criteria and persisted across consecutive observations.",
+      "status": "COMPLETED",
+      "outcome": "Incident opened and initial infrastructure validation assigned to the System Engineer."
+    },
+    {
+      "event_id": "AEV-DEMO-002",
+      "timestamp": "2026-08-10T12:32:12+00:00",
+      "agent_jid": "evidence@xmpp",
+      "agent_name": "System Engineer",
+      "action": "Validate runtime CPU saturation",
+      "called_by": "coordinator@xmpp",
+      "reason": "The Technical Lead requires host and container evidence before involving application specialists.",
+      "tool": "get_runtime_stats",
+      "status": "COMPLETED",
+      "outcome": "CPU approximately 392%; memory stable; processing-service container running."
+    },
+    {
+      "event_id": "AEV-DEMO-003",
+      "timestamp": "2026-08-10T12:32:15+00:00",
+      "agent_jid": "evidence@xmpp",
+      "agent_name": "System Engineer",
+      "action": "Check host pressure and container health",
+      "called_by": "coordinator@xmpp",
+      "reason": "The incident must be separated from host-wide resource exhaustion or a container runtime failure.",
+      "tool": "get_system_load",
+      "status": "COMPLETED",
+      "outcome": "No host-wide memory or disk pressure; CPU saturation is concentrated on processing-service."
+    },
+    {
+      "event_id": "AEV-DEMO-004",
+      "timestamp": "2026-08-10T12:32:18+00:00",
+      "agent_jid": "reasoning@xmpp",
+      "agent_name": "Application Engineer",
+      "action": "Inspect application logs and service health",
+      "called_by": "coordinator@xmpp",
+      "reason": "Infrastructure evidence confirms the anomaly but does not explain whether the application is failing or simply processing excessive workload.",
+      "tool": "get_logs",
+      "status": "COMPLETED",
+      "outcome": "No critical exceptions or crash loops; requests continue to complete successfully."
+    },
+    {
+      "event_id": "AEV-DEMO-005",
+      "timestamp": "2026-08-10T12:32:21+00:00",
+      "agent_jid": "reasoning@xmpp",
+      "agent_name": "Application Engineer",
+      "action": "Request traffic-side validation",
+      "called_by": "coordinator@xmpp",
+      "reason": "Application logs are healthy while CPU remains saturated, so abnormal incoming traffic must be tested as a competing hypothesis.",
+      "status": "COMPLETED",
+      "outcome": "Network Engineer consultation requested for request-rate and connection evidence."
+    },
+    {
+      "event_id": "AEV-DEMO-006",
+      "timestamp": "2026-08-10T12:32:24+00:00",
+      "agent_jid": "critic@xmpp",
+      "agent_name": "Network Engineer",
+      "action": "Correlate inbound traffic with CPU saturation",
+      "called_by": "reasoning@xmpp",
+      "reason": "The Application Engineer needs to determine whether a traffic surge explains the workload increase.",
+      "tool": "get_metrics",
+      "status": "COMPLETED",
+      "outcome": "Inbound request volume increased sharply in the same window as processing-service CPU saturation."
+    },
+    {
+      "event_id": "AEV-DEMO-007",
+      "timestamp": "2026-08-10T12:32:27+00:00",
+      "agent_jid": "critic@xmpp",
+      "agent_name": "Network Engineer",
+      "action": "Verify network path health",
+      "called_by": "reasoning@xmpp",
+      "reason": "A traffic increase must be distinguished from a connectivity problem that could produce retries or abnormal request amplification.",
+      "tool": "get_network_connections",
+      "status": "COMPLETED",
+      "outcome": "No abnormal connection failures detected; evidence supports a workload surge rather than a network fault."
+    },
+    {
+      "event_id": "AEV-DEMO-008",
+      "timestamp": "2026-08-10T12:32:30+00:00",
+      "agent_jid": "remediation@xmpp",
+      "agent_name": "Software Developer",
+      "action": "Review service-specific processing behaviour",
+      "called_by": "reasoning@xmpp",
+      "reason": "The application and network evidence point to workload saturation; the team needs to verify whether this behaviour is consistent with the processing-service design.",
+      "tool": "search_knowledge",
+      "status": "COMPLETED",
+      "outcome": "Service documentation confirms CPU-bound processing under high request volume and recommends workload normalization before restart."
+    },
+    {
+      "event_id": "AEV-DEMO-009",
+      "timestamp": "2026-08-10T12:32:33+00:00",
+      "agent_jid": "reasoning@xmpp",
+      "agent_name": "Application Engineer",
+      "action": "Consolidate specialist findings into diagnosis",
+      "called_by": "remediation@xmpp",
+      "reason": "System, network and software evidence now converge and are sufficient to produce an evidence-backed diagnosis.",
+      "status": "COMPLETED",
+      "outcome": "Workload-induced CPU saturation diagnosed with confidence 0.88."
+    },
+    {
+      "event_id": "AEV-DEMO-010",
+      "timestamp": "2026-08-10T12:32:36+00:00",
+      "agent_jid": "coordinator@xmpp",
+      "agent_name": "Technical Lead",
+      "action": "Critically review diagnosis and hand incident to operator",
+      "called_by": "reasoning@xmpp",
+      "reason": "The Technical Lead must verify that the specialist findings are consistent before presenting remediation guidance to the operator.",
+      "status": "COMPLETED",
+      "outcome": "Diagnosis accepted. Reduce abnormal workload, verify CPU recovery, and restart only if saturation persists. Incident moved to OPERATOR_ACTION_REQUIRED."
+    }
+  ],
+  "timeline": [
+    {
+      "timestamp": "2026-08-10T12:32:12+00:00",
+      "phase": "Infrastructure validation",
+      "action": "Confirm whether the OpenSearch anomaly reflects real runtime CPU saturation.",
+      "tool": "get_runtime_stats",
+      "observation": "processing-service CPU is approximately 392%; memory usage is stable and the container remains running.",
+      "decision_rationale": "The anomaly is confirmed at runtime and is concentrated on processing-service."
+    },
+    {
+      "timestamp": "2026-08-10T12:32:18+00:00",
+      "phase": "Application investigation",
+      "action": "Inspect recent application logs for exceptions, crash loops or repeated failures.",
+      "tool": "get_logs",
+      "observation": "No critical application error is present. Processing requests continue successfully while CPU remains saturated.",
+      "decision_rationale": "The absence of application errors lowers the likelihood of an exception-driven failure."
+    },
+    {
+      "timestamp": "2026-08-10T12:32:24+00:00",
+      "phase": "Network consultation",
+      "action": "Correlate inbound request behaviour with the CPU anomaly.",
+      "tool": "get_metrics",
+      "observation": "Inbound workload increased sharply during the same time window in which CPU rose from baseline to sustained saturation.",
+      "decision_rationale": "The traffic increase supports a workload hypothesis and no network path failure is observed."
+    },
+    {
+      "timestamp": "2026-08-10T12:32:30+00:00",
+      "phase": "Software consultation",
+      "action": "Retrieve processing-service documentation and expected CPU behaviour.",
+      "tool": "search_knowledge",
+      "observation": "The service documentation describes CPU-bound processing under high request volume and recommends workload normalization before restart.",
+      "decision_rationale": "The observed runtime behaviour is consistent with the documented implementation."
+    },
+    {
+      "timestamp": "2026-08-10T12:32:36+00:00",
+      "phase": "Technical review",
+      "action": "Validate the cross-specialist evidence before operator handoff.",
+      "observation": "System, application, network and software findings are mutually consistent.",
+      "decision_rationale": "Evidence is sufficient to accept workload-induced CPU saturation as the most probable cause.",
+      "outcome": "Incident transferred to the operator with remediation guidance."
+    }
+  ],
+  "diagnosis": {
+    "summary": "The processing-service is CPU-saturated because of an abnormal increase in processing workload rather than an application crash, host resource failure or network connectivity fault.",
+    "confidence": 0.88,
+    "evidence": [
+      "System Engineer confirmed runtime CPU near 392% while memory and host pressure remained normal.",
+      "Application Engineer found no critical exceptions or crash-loop evidence.",
+      "Network Engineer confirmed a sharp inbound request increase without connection failures.",
+      "Software Developer verified that CPU-bound behaviour under high workload matches the documented processing-service design.",
+      "Technical Lead found no contradiction across the specialist reports."
+    ],
+    "alternatives": [
+      {
+        "name": "Host resource exhaustion",
+        "status": "REJECTED",
+        "reason": "Memory, disk and host-wide resource pressure remained normal."
+      },
+      {
+        "name": "Application exception loop",
+        "status": "UNLIKELY",
+        "reason": "No repeated errors or crash-loop messages were present in recent application logs."
+      },
+      {
+        "name": "Network connectivity failure",
+        "status": "REJECTED",
+        "reason": "Request volume increased but no abnormal connection failure was observed."
+      }
+    ]
+  },
+  "remediation": {
+    "summary": "Reduce the abnormal input workload first, verify CPU recovery, and restart processing-service only if saturation persists after workload normalization.",
+    "steps": [
+      {
+        "title": "Confirm the active CPU saturation",
+        "description": "From the Windows host, capture the current container resource snapshot before changing the workload.",
+        "command": "docker stats processing-service --no-stream"
+      },
+      {
+        "title": "Inspect and reduce the abnormal workload",
+        "description": "Check the traffic-generator scenario and stop or return it to the normal profile if the increase is not expected.",
+        "command": "docker compose stop traffic-generator"
+      },
+      {
+        "title": "Observe recovery before restarting",
+        "description": "Wait for the processing queue to drain and confirm that CPU returns close to its learned baseline."
+      },
+      {
+        "title": "Restart only if saturation persists",
+        "description": "If CPU remains abnormally high after workload normalization, restart processing-service and continue monitoring for recurrence.",
+        "command": "docker compose restart processing-service"
+      }
+    ],
+    "verification": [
+      "processing-service CPU returns close to the normal learned range",
+      "request processing remains successful after workload normalization",
+      "no new high-grade CPU anomaly is generated by the single-entity detector",
+      "application logs remain free of new critical errors"
+    ],
+    "risks": [
+      "Stopping the traffic generator changes the workload and should be done only when the current traffic increase is not intentional.",
+      "Restarting processing-service can interrupt in-flight processing and should remain a secondary action after workload reduction."
+    ]
+  }
+}

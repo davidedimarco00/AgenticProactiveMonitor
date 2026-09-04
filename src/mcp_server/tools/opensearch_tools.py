@@ -1,8 +1,9 @@
 import os
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
 from mcp.server import MCPServer
+from pydantic import Field
 
 
 HostId = Literal[
@@ -16,22 +17,32 @@ HostId = Literal[
 MetricName = Literal["cpu", "memory"]
 LogLevel = Literal["ALL", "DEBUG", "INFO", "WARN", "ERROR"]
 LogSource = Literal["all", "application", "system"]
+TimeWindowMinutes = Annotated[int, Field(ge=1, le=120)]
+ResultLimit = Annotated[int, Field(ge=1, le=100)]
+SearchText = Annotated[str, Field(min_length=1)]
 
 OPENSEARCH_URL = os.getenv(
     "OPENSEARCH_URL",
     "http://opensearch:9200",
 ).rstrip("/")
 
+# These definitions intentionally match the SINGLE_ENTITY CPU/RAM detector
+# inputs created by infrastructure/opensearch/init/create-anomaly-detectors.sh.
+# A specialist investigating a detector therefore reads the same telemetry
+# quantity that OpenSearch marked as anomalous instead of silently switching to
+# host-level inputs.cpu / inputs.mem measurements.
 METRICS = {
     "cpu": {
-        "measurement": "cpu",
-        "field": "cpu.usage_active",
+        "measurement": "docker_container_cpu",
+        "field": "docker_container_cpu.usage_percent",
         "unit": "percent",
+        "scope": "container",
     },
     "memory": {
-        "measurement": "mem",
-        "field": "mem.used_percent",
+        "measurement": "docker_container_mem",
+        "field": "docker_container_mem.usage_percent",
         "unit": "percent",
+        "scope": "container",
     },
 }
 
@@ -52,11 +63,12 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
     async def get_metrics(
         host_id: HostId,
         metric: MetricName,
-        minutes: int = 15,
+        minutes: TimeWindowMinutes = 15,
     ) -> dict:
         """
-        Retrieve recent CPU or memory metrics for one monitored service.
-        The tool is read-only.
+        Retrieve recent detector-aligned container CPU or memory metrics for one
+        monitored service. These are the same telemetry fields used by the
+        SINGLE_ENTITY CPU/RAM OpenSearch anomaly detectors. The tool is read-only.
         """
         if minutes < 1 or minutes > 120:
             raise ValueError("minutes must be between 1 and 120")
@@ -65,6 +77,7 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
         measurement = metric_config["measurement"]
         field = metric_config["field"]
         unit = metric_config["unit"]
+        scope = metric_config["scope"]
         index_pattern = f"metrics-{host_id}-*"
 
         query = {
@@ -130,8 +143,11 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
             "status": "ok",
             "host_id": host_id,
             "metric": metric,
+            "measurement_name": measurement,
             "field": field,
             "unit": unit,
+            "scope": scope,
+            "detector_aligned": True,
             "window_minutes": minutes,
             "samples": stats["count"],
             "summary": {
@@ -151,10 +167,10 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
     @mcp.tool()
     async def get_logs(
         host_id: HostId,
-        minutes: int = 15,
+        minutes: TimeWindowMinutes = 15,
         level: LogLevel = "ALL",
         source: LogSource = "all",
-        limit: int = 30,
+        limit: ResultLimit = 30,
     ) -> dict:
         """
         Retrieve recent application or system logs for one monitored service.
@@ -265,9 +281,9 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
     @mcp.tool()
     async def search_logs(
         host_id: HostId,
-        query_text: str,
-        minutes: int = 30,
-        limit: int = 20,
+        query_text: SearchText,
+        minutes: TimeWindowMinutes = 30,
+        limit: ResultLimit = 20,
     ) -> dict:
         """
         Full-text search recent logs for one monitored service.

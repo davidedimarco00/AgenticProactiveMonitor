@@ -1,0 +1,189 @@
+<section class="agent-network-card panel">
+  <div class="section-header compact">
+    <div>
+      <span class="eyebrow">VIRTUAL OPERATIONS TEAM</span>
+      <h2>Agent team activity</h2>
+      <p class="section-description">Specialised agents are presented as the technical roles they emulate inside an IT operations team.</p>
+    </div>
+    <div class="network-state-block">
+      <span class="label">Team state</span>
+      <strong id="team-activity-state" class="activity-state {{ team.state|lower }}">{{ team.state }}</strong>
+      <small id="team-active-incidents">{{ team.active_incidents }} incident{{ '' if team.active_incidents == 1 else 's' }} with active agent context</small>
+    </div>
+  </div>
+
+  {% set profiles = {
+    'coordinator': {
+      'name': 'Technical Lead',
+      'jid': 'technical-lead@xmpp',
+      'role': 'Incident triage, coordination and critical review',
+      'health_port': 8101
+    },
+    'evidence': {
+      'name': 'System Engineer',
+      'jid': 'system-engineer@xmpp',
+      'role': 'Linux, containers, host resources and runtime diagnostics',
+      'health_port': 8102
+    },
+    'critic': {
+      'name': 'Network Engineer',
+      'jid': 'network-engineer@xmpp',
+      'role': 'Connectivity, latency, network paths and traffic analysis',
+      'health_port': 8103
+    },
+    'reasoning': {
+      'name': 'Application Engineer',
+      'jid': 'application-engineer@xmpp',
+      'role': 'Service health, application behaviour and dependency diagnosis',
+      'health_port': 8104
+    },
+    'remediation': {
+      'name': 'Software Developer',
+      'jid': 'software-developer@xmpp',
+      'role': 'Code behaviour, defects and application-level corrective guidance',
+      'health_port': 8105
+    }
+  } %}
+
+  {% set positions = {
+    'coordinator': 'center',
+    'evidence': 'top-left',
+    'critic': 'top-right',
+    'reasoning': 'bottom-left',
+    'remediation': 'bottom-right'
+  } %}
+
+  <div class="agent-network {{ team.state|lower }}" id="agent-network" aria-label="Virtual technical team network">
+    <svg class="agent-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="50" y1="50" x2="19" y2="24"></line>
+      <line x1="50" y1="50" x2="81" y2="24"></line>
+      <line x1="50" y1="50" x2="19" y2="76"></line>
+      <line x1="50" y1="50" x2="81" y2="76"></line>
+      <line class="peer-link" x1="19" y1="24" x2="81" y2="24"></line>
+      <line class="peer-link" x1="19" y1="76" x2="81" y2="76"></line>
+      <line class="peer-link" x1="19" y1="24" x2="19" y2="76"></line>
+      <line class="peer-link" x1="81" y1="24" x2="81" y2="76"></line>
+    </svg>
+
+    {% for agent in team.members %}
+    {% set profile = profiles.get(agent.key, {'name': agent.name, 'jid': agent.jid, 'role': agent.role, 'health_port': 0}) %}
+    <button
+      type="button"
+      class="agent-node {{ positions.get(agent.key, 'center') }} {{ agent.activity|lower }} presence-unknown"
+      data-agent-runtime-jid="{{ agent.jid }}"
+      data-agent-display-jid="{{ profile.jid }}"
+      data-agent-name="{{ profile.name }}"
+      data-agent-role="{{ profile.role }}"
+      data-agent-key="{{ agent.key }}"
+      data-agent-health-port="{{ profile.health_port }}"
+      data-agent-presence="UNKNOWN"
+      data-agent-activity-state="{{ agent.activity }}"
+      aria-label="Open observability log for {{ profile.name }}"
+    >
+      <span class="agent-avatar" aria-hidden="true">
+        <img src="{{ url_for('static', filename='img/agent-mark.svg') }}" alt="">
+        <span class="agent-presence-dot" title="Agent health: connecting"></span>
+      </span>
+      <span class="agent-node-copy">
+        <strong>{{ profile.name }}</strong>
+        <small>{{ profile.role }}</small>
+        <span class="activity-pill {{ agent.activity|lower }}" data-agent-activity>{{ agent.activity }}</span>
+      </span>
+    </button>
+    {% endfor %}
+  </div>
+
+  <div class="network-legend" aria-label="Agent state legend">
+    <span><i class="legend-dot presence-online"></i> XMPP healthy</span>
+    <span><i class="legend-dot presence-degraded"></i> Degraded</span>
+    <span><i class="legend-dot presence-offline"></i> Offline</span>
+    <span><i class="legend-dot working"></i> Working</span>
+    <span><i class="legend-dot waiting"></i> Waiting</span>
+    <span><i class="legend-dot idle"></i> Idle</span>
+    <span class="network-help">Presence is live from SPADE/XMPP; activity is reported directly by each agent runtime.</span>
+  </div>
+</section>
+
+<div class="agent-modal" id="agent-observability-modal" hidden>
+  <div class="agent-modal-backdrop" data-agent-modal-close></div>
+  <section class="agent-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-modal-name">
+    <header class="agent-modal-header">
+      <div class="agent-modal-identity">
+        <span class="agent-modal-logo" aria-hidden="true">
+          <img src="{{ url_for('static', filename='img/agent-mark.svg') }}" alt="">
+        </span>
+        <div>
+          <span class="eyebrow">AGENT OBSERVABILITY</span>
+          <h2 id="agent-modal-name">Technical role</h2>
+          <p><span id="agent-modal-jid">—</span> · <span id="agent-modal-role">—</span></p>
+        </div>
+      </div>
+      <div class="agent-modal-actions">
+        <span class="activity-pill idle" id="agent-modal-state">IDLE</span>
+        <button type="button" class="icon-button" id="agent-modal-refresh" aria-label="Refresh agent log">↻</button>
+        <button type="button" class="icon-button" data-agent-modal-close aria-label="Close agent log">×</button>
+      </div>
+    </header>
+
+    <div class="agent-modal-summary">
+      <div><span>Recorded events</span><strong id="agent-event-count">0</strong></div>
+      <div><span>Last activity</span><strong id="agent-last-activity">—</strong></div>
+      <div><span>Current incident</span><strong id="agent-current-incident">—</strong></div>
+    </div>
+
+    <div class="agent-log-shell">
+      <div class="agent-log-title">
+        <div>
+          <h3>Operational activity log</h3>
+          <p>Scan the timeline on the left, then inspect rationale, outcomes and payloads in the event detail panel.</p>
+        </div>
+        <span id="agent-log-loading" class="agent-log-loading" hidden>Refreshing…</span>
+      </div>
+
+      <div class="agent-log-toolbar" aria-label="Agent log filters">
+        <label class="agent-log-control agent-log-search">
+          <span>Search events</span>
+          <input id="agent-log-search" type="search" placeholder="Action, rationale, tool, incident…" autocomplete="off">
+        </label>
+        <label class="agent-log-control agent-log-status-filter">
+          <span>Status</span>
+          <select id="agent-log-status-filter">
+            <option value="">All statuses</option>
+          </select>
+        </label>
+        <label class="agent-log-current-filter">
+          <input id="agent-log-current-only" type="checkbox">
+          <span>Current incident only</span>
+        </label>
+        <div class="agent-log-result-count" aria-live="polite">
+          <span>Visible</span>
+          <strong id="agent-log-visible-count">0</strong>
+        </div>
+      </div>
+
+      <div class="agent-log-workspace">
+        <section class="agent-event-list-panel" aria-label="Agent event timeline">
+          <header class="agent-event-panel-header">
+            <div>
+              <span class="eyebrow">TIMELINE</span>
+              <h4>Agent events</h4>
+            </div>
+            <small>Newest first</small>
+          </header>
+          <div class="agent-event-list" id="agent-event-list"></div>
+          <div class="agent-log-empty" id="agent-log-empty" hidden>
+            <strong>No activity recorded for this role yet.</strong>
+            <p>Structured agent events are persisted by the autonomous backend and exposed through its read API.</p>
+          </div>
+        </section>
+
+        <section class="agent-event-detail-panel is-empty" id="agent-event-detail" aria-label="Selected event detail" aria-live="polite">
+          <div class="agent-event-detail-empty" id="agent-event-detail-empty">
+            <strong>Select an event to inspect it.</strong>
+            <p>The complete operational rationale, tool outcome and structured payload will appear here.</p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+</div>

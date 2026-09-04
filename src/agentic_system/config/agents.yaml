@@ -1,43 +1,34 @@
-coordinator:
-  jid: coordinator@xmpp
-  password: ${XMPP_COORDINATOR_PASSWORD}
+version: 1
+runtime:
+  expected_agent_count: 5
 
-evidence:
-  jid: evidence@xmpp
-  password: ${XMPP_EVIDENCE_PASSWORD}
+agents:
+  - role: technical_lead
+    display_name: Technical Lead Agent
+    jid_localpart: technical-lead
+    password_env: XMPP_TECHNICAL_LEAD_PASSWORD
+    health_port: 8101
 
-reasoning:
-  jid: reasoning@xmpp
-  password: ${XMPP_REASONING_PASSWORD}
+  - role: system_engineer
+    display_name: System Engineer Agent
+    jid_localpart: system-engineer
+    password_env: XMPP_SYSTEM_ENGINEER_PASSWORD
+    health_port: 8102
 
-critic:
-  jid: critic@xmpp
-  password: ${XMPP_CRITIC_PASSWORD}
+  - role: network_engineer
+    display_name: Network Engineer Agent
+    jid_localpart: network-engineer
+    password_env: XMPP_NETWORK_ENGINEER_PASSWORD
+    health_port: 8103
 
-remediation:
-  jid: remediation@xmpp
-  password: ${XMPP_REMEDIATION_PASSWORD}
+  - role: application_engineer
+    display_name: Application Engineer Agent
+    jid_localpart: application-engineer
+    password_env: XMPP_APPLICATION_ENGINEER_PASSWORD
+    health_port: 8104
 
-opensearch:
-  base_url: http://opensearch:9200
-  username: null
-  password: null
-  verify_ssl: false
-
-ollama:
-  base_url: http://ollama:11434
-  model: llama3.2:3b
-  temperature: 0.1
-  timeout_seconds: 120
-  keep_alive: 5m
-  max_retries: 1
-  check_model_on_start: true
-
-topology_file: src/agentic_system/config/topology.yaml
-
-# Detector lifecycle belongs to opensearch-init, not to the MAS runtime.
-sync_detectors_on_start: false
-detector_metrics:
-  - usage_active
-  - used_percent
-open_demo_incident: true
+  - role: software_developer
+    display_name: Software Developer Agent
+    jid_localpart: software-developer
+    password_env: XMPP_SOFTWARE_DEVELOPER_PASSWORD
+    health_port: 8105

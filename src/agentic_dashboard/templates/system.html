@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}System · {{ app_name }}{% endblock %}
+{% block page_title %}Agentic System Status{% endblock %}
+{% block page_actions %}
+<a class="secondary-button" href="{{ backend_docs_url }}" target="_blank" rel="noopener">Backend API Swagger</a>
+<a class="secondary-button" href="/">Back to operations</a>
+{% endblock %}
+
+{% block content %}
+<section class="panel status-panel standalone">
+  <div class="status-summary">
+    <span class="status-dot {{ 'online' if overall_online else 'offline' }}"></span>
+    <div>
+      <span class="label">System status</span>
+      <strong>{{ 'OPERATIONAL' if overall_online else 'DEGRADED' }}</strong>
+      <small>Live dependency checks from the dashboard container</small>
+    </div>
+  </div>
+  <div class="team-summary-inline">
+    <span class="label">Virtual operations team</span>
+    <strong class="activity-state {{ 'working' if team.working else 'idle' }}">{{ team.state }}</strong>
+    <small>{{ team.active_incidents }} incident{{ '' if team.active_incidents == 1 else 's' }} under investigation</small>
+  </div>
+</section>
+
+{% include "_agent_network.html" %}
+
+<section class="panel incidents-panel">
+  <div class="section-header compact">
+    <div>
+      <span class="eyebrow">RUNTIME DEPENDENCIES</span>
+      <h2>Core services</h2>
+      <p class="section-description">The dashboard consumes incident data from the backend API. Raw metrics and logs remain in OpenSearch.</p>
+    </div>
+    <span class="muted nowrap">Checked {{ now|human_time }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="simple-table">
+      <thead><tr><th>Service</th><th>Purpose</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for service in services %}
+        <tr>
+          <td><strong>{{ service.name }}</strong></td>
+          <td>{{ service.role }}</td>
+          <td><span class="status-pill {{ 'online' if service.status == 'ONLINE' else 'degraded' }}">{{ service.status }}</span></td>
+          <td class="muted">{{ service.detail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

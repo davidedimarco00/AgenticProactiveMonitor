@@ -1,0 +1,86 @@
+.agent-detail-disclosure {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid #dbe3ec;
+  border-radius: 11px;
+  background: #ffffff;
+}
+
+.agent-detail-disclosure summary {
+  position: sticky;
+  top: 0;
+  cursor: pointer;
+  list-style: none;
+  padding: 12px 14px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+}
+
+.agent-detail-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-detail-disclosure summary::after {
+  content: "+";
+  float: right;
+  color: #64748b;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.agent-detail-disclosure[open] summary::after {
+  content: "−";
+}
+
+.agent-detail-disclosure pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px solid #e2e8f0;
+  background: #0f172a;
+  color: #dbeafe;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+/* Structured values shown inline in a fact or section: readable, bounded, and
+   never able to stretch the fact grid to the height of the payload. */
+pre.agent-detail-value-block {
+  max-height: 180px;
+  margin: 4px 0 0;
+  padding: 8px 9px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+@media (max-width: 860px) {
+  .agent-detail-disclosure pre {
+    max-height: 260px;
+  }
+
+  pre.agent-detail-value-block {
+    max-height: 150px;
+  }
+}

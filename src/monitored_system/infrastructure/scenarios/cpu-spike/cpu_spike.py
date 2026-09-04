@@ -17,8 +17,8 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
 
-    if args.workers < 1 or args.workers > 8:
-        raise SystemExit("workers must be between 1 and 8")
+    if args.workers < 1 or args.workers > 12:
+        raise SystemExit("workers must be between 1 and 12")
 
     workers = [mp.Process(target=burn_cpu, daemon=True) for _ in range(args.workers)]
     for worker in workers:

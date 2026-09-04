@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     sysstat \
     net-tools \
     iproute2 \
+    iputils-ping \
     dnsutils \
     jq \
     python3 \
@@ -68,7 +69,9 @@ COPY infrastructure/parsers.conf /etc/fluent-bit/parsers.conf
 COPY infrastructure/entrypoint.sh /entrypoint.sh
 
 RUN mkdir -p /var/log/machine /var/lib/notes /var/run/monitored-faults \
-    && touch /var/log/machine/app.log /var/log/machine/system.log \
+    && touch /var/log/machine/app.log \
+             /var/log/machine/system.log \
+             /var/log/machine/runtime.log \
     && chmod +x /entrypoint.sh
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=12 \

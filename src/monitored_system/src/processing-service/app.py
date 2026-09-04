@@ -7,9 +7,12 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from common.logging_utils import new_request_id, write_log
+from common.logging_utils import new_request_id, write_exception, write_log
 
 SERVICE_NAME = "processing-service"
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data-service:8000").rstrip("/")
@@ -23,6 +26,25 @@ MAX_FAULT_DELAY_MS = int(os.getenv("MAX_FAULT_DELAY_MS", "30000"))
 class NoteWrite(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     content: str = Field(min_length=1, max_length=10000)
+
+
+def level_for_status(status_code: int) -> str:
+    if status_code >= 500:
+        return "ERROR"
+    if status_code >= 400:
+        return "WARN"
+    return "INFO"
+
+
+def safe_validation_errors(exc: RequestValidationError) -> list[dict[str, object]]:
+    return [
+        {
+            "type": error.get("type"),
+            "loc": list(error.get("loc", ())),
+            "msg": error.get("msg"),
+        }
+        for error in exc.errors()
+    ]
 
 
 def configured_fault_delay_ms() -> int:
@@ -73,22 +95,21 @@ async def forward_request(
             )
     except httpx.RequestError as exc:
         latency_ms = round((time.perf_counter() - start) * 1000, 3)
-        write_log(
+        write_exception(
             service=SERVICE_NAME,
-            level="ERROR",
             event_type="data_service_unavailable",
             message="Unable to contact data service",
+            exception=exc,
             request_id=request_id,
             downstream="data-service",
             latency_ms=latency_ms,
-            error_type=type(exc).__name__,
         )
         raise HTTPException(status_code=503, detail="data service unavailable") from exc
 
     latency_ms = round((time.perf_counter() - start) * 1000, 3)
     write_log(
         service=SERVICE_NAME,
-        level="INFO" if response.status_code < 500 else "ERROR",
+        level=level_for_status(response.status_code),
         event_type="downstream_request_completed",
         message="Data service request completed",
         request_id=request_id,
@@ -117,6 +138,72 @@ def raise_for_downstream(response: httpx.Response) -> None:
 
 
 app = FastAPI(title="Notes Service", version="0.2.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    request_id = request_id_from(request)
+    errors = exc.errors()
+    safe_errors = safe_validation_errors(exc)
+    write_log(
+        service=SERVICE_NAME,
+        level="WARN",
+        event_type="request_validation_failed",
+        message="Processing service request validation failed",
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=422,
+        validation_errors=safe_errors,
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(errors)},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    request_id = request_id_from(request)
+    write_log(
+        service=SERVICE_NAME,
+        level=level_for_status(exc.status_code),
+        event_type="request_failed",
+        message="Processing service request failed",
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=exc.status_code,
+        error_type=type(exc).__name__,
+        error_message=str(exc.detail),
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = request_id_from(request)
+    write_exception(
+        service=SERVICE_NAME,
+        event_type="unhandled_exception",
+        message="Unhandled exception while processing request",
+        exception=exc,
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=500,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "internal server error"},
+    )
 
 
 @app.on_event("startup")

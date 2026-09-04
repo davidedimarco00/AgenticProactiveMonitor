@@ -6,6 +6,7 @@ WAIT_SECONDS="${DETECTOR_WAIT_SECONDS:-3600}"
 REQUIRED_INTERVALS="${DETECTOR_REQUIRED_INTERVALS:-40}"
 HOSTS="${DETECTOR_HOSTS:-traffic-generator api-gateway processing-service data-service worker-service}"
 NETWORK_LATENCY_HOSTS="traffic-generator api-gateway processing-service"
+APPLICATION_LATENCY_HOSTS="traffic-generator api-gateway processing-service"
 
 DETECTION_INTERVAL_MINUTES=1
 WINDOW_DELAY_MINUTES=1
@@ -261,7 +262,8 @@ ensure_detector() {
 wait_for_plugin
 wait_for_history_on_hosts CPU docker_container_cpu docker_container_cpu.usage_percent "$HOSTS"
 wait_for_history_on_hosts RAM docker_container_mem docker_container_mem.usage_percent "$HOSTS"
-wait_for_history_on_hosts NETLAT network_service_latency network_service_latency.response_time "$NETWORK_LATENCY_HOSTS"
+wait_for_history_on_hosts NETLAT network_transport_latency network_transport_latency.response_time "$NETWORK_LATENCY_HOSTS"
+wait_for_history_on_hosts APPLAT application_service_latency application_service_latency.response_time "$APPLICATION_LATENCY_HOSTS"
 
 for host in $HOSTS; do
   ensure_detector \
@@ -285,29 +287,56 @@ done
 
 ensure_detector \
   "NETLAT-traffic-generator-api-gateway" \
-  "End-to-end network service latency detector from traffic-generator to api-gateway" \
+  "TCP transport connection latency detector from traffic-generator to api-gateway" \
   traffic-generator \
-  network_service_latency \
-  network_service_latency.response_time \
+  network_transport_latency \
+  network_transport_latency.response_time \
   NETWORK_LATENCY_ANOMALY \
   network_latency_anomaly
 
 ensure_detector \
   "NETLAT-api-gateway-processing-service" \
-  "End-to-end network service latency detector from api-gateway to processing-service" \
+  "TCP transport connection latency detector from api-gateway to processing-service" \
   api-gateway \
-  network_service_latency \
-  network_service_latency.response_time \
+  network_transport_latency \
+  network_transport_latency.response_time \
   NETWORK_LATENCY_ANOMALY \
   network_latency_anomaly
 
 ensure_detector \
   "NETLAT-processing-service-data-service" \
-  "End-to-end network service latency detector from processing-service to data-service" \
+  "TCP transport connection latency detector from processing-service to data-service" \
   processing-service \
-  network_service_latency \
-  network_service_latency.response_time \
+  network_transport_latency \
+  network_transport_latency.response_time \
   NETWORK_LATENCY_ANOMALY \
   network_latency_anomaly
 
-echo "All detectors are SINGLE_ENTITY: 10 container CPU/RAM detectors and 3 network-latency detectors."
+ensure_detector \
+  "APPLAT-traffic-generator-api-gateway" \
+  "HTTP application-service response latency detector from traffic-generator to api-gateway" \
+  traffic-generator \
+  application_service_latency \
+  application_service_latency.response_time \
+  APPLICATION_LATENCY_ANOMALY \
+  application_latency_anomaly
+
+ensure_detector \
+  "APPLAT-api-gateway-processing-service" \
+  "HTTP application-service response latency detector from api-gateway to processing-service" \
+  api-gateway \
+  application_service_latency \
+  application_service_latency.response_time \
+  APPLICATION_LATENCY_ANOMALY \
+  application_latency_anomaly
+
+ensure_detector \
+  "APPLAT-processing-service-data-service" \
+  "HTTP application-service response latency detector from processing-service to data-service" \
+  processing-service \
+  application_service_latency \
+  application_service_latency.response_time \
+  APPLICATION_LATENCY_ANOMALY \
+  application_latency_anomaly
+
+echo "All detectors are SINGLE_ENTITY: 10 container CPU/RAM detectors, 3 network transport-latency detectors and 3 application-latency detectors."

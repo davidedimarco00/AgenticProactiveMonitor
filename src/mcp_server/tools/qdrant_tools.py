@@ -1,7 +1,9 @@
 import os
+from typing import Annotated
 
 import httpx
 from mcp.server import MCPServer
+from pydantic import Field
 
 
 QDRANT_URL = os.getenv(
@@ -10,8 +12,8 @@ QDRANT_URL = os.getenv(
 ).rstrip("/")
 
 QDRANT_COLLECTION = os.getenv(
-    "QDRANT_COLLECTION",
-    "thesis-knowledge-base",
+    "QDRANT_MONITORED_SYSTEM_COLLECTION",
+    os.getenv("QDRANT_COLLECTION", "monitored-system"),
 )
 
 OLLAMA_URL = os.getenv(
@@ -24,17 +26,14 @@ OLLAMA_EMBEDDING_MODEL = os.getenv(
     "ibm/granite-embedding:30m",
 )
 
+KnowledgeQuery = Annotated[str, Field(min_length=1, max_length=2000)]
+KnowledgeLimit = Annotated[int, Field(ge=1, le=10)]
 
-async def _embed_query(
-    query: str,
-) -> list[float]:
-    """
-    Generate the embedding for a search query using Ollama.
-    """
 
-    async with httpx.AsyncClient(
-        timeout=60.0,
-    ) as client:
+async def _embed_query(query: str) -> list[float]:
+    """Generate the embedding for a search query using Ollama."""
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             f"{OLLAMA_URL}/api/embed",
             json={
@@ -42,28 +41,15 @@ async def _embed_query(
                 "input": query,
             },
         )
-
         response.raise_for_status()
-
         data = response.json()
 
-    embeddings = data.get(
-        "embeddings",
-        [],
-    )
-
+    embeddings = data.get("embeddings", [])
     if not embeddings:
         raise RuntimeError("Ollama did not return an embedding.")
 
     embedding = embeddings[0]
-
-    if (
-        not isinstance(
-            embedding,
-            list,
-        )
-        or not embedding
-    ):
+    if not isinstance(embedding, list) or not embedding:
         raise RuntimeError("Ollama returned an invalid embedding.")
 
     return embedding
@@ -73,15 +59,11 @@ async def _query_qdrant(
     vector: list[float],
     limit: int,
 ) -> list[dict]:
-    """
-    Search the configured Qdrant collection.
-    """
+    """Search the monitored-system Qdrant collection."""
 
-    async with httpx.AsyncClient(
-        timeout=30.0,
-    ) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
-            (f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/query"),
+            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/query",
             json={
                 "query": vector,
                 "limit": limit,
@@ -89,82 +71,69 @@ async def _query_qdrant(
                 "with_vector": False,
             },
         )
-
         response.raise_for_status()
-
         data = response.json()
 
     return data.get("result", {}).get("points", [])
 
 
-def register_qdrant_tools(
-    mcp: MCPServer,
-) -> None:
+def _format_point(point: dict) -> dict:
+    payload = point.get("payload") or {}
+    return {
+        "score": round(float(point.get("score", 0.0)), 4),
+        "collection": QDRANT_COLLECTION,
+        "document_id": payload.get("document_id"),
+        "filename": payload.get("filename"),
+        "file_type": payload.get("file_type"),
+        "chunk_index": payload.get("chunk_index"),
+        "total_chunks": payload.get("total_chunks"),
+        "text": payload.get("text"),
+        "uploaded_at": payload.get("uploaded_at"),
+        "kb_id": payload.get("kb_id"),
+        "document_type": payload.get("document_type"),
+        "domains": payload.get("domains"),
+        "services": payload.get("services"),
+        "source_path": payload.get("source_path"),
+    }
+
+
+def register_qdrant_tools(mcp: MCPServer) -> None:
 
     @mcp.tool()
     async def search_knowledge(
-        query: str,
-        limit: int = 5,
+        query: KnowledgeQuery,
+        limit: KnowledgeLimit = 5,
     ) -> dict:
         """
-        Search the thesis knowledge base using semantic vector search.
+        Search documentation of the monitored system using semantic retrieval.
 
-        The query is embedded with the same Ollama embedding model
-        used during document ingestion and searched against Qdrant.
+        The collection contains external knowledge specific to the monitored
+        Notes Platform. General Linux, networking and software knowledge is
+        expected to come from the LLM itself rather than from role-specific RAG.
 
-        This tool is read-only.
+        This tool is read-only. Retrieved knowledge provides system context;
+        live telemetry and tool observations remain the source of truth for an
+        active incident and the agent must generate the diagnosis itself.
         """
 
         query = query.strip()
-
         if not query:
             raise ValueError("query must not be empty")
-
         if len(query) > 2000:
             raise ValueError("query must not exceed 2000 characters")
-
         if limit < 1 or limit > 10:
             raise ValueError("limit must be between 1 and 10")
 
         try:
             query_vector = await _embed_query(query)
-
-            points = await _query_qdrant(
-                query_vector,
-                limit,
-            )
-
-            results = []
-
-            for point in points:
-                payload = point.get("payload") or {}
-
-                results.append(
-                    {
-                        "score": round(
-                            float(
-                                point.get(
-                                    "score",
-                                    0.0,
-                                )
-                            ),
-                            4,
-                        ),
-                        "document_id": (payload.get("document_id")),
-                        "filename": (payload.get("filename")),
-                        "file_type": (payload.get("file_type")),
-                        "chunk_index": (payload.get("chunk_index")),
-                        "total_chunks": (payload.get("total_chunks")),
-                        "text": (payload.get("text")),
-                        "uploaded_at": (payload.get("uploaded_at")),
-                    }
-                )
+            points = await _query_qdrant(query_vector, limit)
+            results = [_format_point(point) for point in points]
 
             return {
                 "status": "ok",
                 "query": query,
-                "collection": (QDRANT_COLLECTION),
-                "embedding_model": (OLLAMA_EMBEDDING_MODEL),
+                "collection": QDRANT_COLLECTION,
+                "embedding_model": OLLAMA_EMBEDDING_MODEL,
                 "embedding_dimensions": len(query_vector),
                 "returned_results": len(results),
                 "results": results,
@@ -174,16 +143,14 @@ def register_qdrant_tools(
             return {
                 "status": "error",
                 "query": query,
-                "error": (f"HTTP error while accessing Ollama or Qdrant: {exc}"),
+                "error": f"HTTP error while accessing Ollama or Qdrant: {exc}",
             }
-
         except httpx.RequestError as exc:
             return {
                 "status": "error",
                 "query": query,
-                "error": (f"Unable to reach Ollama or Qdrant: {exc}"),
+                "error": f"Unable to reach Ollama or Qdrant: {exc}",
             }
-
         except RuntimeError as exc:
             return {
                 "status": "error",
