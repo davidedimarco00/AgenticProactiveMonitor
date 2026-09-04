@@ -20,10 +20,22 @@ def test_feature_packages_are_the_canonical_implementations() -> None:
     assert TechnicalLeadAgent.__module__ == "agentic_system.agents.technical_lead"
     assert SpecialistAgent.__module__ == "agentic_system.agents.specialist"
     assert RoleLLMProvider.__module__ == "agentic_system.reasoning.models"
-    assert SpecialistReActExecutor.__module__ == (
-        "agentic_system.reasoning.structured_reasoning_react"
-    )
+    assert SpecialistReActExecutor.__module__ == "agentic_system.reasoning.specialist_react"
     assert build_incident_report.__module__ == "agentic_system.incidents.reporting"
+
+
+def test_react_feature_layers_are_no_longer_in_the_canonical_mro() -> None:
+    modules = [base.__module__ for base in SpecialistReActExecutor.__mro__]
+
+    assert modules[0] == "agentic_system.reasoning.specialist_react"
+    for retired_layer in (
+        "agentic_system.reasoning.incident_focus_react",
+        "agentic_system.reasoning.context_robust_react",
+        "agentic_system.reasoning.prompt_engineered_collaboration",
+        "agentic_system.reasoning.prompt_engineered_react",
+        "agentic_system.reasoning.structured_reasoning_react",
+    ):
+        assert retired_layer not in modules
 
 
 def test_obsolete_wrapper_files_are_removed() -> None:

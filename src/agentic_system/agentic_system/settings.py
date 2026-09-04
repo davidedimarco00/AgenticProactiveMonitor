@@ -54,6 +54,8 @@ class RuntimeConfig:
     agentspeak_specialist_asl: str = "/app/agentic_system/reasoning/plans/specialist.asl"
     agentspeak_action_timeout_seconds: float = 120.0
     agentspeak_bdi_max_concurrency: int = 2
+    peer_help_enabled: bool = True
+    peer_help_response_timeout_seconds: float = 180.0
     task_dispatch_timeout_seconds: float = 10.0
     max_llm_concurrency: int = 1
     react_max_steps: int = 10
@@ -179,6 +181,10 @@ def load_runtime_config() -> RuntimeConfig:
     agentspeak_bdi_max_concurrency = int(
         os.getenv("AGENTSPEAK_BDI_MAX_CONCURRENCY", "2")
     )
+    peer_help_enabled = _env_bool("PEER_HELP_ENABLED", True)
+    peer_help_response_timeout_seconds = float(
+        os.getenv("PEER_HELP_RESPONSE_TIMEOUT_SECONDS", "180")
+    )
     task_dispatch_timeout_seconds = float(
         os.getenv("AGENT_TASK_DISPATCH_TIMEOUT_SECONDS", "10")
     )
@@ -231,6 +237,8 @@ def load_runtime_config() -> RuntimeConfig:
         raise RuntimeError("AGENTSPEAK_ACTION_TIMEOUT_SECONDS must be greater than zero")
     if agentspeak_bdi_max_concurrency <= 0:
         raise RuntimeError("AGENTSPEAK_BDI_MAX_CONCURRENCY must be greater than zero")
+    if peer_help_response_timeout_seconds <= 0:
+        raise RuntimeError("PEER_HELP_RESPONSE_TIMEOUT_SECONDS must be greater than zero")
     if task_dispatch_timeout_seconds <= 0:
         raise RuntimeError("AGENT_TASK_DISPATCH_TIMEOUT_SECONDS must be greater than zero")
     if max_llm_concurrency <= 0:
@@ -266,6 +274,8 @@ def load_runtime_config() -> RuntimeConfig:
         agentspeak_specialist_asl=agentspeak_specialist_asl,
         agentspeak_action_timeout_seconds=agentspeak_action_timeout_seconds,
         agentspeak_bdi_max_concurrency=agentspeak_bdi_max_concurrency,
+        peer_help_enabled=peer_help_enabled,
+        peer_help_response_timeout_seconds=peer_help_response_timeout_seconds,
         task_dispatch_timeout_seconds=task_dispatch_timeout_seconds,
         max_llm_concurrency=max_llm_concurrency,
         react_max_steps=react_max_steps,

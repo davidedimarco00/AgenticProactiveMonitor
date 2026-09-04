@@ -5,8 +5,9 @@ import time
 
 import requests
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
+from werkzeug.exceptions import HTTPException
 
-from common.logging_utils import new_request_id, write_log
+from common.logging_utils import new_request_id, write_exception, write_log
 
 SERVICE_NAME = "api-gateway"
 NOTES_SERVICE_URL = os.getenv("NOTES_SERVICE_URL", "http://processing-service:8000").rstrip("/")
@@ -14,6 +15,23 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "3"))
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "notes-platform-dev-secret")
+
+
+def level_for_status(status_code: int) -> str:
+    if status_code >= 500:
+        return "ERROR"
+    if status_code >= 400:
+        return "WARN"
+    return "INFO"
+
+
+def current_request_id() -> str:
+    return (
+        getattr(g, "request_id", None)
+        or request.headers.get("X-Request-ID")
+        or new_request_id()
+    )
+
 
 write_log(
     service=SERVICE_NAME,
@@ -36,7 +54,7 @@ def log_request(response):
     response.headers["X-Request-ID"] = g.request_id
     write_log(
         service=SERVICE_NAME,
-        level="INFO" if response.status_code < 500 else "ERROR",
+        level=level_for_status(response.status_code),
         event_type="http_request_completed",
         message="Web request completed",
         request_id=g.request_id,
@@ -67,22 +85,21 @@ def call_notes_service(
         )
     except requests.RequestException as exc:
         latency_ms = round((time.perf_counter() - start) * 1000, 3)
-        write_log(
+        write_exception(
             service=SERVICE_NAME,
-            level="ERROR",
             event_type="notes_service_unavailable",
             message="Unable to contact notes service",
+            exception=exc,
             request_id=request_id,
             downstream="processing-service",
             latency_ms=latency_ms,
-            error_type=type(exc).__name__,
         )
         abort(503, description="Notes service is temporarily unavailable")
 
     latency_ms = round((time.perf_counter() - start) * 1000, 3)
     write_log(
         service=SERVICE_NAME,
-        level="INFO" if response.status_code < 500 else "ERROR",
+        level=level_for_status(response.status_code),
         event_type="downstream_request_completed",
         message="Notes service request completed",
         request_id=request_id,
@@ -186,6 +203,16 @@ def delete_note(note_id: int):
 
 @app.errorhandler(404)
 def not_found(_error):
+    write_log(
+        service=SERVICE_NAME,
+        level="WARN",
+        event_type="request_failed",
+        message="Requested web resource was not found",
+        request_id=current_request_id(),
+        method=request.method,
+        path=request.path,
+        status_code=404,
+    )
     return render_template(
         "error.html",
         title="Note not found",
@@ -200,7 +227,8 @@ def service_unavailable(error):
         level="ERROR",
         event_type="request_failed",
         message="Web request failed because a downstream service was unavailable",
-        request_id=g.request_id,
+        request_id=current_request_id(),
+        method=request.method,
         path=request.path,
         status_code=503,
     )
@@ -209,3 +237,44 @@ def service_unavailable(error):
         title="Service unavailable",
         message=getattr(error, "description", "The notes service is temporarily unavailable."),
     ), 503
+
+
+@app.errorhandler(Exception)
+def unhandled_exception(error):
+    request_id = current_request_id()
+
+    if isinstance(error, HTTPException):
+        status_code = error.code or 500
+        write_log(
+            service=SERVICE_NAME,
+            level=level_for_status(status_code),
+            event_type="request_failed",
+            message="Web request failed with an HTTP error",
+            request_id=request_id,
+            method=request.method,
+            path=request.path,
+            status_code=status_code,
+            error_type=type(error).__name__,
+            error_message=error.description,
+        )
+        return render_template(
+            "error.html",
+            title="Request failed" if status_code < 500 else "Internal server error",
+            message=error.description if status_code < 500 else "An unexpected server error occurred.",
+        ), status_code
+
+    write_exception(
+        service=SERVICE_NAME,
+        event_type="unhandled_exception",
+        message="Unhandled exception while processing web request",
+        exception=error,
+        request_id=request_id,
+        method=request.method,
+        path=request.path,
+        status_code=500,
+    )
+    return render_template(
+        "error.html",
+        title="Internal server error",
+        message="An unexpected server error occurred.",
+    ), 500

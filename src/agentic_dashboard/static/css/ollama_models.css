@@ -1,0 +1,161 @@
+.ollama-service-stack {
+  display: grid;
+  justify-items: stretch;
+  gap: 6px;
+  min-width: 320px;
+}
+
+.ollama-service-stack > .service-state {
+  justify-content: center;
+}
+
+.ollama-model-monitor {
+  max-width: 720px;
+  display: grid;
+  gap: 6px;
+}
+
+.ollama-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 20px;
+}
+
+.ollama-model-row.runtime {
+  padding-top: 1px;
+}
+
+.ollama-runtime-label {
+  min-width: 58px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.ollama-runtime-empty {
+  color: var(--subtle);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.ollama-configured-chip,
+.ollama-model-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 21px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--text-2);
+  background: var(--panel-soft);
+  white-space: nowrap;
+}
+
+.ollama-configured-chip {
+  gap: 5px;
+  padding: 0 7px 0 6px;
+}
+
+.ollama-configured-chip::before,
+.ollama-model-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.ollama-configured-chip.loaded::before,
+.ollama-model-chip::before {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, .12);
+}
+
+.ollama-configured-chip.standby::before {
+  background: #94a3b8;
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, .12);
+}
+
+.ollama-configured-chip.missing::before {
+  background: #e11d48;
+  box-shadow: 0 0 0 2px rgba(225, 29, 72, .10);
+}
+
+.ollama-model-role {
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.ollama-model-name,
+.ollama-model-chip {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.ollama-model-state {
+  margin-left: 1px;
+  padding-left: 5px;
+  border-left: 1px solid var(--border-soft);
+  color: var(--subtle);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 6px;
+  font-weight: 850;
+  letter-spacing: .06em;
+}
+
+.ollama-configured-chip.loaded .ollama-model-state {
+  color: #15803d;
+}
+
+.ollama-configured-chip.missing .ollama-model-state {
+  color: #be123c;
+}
+
+.ollama-model-chip {
+  gap: 5px;
+  max-width: 220px;
+  padding: 0 7px 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-theme="dark"] .ollama-configured-chip.loaded .ollama-model-state {
+  color: #86efac;
+}
+
+html[data-theme="dark"] .ollama-configured-chip.missing .ollama-model-state {
+  color: #fda4af;
+}
+
+@media (max-width: 1100px) {
+  .ollama-service-stack {
+    min-width: 260px;
+  }
+
+  .ollama-model-monitor {
+    max-width: 520px;
+  }
+}
+
+@media (max-width: 900px) {
+  .ollama-service-stack {
+    min-width: 100%;
+  }
+
+  .ollama-model-monitor {
+    max-width: 100%;
+  }
+
+  .ollama-runtime-label {
+    min-width: 100%;
+  }
+}

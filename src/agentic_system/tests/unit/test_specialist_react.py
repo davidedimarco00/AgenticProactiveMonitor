@@ -205,8 +205,22 @@ def test_hybrid_react_uses_gemma_reasoning_qwen_action_and_gemma_finalization() 
     assert "Operational reasoning summaries" in str(finalizer.calls[0])
 
     actions = [item["action"] for item in traces]
-    assert actions == ["react_started", "reason", "select_tool", "observe", "reason", "diagnosis"]
-    assert traces[2]["tool"] == "get_system_load"
+    assert actions == [
+        "incident_anchor",
+        "rag_context_grounding",
+        "react_started",
+        "reason",
+        "select_tool",
+        "observe",
+        "reason",
+        "diagnosis",
+    ]
+    assert traces[0]["details"]["observed_signal"] == "container_cpu"
+    assert traces[0]["details"]["affected_component"] == "processing-service"
+    assert traces[0]["details"]["react_budget_consumed"] is False
+    assert traces[1]["outcome"] == "rag_tool_unavailable; continue_with_live_diagnostics"
+    assert traces[1]["details"]["react_budget_consumed"] is False
+    assert traces[4]["tool"] == "get_system_load"
 
 
 def test_langchain_tool_adapter_executes_existing_spade_mcp_tool() -> None:
@@ -256,7 +270,10 @@ def test_inconclusive_finalization_can_stop_without_artificial_peer_request() ->
     }
     finalizer = FakeFinalizer([inconclusive])
 
-    result = asyncio.run(_investigate(_executor(finalizer=finalizer)))
+    # Inconclusive/no-peer is accepted at the actual bounded edge. If safe local
+    # ReAct steps were still available, observation_aware_react would correctly
+    # continue gathering evidence instead of stopping early.
+    result = asyncio.run(_investigate(_executor(finalizer=finalizer, max_steps=2)))
 
     assert result.diagnosis_status == "inconclusive"
     assert result.root_cause is None

@@ -19,6 +19,7 @@ EXPECTED_TOOLS = {
     "inspect_process",
     "get_process_tree",
     "resolve_service_dns",
+    "test_icmp_reachability",
     "test_tcp_connection",
     "check_http_endpoint",
     "search_knowledge",

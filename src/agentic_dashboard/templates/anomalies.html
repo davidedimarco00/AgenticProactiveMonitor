@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Anomalies · {{ app_name }}{% endblock %}
+{% block page_title %}Anomalies{% endblock %}
+
+{% block content %}
+<section class="anomaly-overview-grid" aria-label="Durable anomaly inbox summary">
+  <article class="panel anomaly-summary-card waiting">
+    <span class="label">Waiting</span>
+    <strong id="anomaly-inbox-waiting-count">{{ anomaly_summary.waiting or 0 }}</strong>
+    <p>Persisted anomalies waiting for FIFO admission.</p>
+  </article>
+  <article class="panel anomaly-summary-card processing">
+    <span class="label">Processing</span>
+    <strong id="anomaly-inbox-processing-count">{{ anomaly_summary.processing or 0 }}</strong>
+    <p>Anomalies currently owned by the agentic workflow.</p>
+  </article>
+  <article class="panel anomaly-summary-card recovery">
+    <span class="label">Recovery</span>
+    <strong id="anomaly-inbox-recovery-count">{{ anomaly_summary.recovery or 0 }}</strong>
+    <p>Persisted work that requires runtime ownership recovery.</p>
+  </article>
+</section>
+
+<section class="panel incidents-panel anomaly-inbox-page" id="anomaly-inbox-panel">
+  <div class="section-header">
+    <div>
+      <span class="eyebrow">DURABLE ANOMALY INBOX</span>
+      <h2>Waiting anomalies</h2>
+      <p class="section-description">
+        OpenSearch single-entity anomalies are persisted in MongoDB before FIFO admission. This page contains only work that has not yet been taken in charge by the multi-agent team.
+      </p>
+    </div>
+    <div class="anomaly-page-refresh">
+      <span class="live-indicator"><i></i> LIVE QUEUE</span>
+      <small>Refreshes automatically</small>
+    </div>
+  </div>
+
+  <div class="anomaly-inbox-note">
+    <strong>FIFO admission</strong>
+    <span>The team processes one anomaly at a time. A WAITING anomaly can still be dismissed as a false positive before an incident is created.</span>
+  </div>
+
+  <div class="incident-table-wrap">
+    <table class="incident-table" id="anomaly-inbox-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Anomaly / detector</th>
+          <th>OpenSearch result</th>
+          <th>Grade</th>
+          <th>Confidence</th>
+          <th>Received</th>
+          <th>State</th>
+          <th aria-label="Actions">Action</th>
+        </tr>
+      </thead>
+      <tbody id="anomaly-inbox-body">
+        <tr id="anomaly-inbox-loading-row">
+          <td colspan="8" class="muted">Loading durable anomaly inbox…</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="empty-state" id="anomaly-inbox-empty" hidden>
+    <strong>No waiting anomalies</strong>
+    <p>The durable anomaly inbox currently has no observations waiting for the global FIFO.</p>
+  </div>
+</section>
+{% endblock %}

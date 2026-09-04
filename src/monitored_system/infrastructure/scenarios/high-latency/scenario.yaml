@@ -12,13 +12,17 @@ default_delay_ms: 2000
 
 expected_symptoms:
   - api-gateway request latency increases
+  - application_service_latency.response_time increases for api-gateway -> processing-service
   - processing-service emits fault_delay_applied WARN events
   - traffic-generator observes slower user actions
   - requests may become HTTP 503 if the configured delay exceeds upstream timeouts
 
-current_detection_scope: >
-  No dedicated anomaly detector is defined for latency in the current metric-only
-  detector set. Logs and request timing are retained as diagnostic evidence for
-  later agent reasoning and future detector extensions.
+expected_detector: APPLAT-api-gateway-processing-service
+
+detection_scope: >
+  Application latency is measured separately from TCP transport latency. The
+  APPLAT detector uses the HTTP /health probe from api-gateway to
+  processing-service and therefore traverses the controlled processing delay.
+  NETLAT detectors remain transport-focused and use TCP connection response time.
 
 recovery: remove the runtime fault-control file using stop.ps1

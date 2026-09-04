@@ -4,12 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f7fb">
+  <script>
+    (() => {
+      const key = "apm-dashboard-theme";
+      let theme = null;
+      try { theme = localStorage.getItem(key); } catch (_) {}
+      if (theme !== "dark" && theme !== "light") {
+        theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_observability.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/agent_trace.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/activity_states.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/workflow_observability.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/ui_enhancements.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/workflow_live.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/incident_tools.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/ollama_models.css') }}">
 </head>
 <body>
   <header class="app-header">
@@ -23,10 +38,16 @@
 
     <nav class="header-nav" aria-label="Primary navigation">
       <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Operations</a>
+      <a class="nav-link {% if request.path == '/anomalies' %}active{% endif %}" href="/anomalies">Anomalies</a>
+      <a class="nav-link {% if request.path.startswith('/incidents') %}active{% endif %}" href="/incidents">Incidents</a>
       <a class="nav-link {% if request.path == '/system' %}active{% endif %}" href="/system">System</a>
     </nav>
 
     <div class="header-meta">
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch to dark mode" aria-pressed="false" title="Switch to dark mode">
+        <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        <span class="theme-toggle-label">Night</span>
+      </button>
       <span class="live-indicator"><i></i> LIVE</span>
       <span class="clock" id="live-clock">UTC</span>
     </div>
@@ -44,9 +65,13 @@
     {% block content %}{% endblock %}
   </main>
 
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/agent_activity_realtime.js') }}"></script>
   <script src="{{ url_for('static', filename='js/agent_trace.js') }}"></script>
   <script src="{{ url_for('static', filename='js/workflow_observability.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/json_pretty.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/ollama_models.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

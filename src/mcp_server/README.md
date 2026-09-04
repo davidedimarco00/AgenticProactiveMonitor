@@ -53,8 +53,11 @@ The diagnostic execution layer allows a specialist to collect additional live ev
 - `inspect_process()` reads selected `/proc/<pid>` status, command-line and I/O information.
 - `get_process_tree()` returns parent/child process relationships with resource usage.
 - `resolve_service_dns()` resolves one allow-listed monitored service from another monitored service.
+- `test_icmp_reachability()` executes a bounded ICMP echo test between allow-listed monitored services and returns packet loss plus RTT statistics.
 - `test_tcp_connection()` performs one bounded TCP connect test between allow-listed monitored services.
 - `check_http_endpoint()` performs one read-only HTTP GET between allow-listed monitored services.
+
+The ICMP tool does not expose arbitrary IP addresses or a shell command. The source and target are constrained to monitored service IDs, packet count is bounded to 1-4, and per-packet timeout is bounded to 1-2 seconds. A completed ICMP test with zero replies is represented as a valid observation (`status=ok`, `reachable=false`); only diagnostic execution failures use `status=error`.
 
 These tools are intentionally **not** a generic shell. Their commands, protocols and target space are fixed or validated by the implementation. They are intended for autonomous diagnosis, not autonomous remediation.
 

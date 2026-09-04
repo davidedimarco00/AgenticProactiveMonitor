@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import logging
 from typing import Any, Literal
@@ -11,19 +11,18 @@ from spade_llm.providers.base_provider import BaseLLMProvider
 
 
 LOGGER = logging.getLogger("agentic_system.agents.review")
-_ALLOWED_DECISIONS = {"resolve", "operator_action_required", "request_support"}
-_ALLOWED_SUPPORT_DOMAINS = {"system", "network", "application", "software"}
-_SUPPORT_ROLE_BY_DOMAIN = {
-    "system": "system_engineer",
-    "network": "network_engineer",
-    "application": "application_engineer",
-    "software": "software_developer",
-}
-_MAX_REVIEW_ATTEMPTS = 3
-_MAX_SUPPORT_ROUNDS = 1
 
-ReviewDecision = Literal["resolve", "operator_action_required", "request_support"]
-SupportDomain = Literal["system", "network", "application", "software"]
+# The Technical Lead review is terminal. Peer collaboration is initiated
+# autonomously by the specialist that needs it, before the result ever reaches
+# this review, so "resolve" is the only workflow continuation left. The legacy
+# decisions are still parsed - older prompts and the unstructured JSON fallback
+# can emit them - but they are folded into "resolve" instead of being rejected,
+# which would burn retries on the single shared GPU.
+_LEGACY_DECISIONS = {"operator_action_required", "request_support"}
+_ALLOWED_DECISIONS = {"resolve"} | _LEGACY_DECISIONS
+_MAX_REVIEW_ATTEMPTS = 3
+
+ReviewDecision = Literal["resolve"]
 CommandType = Literal["verification", "remediation"]
 
 
@@ -64,8 +63,6 @@ class _TechnicalLeadReviewOutput(BaseModel):
     rationale: str
     remediation_summary: str
     remediation_steps: list[_RemediationStep]
-    support_domain: SupportDomain | None = None
-    support_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +74,6 @@ class TechnicalLeadReviewAssessment:
     rationale: str
     remediation_summary: str
     remediation_steps: tuple[dict[str, str], ...]
-    support_domain: str | None = None
-    support_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,45 +86,42 @@ class TechnicalLeadReviewDecision:
     rationale: str
     remediation_summary: str
     remediation_steps: tuple[dict[str, str], ...]
-    support_domain: str | None
-    support_reason: str | None
     bdi_goal: str
     bdi_review_intention: str
     bdi_decision_intention: str
 
 
 class TechnicalLeadReviewReasoner:
-    """Gemma critic with bounded collaboration and diagnosis-first closure."""
+    """Gemma critic that closes an incident with a terminal evidence-backed diagnosis."""
 
     SYSTEM_PROMPT = """You are the Technical Lead of an IT monitoring multi-agent team.
-Review only the supplied specialist evidence and choose the next workflow action.
+Review only the supplied specialist evidence and close the incident with the best diagnosis.
 
-Diagnosis-first workflow:
-- resolve: use this whenever the current autonomous investigation can terminate with the best
-  evidence-backed diagnosis. A diagnosis may be confirmed, probable, or bounded inconclusive.
-  Human remediation recommendations belong in remediation_steps and do NOT change the workflow
-  status away from resolve.
-- request_support: ask exactly one NEW specialist domain only when the current specialist explicitly
-  requests cross-domain diagnostic evidence and the support budget is still available.
-- operator_action_required is retained only for backward-compatible schema parsing. Do NOT choose it
-  in this autonomous diagnostic workflow. The system must return a diagnosis instead of replacing
-  diagnosis with an operator escalation state.
-
-Collaboration rules:
-- A confirmed diagnosis with assistance_required=false is terminal for autonomous diagnosis.
-- A probable/inconclusive diagnosis with assistance_required=false must NOT trigger another
-  specialist. Accept the best bounded result with resolve.
-- Collaboration is bounded to one cross-domain support round. Never walk through all specialists.
-- If support_budget_exhausted=true, request_support is forbidden. Accept the best diagnosis obtained
-  from the evidence already collected.
-- When support is allowed, support_domain must be one of eligible_support_domains and should match
-  specialist_requested_domain when that request is valid.
+Terminal review:
+- Your review is the final step of the autonomous workflow and resolve is the only valid decision.
+- A diagnosis may be confirmed, probable, or bounded inconclusive. All three are acceptable
+  terminal outcomes. Human remediation recommendations belong in remediation_steps and do NOT
+  change the workflow status away from resolve.
+- You never add a specialist to the incident. Specialists collaborate on their own initiative:
+  when one needs cross-domain evidence it contacts a peer directly and folds the peer answer into
+  the result you receive. A peer_consultation object in the specialist result means that
+  collaboration already happened; judge the combined evidence, do not ask for more agents.
 
 Diagnostic review rules:
 - Never invent evidence, measurements or a root cause.
 - Preserve a specialist probable root cause when its causal hypothesis is supported by supplied live
   evidence; do not demand an ultimate source-code cause when a lower-level process, dependency,
   component or runtime mechanism already explains the anomaly.
+- A diagnostic-process failure is NOT a root cause of the monitored incident. Invalid tool arguments,
+  schema-validation errors, tool timeouts, unavailable diagnostic endpoints, malformed responses,
+  model/tool-routing failures and duplicate-action saturation describe evidence acquisition, not the
+  monitored system, unless that diagnostic infrastructure is explicitly the incident entity.
+- If the specialist presents only a diagnostic-tool/process failure as root cause, do not preserve it
+  as a causal diagnosis. Resolve as bounded inconclusive and use the conservative root_cause label
+  "Unconfirmed causal mechanism after bounded autonomous investigation" while explaining the
+  evidence gap in diagnosis_summary/rationale.
+- Tool failures may reduce confidence or explain missing evidence, but they must not increase causal
+  confidence and must not appear as the anomaly-producing mechanism.
 - For an inconclusive result, still return a diagnosis summary describing what the autonomous
   investigation established. If no specific root cause was proven, use a conservative non-empty
   root_cause label such as "Unconfirmed causal mechanism after bounded autonomous investigation".
@@ -147,12 +139,12 @@ Remediation rules:
   recommendations for a human operator and must be clearly described as such.
 - Do not recommend a diagnostic check that the specialists have already executed unless it is a
   post-remediation verification.
-- For request_support, remediation_steps may be empty because diagnosis is still in progress.
+- An inconclusive diagnosis still closes the incident: give the operator at least the verification
+  step that would confirm or exclude the remaining hypothesis.
 
 Return only one JSON object with: decision, confidence, diagnosis_summary, root_cause, rationale,
-remediation_summary, remediation_steps, support_domain, support_reason. confidence is the confidence
-in the workflow/review decision, not diagnostic confidence. support_domain and support_reason must be
-null unless decision=request_support."""
+remediation_summary, remediation_steps. decision must be "resolve". confidence is the confidence in
+the workflow/review decision, not diagnostic confidence."""
 
     def __init__(
         self,
@@ -175,7 +167,6 @@ null unless decision=request_support."""
         if not incident_id:
             raise ValueError("Technical Lead review requires incident_id")
 
-        support_policy = self._support_policy(specialist_result)
         conversation_id = f"technical-lead-review:{incident_id}"
         context = ContextManager(system_prompt=self.SYSTEM_PROMPT)
         context.add_message_dict(
@@ -192,7 +183,6 @@ null unless decision=request_support."""
                             "triage": incident.get("agentic") or {},
                         },
                         "specialist_result": specialist_result,
-                        "support_policy": support_policy,
                     },
                     separators=(",", ":"),
                     sort_keys=True,
@@ -211,12 +201,8 @@ null unless decision=request_support."""
                     attempt=attempt,
                 )
                 assessment = self._assessment_from_response(response)
-                assessment = self._normalize_diagnosis_first_decision(
-                    assessment,
-                    specialist_result=specialist_result,
-                    support_policy=support_policy,
-                )
-                self._validate_decision_against_specialist_result(
+                self._validate_specialist_result(specialist_result)
+                assessment = self._ensure_operator_guidance(
                     assessment,
                     specialist_result=specialist_result,
                 )
@@ -231,9 +217,9 @@ null unless decision=request_support."""
             except Exception as exc:
                 last_error = exc
                 if attempt >= self.max_attempts:
-                    fallback = self._fallback_assessment(
-                        specialist_result,
-                        error=exc,
+                    fallback = self._ensure_operator_guidance(
+                        self._fallback_assessment(specialist_result, error=exc),
+                        specialist_result=specialist_result,
                     )
                     LOGGER.error(
                         "Technical Lead review exhausted model retries; using deterministic "
@@ -252,17 +238,17 @@ null unless decision=request_support."""
                 context.add_message_dict(
                     {
                         "role": "user",
-                        "content": self._retry_instruction(
-                            RuntimeError(str(exc)),
-                            support_policy,
-                        ),
+                        "content": self._retry_instruction(RuntimeError(str(exc))),
                     },
                     conversation_id,
                 )
 
-        return self._fallback_assessment(
-            specialist_result,
-            error=last_error or RuntimeError("Technical Lead review reasoning failed"),
+        return self._ensure_operator_guidance(
+            self._fallback_assessment(
+                specialist_result,
+                error=last_error or RuntimeError("Technical Lead review reasoning failed"),
+            ),
+            specialist_result=specialist_result,
         )
 
     async def _request_review(
@@ -297,24 +283,12 @@ null unless decision=request_support."""
             )
 
     @staticmethod
-    def _retry_instruction(error: RuntimeError, support_policy: dict[str, Any]) -> str:
-        if support_policy["support_budget_exhausted"]:
-            next_rule = (
-                "The support budget is exhausted. Do not request another specialist and do not "
-                "return operator_action_required. Choose resolve and preserve the best diagnosis "
-                "supported by the collected evidence."
-            )
-        else:
-            next_rule = (
-                "Request support only if specialist_result.assistance_required=true. Otherwise do "
-                "not add a specialist and do not return operator_action_required; choose resolve. "
-                "If support is required, use only "
-                f"eligible_support_domains={support_policy['eligible_support_domains']} and prefer "
-                f"specialist_requested_domain={support_policy['specialist_requested_domain']!r}."
-            )
+    def _retry_instruction(error: RuntimeError) -> str:
         return (
-            "The previous review decision violated the deterministic collaboration/diagnosis "
-            f"contract. Validation error: {error}. {next_rule} Return ONLY the required JSON object."
+            "The previous review violated the deterministic diagnosis contract. Validation error: "
+            f"{error}. The review is terminal: set decision to \"resolve\", never request another "
+            "specialist, and preserve the best diagnosis supported by the collected evidence. "
+            "Return ONLY the required JSON object."
         )
 
     @classmethod
@@ -377,6 +351,14 @@ null unless decision=request_support."""
         decision = str(payload.get("decision") or "").strip().lower()
         if decision not in _ALLOWED_DECISIONS:
             raise RuntimeError(f"Technical Lead review returned invalid decision: {decision!r}")
+        if decision in _LEGACY_DECISIONS:
+            # Neither escalation nor a new support round is a state of this
+            # workflow anymore: the incident still receives its diagnosis.
+            LOGGER.warning(
+                "Technical Lead returned legacy decision %r; normalizing to resolve",
+                decision,
+            )
+            decision = "resolve"
         try:
             confidence = float(payload.get("confidence"))
         except (TypeError, ValueError) as exc:
@@ -401,25 +383,6 @@ null unless decision=request_support."""
                 normalized_steps.append(normalized)
         remediation_steps = tuple(normalized_steps)
 
-        support_domain_raw = payload.get("support_domain")
-        support_domain = (
-            str(support_domain_raw).strip().lower()
-            if support_domain_raw is not None
-            else None
-        )
-        support_reason_raw = payload.get("support_reason")
-        support_reason = (
-            str(support_reason_raw).strip() if support_reason_raw is not None else None
-        )
-        if decision == "request_support":
-            if support_domain not in _ALLOWED_SUPPORT_DOMAINS:
-                raise RuntimeError("Technical Lead support request requires a valid domain")
-            if not support_reason:
-                raise RuntimeError("Technical Lead support request requires a reason")
-        else:
-            support_domain = None
-            support_reason = None
-
         return TechnicalLeadReviewAssessment(
             decision=decision,
             confidence=confidence,
@@ -428,73 +391,39 @@ null unless decision=request_support."""
             rationale=rationale,
             remediation_summary=remediation_summary,
             remediation_steps=remediation_steps,
-            support_domain=support_domain,
-            support_reason=support_reason,
         )
 
     @staticmethod
-    def _replace_decision(
-        assessment: TechnicalLeadReviewAssessment,
-        *,
-        decision: str,
-        support_domain: str | None = None,
-        support_reason: str | None = None,
-    ) -> TechnicalLeadReviewAssessment:
-        return TechnicalLeadReviewAssessment(
-            decision=decision,
-            confidence=assessment.confidence,
-            diagnosis_summary=assessment.diagnosis_summary,
-            root_cause=assessment.root_cause,
-            rationale=assessment.rationale,
-            remediation_summary=assessment.remediation_summary,
-            remediation_steps=assessment.remediation_steps,
-            support_domain=support_domain,
-            support_reason=support_reason,
-        )
-
-    @classmethod
-    def _normalize_diagnosis_first_decision(
-        cls,
+    def _ensure_operator_guidance(
         assessment: TechnicalLeadReviewAssessment,
         *,
         specialist_result: dict[str, Any],
-        support_policy: dict[str, Any],
     ) -> TechnicalLeadReviewAssessment:
-        assistance_required = bool(specialist_result.get("assistance_required", False))
-        support_budget_exhausted = bool(support_policy["support_budget_exhausted"])
+        """Never close an incident without a single operator-facing action.
 
-        # OPERATOR_ACTION_REQUIRED is not a terminal state of the autonomous
-        # diagnostic pipeline anymore. Any human-facing action stays advisory
-        # inside remediation_steps while the incident still receives a diagnosis.
-        if assessment.decision == "operator_action_required":
-            return cls._replace_decision(assessment, decision="resolve")
+        The review is terminal, so an empty remediation list would leave the
+        operator with a diagnosis and nothing to do with it. The specialist's
+        own recommended next steps are promoted deterministically instead of
+        spending another inference on the shared GPU.
+        """
 
-        if assessment.decision != "request_support":
+        if assessment.remediation_steps:
             return assessment
 
-        if not assistance_required or support_budget_exhausted:
-            return cls._replace_decision(assessment, decision="resolve")
+        promoted: list[dict[str, str]] = []
+        for raw in specialist_result.get("recommended_next_steps") or []:
+            step = TechnicalLeadReviewReasoner._normalize_remediation_step(str(raw))
+            if step is not None:
+                promoted.append(step)
+        if not promoted:
+            return assessment
 
-        eligible_domains = list(support_policy["eligible_support_domains"])
-        requested_domain = support_policy["specialist_requested_domain"]
-        selected_domain = str(assessment.support_domain or "").strip().lower()
-        if requested_domain and requested_domain in eligible_domains:
-            selected_domain = requested_domain
-        if selected_domain not in eligible_domains:
-            return cls._replace_decision(assessment, decision="resolve")
-
-        support_reason = str(assessment.support_reason or "").strip()
-        if not support_reason:
-            support_reason = (
-                "The current specialist explicitly requested cross-domain evidence to reduce "
-                "diagnostic uncertainty."
-            )
-        return cls._replace_decision(
-            assessment,
-            decision="request_support",
-            support_domain=selected_domain,
-            support_reason=support_reason,
+        LOGGER.warning(
+            "Technical Lead review returned no remediation step; promoting %d specialist "
+            "recommendation(s) as advisory operator guidance",
+            len(promoted),
         )
+        return replace(assessment, remediation_steps=tuple(promoted))
 
     @staticmethod
     def _fallback_assessment(
@@ -546,114 +475,29 @@ null unless decision=request_support."""
             ),
             remediation_summary=remediation_summary,
             remediation_steps=(),
-            support_domain=None,
-            support_reason=None,
         )
 
     @staticmethod
-    def _support_policy(specialist_result: dict[str, Any]) -> dict[str, Any]:
-        involved: list[str] = []
-        for raw_role in specialist_result.get("specialists_already_involved") or []:
-            role = str(raw_role).strip().lower()
-            if role and role not in involved:
-                involved.append(role)
+    def _validate_specialist_result(specialist_result: dict[str, Any]) -> None:
+        """Reject a specialist payload that cannot support a terminal diagnosis.
 
-        support_round = max(len(involved) - 1, 0)
-        support_budget_exhausted = support_round >= _MAX_SUPPORT_ROUNDS
-        eligible_domains = [] if support_budget_exhausted else [
-            domain
-            for domain, role in _SUPPORT_ROLE_BY_DOMAIN.items()
-            if role not in involved
-        ]
-        requested_domain = str(
-            specialist_result.get("assistance_domain") or ""
-        ).strip().lower()
-        if requested_domain not in _ALLOWED_SUPPORT_DOMAINS:
-            requested_domain = ""
+        The review no longer arbitrates collaboration, so the only contract left
+        to enforce is that a confirmed/probable diagnosis actually carries the
+        causal evidence the final incident report will publish.
+        """
 
-        return {
-            "specialists_already_involved": involved,
-            "support_round": support_round,
-            "max_support_rounds": _MAX_SUPPORT_ROUNDS,
-            "support_budget_exhausted": support_budget_exhausted,
-            "eligible_support_domains": eligible_domains,
-            "specialist_requested_domain": requested_domain or None,
-        }
-
-    @staticmethod
-    def _validate_decision_against_specialist_result(
-        assessment: TechnicalLeadReviewAssessment,
-        *,
-        specialist_result: dict[str, Any],
-    ) -> None:
         diagnosis_status = str(
             specialist_result.get("diagnosis_status") or "inconclusive"
         ).strip().lower()
-        root_cause = str(specialist_result.get("root_cause") or "").strip()
-        causal_chain = specialist_result.get("causal_chain") or []
-        assistance_required = bool(specialist_result.get("assistance_required", False))
-        support_policy = TechnicalLeadReviewReasoner._support_policy(specialist_result)
-        support_budget_exhausted = bool(support_policy["support_budget_exhausted"])
-
         if diagnosis_status not in {"confirmed", "probable", "inconclusive"}:
             raise RuntimeError(
                 f"Specialist returned unsupported diagnosis_status: {diagnosis_status!r}"
             )
 
         if diagnosis_status in {"confirmed", "probable"}:
+            root_cause = str(specialist_result.get("root_cause") or "").strip()
+            causal_chain = specialist_result.get("causal_chain") or []
             if not root_cause or not isinstance(causal_chain, list) or not causal_chain:
                 raise RuntimeError(
                     f"{diagnosis_status} specialist diagnosis requires root_cause and causal_chain"
                 )
-
-        if assessment.decision == "operator_action_required":
-            raise RuntimeError(
-                "operator_action_required is not a valid autonomous diagnostic terminal decision"
-            )
-
-        if diagnosis_status == "confirmed":
-            if assistance_required:
-                raise RuntimeError(
-                    "Confirmed specialist diagnosis cannot request diagnostic assistance"
-                )
-            if assessment.decision == "request_support":
-                raise RuntimeError(
-                    "Confirmed diagnosis without assistance must terminate autonomous investigation"
-                )
-            return
-
-        if support_budget_exhausted:
-            if assessment.decision == "request_support":
-                raise RuntimeError(
-                    "Cross-domain support budget exhausted; request_support is forbidden. Accept "
-                    "the best available diagnosis."
-                )
-            return
-
-        if not assistance_required:
-            if assessment.decision == "request_support":
-                raise RuntimeError(
-                    f"{diagnosis_status} diagnosis does not request peer assistance; do not add a "
-                    "specialist. Accept the bounded best-effort diagnosis with resolve."
-                )
-            return
-
-        if assessment.decision != "request_support":
-            raise RuntimeError(
-                f"{diagnosis_status} diagnosis explicitly requests cross-domain evidence; authorize "
-                "the one bounded support round while budget is available"
-            )
-
-        support_domain = str(assessment.support_domain or "").strip().lower()
-        eligible_domains = list(support_policy["eligible_support_domains"])
-        requested_domain = support_policy["specialist_requested_domain"]
-        if support_domain not in eligible_domains:
-            raise RuntimeError(
-                f"support_domain={support_domain!r} is not eligible; eligible support domains are "
-                f"{eligible_domains}"
-            )
-        if requested_domain and requested_domain in eligible_domains and support_domain != requested_domain:
-            raise RuntimeError(
-                f"Specialist requested support_domain={requested_domain!r}; TL cannot redirect to "
-                f"{support_domain!r} without a new evidence-backed reason"
-            )

@@ -6,24 +6,64 @@
   const agentHealthReconnectTimers = new Map();
 
   const ROLE_DIRECTORY = {
-    "coordinator@xmpp": { name: "Technical Lead", jid: "technical-lead@xmpp", role: "Incident triage, coordination and critical review" },
-    "technical-lead@xmpp": { name: "Technical Lead", jid: "technical-lead@xmpp", role: "Incident triage, coordination and critical review" },
-    "evidence@xmpp": { name: "System Engineer", jid: "system-engineer@xmpp", role: "Linux, containers, host resources and runtime diagnostics" },
-    "system-engineer@xmpp": { name: "System Engineer", jid: "system-engineer@xmpp", role: "Linux, containers, host resources and runtime diagnostics" },
-    "critic@xmpp": { name: "Network Engineer", jid: "network-engineer@xmpp", role: "Connectivity, latency, network paths and traffic analysis" },
-    "network-engineer@xmpp": { name: "Network Engineer", jid: "network-engineer@xmpp", role: "Connectivity, latency, network paths and traffic analysis" },
-    "reasoning@xmpp": { name: "Application Engineer", jid: "application-engineer@xmpp", role: "Service health, application logs and dependency diagnosis" },
-    "application-engineer@xmpp": { name: "Application Engineer", jid: "application-engineer@xmpp", role: "Service health, application logs and dependency diagnosis" },
-    "remediation@xmpp": { name: "Software Developer", jid: "software-developer@xmpp", role: "Code behaviour, defects and application-level corrective guidance" },
-    "software-developer@xmpp": { name: "Software Developer", jid: "software-developer@xmpp", role: "Code behaviour, defects and application-level corrective guidance" },
+    "coordinator@xmpp": {
+      name: "Technical Lead",
+      jid: "technical-lead@xmpp",
+      role: "Incident triage, coordination and critical review",
+    },
+    "technical-lead@xmpp": {
+      name: "Technical Lead",
+      jid: "technical-lead@xmpp",
+      role: "Incident triage, coordination and critical review",
+    },
+    "evidence@xmpp": {
+      name: "System Engineer",
+      jid: "system-engineer@xmpp",
+      role: "Linux, containers, host resources and runtime diagnostics",
+    },
+    "system-engineer@xmpp": {
+      name: "System Engineer",
+      jid: "system-engineer@xmpp",
+      role: "Linux, containers, host resources and runtime diagnostics",
+    },
+    "critic@xmpp": {
+      name: "Network Engineer",
+      jid: "network-engineer@xmpp",
+      role: "Connectivity, latency, network paths and traffic analysis",
+    },
+    "network-engineer@xmpp": {
+      name: "Network Engineer",
+      jid: "network-engineer@xmpp",
+      role: "Connectivity, latency, network paths and traffic analysis",
+    },
+    "reasoning@xmpp": {
+      name: "Application Engineer",
+      jid: "application-engineer@xmpp",
+      role: "Service health, application logs and dependency diagnosis",
+    },
+    "application-engineer@xmpp": {
+      name: "Application Engineer",
+      jid: "application-engineer@xmpp",
+      role: "Service health, application logs and dependency diagnosis",
+    },
+    "remediation@xmpp": {
+      name: "Software Developer",
+      jid: "software-developer@xmpp",
+      role: "Code behaviour, defects and application-level corrective guidance",
+    },
+    "software-developer@xmpp": {
+      name: "Software Developer",
+      jid: "software-developer@xmpp",
+      role: "Code behaviour, defects and application-level corrective guidance",
+    },
   };
 
   const CALLER_DIRECTORY = {
     ...ROLE_DIRECTORY,
     "opensearch-ad": { name: "OpenSearch AD" },
-    "opensearch": { name: "OpenSearch" },
-    "operator": { name: "Human Operator" },
-    "system": { name: "System" },
+    opensearch: { name: "OpenSearch" },
+    operator: { name: "Human Operator" },
+    system: { name: "System" },
   };
 
   const ACTIVITY_STATES = ["IDLE", "WORKING", "WAITING"];
@@ -56,20 +96,26 @@
     clock.textContent = `${now.toISOString().slice(11, 19)} UTC`;
   };
 
-  const escapeHtml = (value) => String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+  const escapeHtml = (value) =>
+    String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
 
   const formatTimestamp = (value) => {
     if (!value) return "—";
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return String(value);
     return date.toLocaleString(undefined, {
-      year: "numeric", month: "short", day: "2-digit", hour: "2-digit",
-      minute: "2-digit", second: "2-digit", hour12: false,
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
     });
   };
 
@@ -82,13 +128,17 @@
   };
 
   const normalizeActivity = (activity) => {
-    const normalized = String(activity || "IDLE").trim().toUpperCase();
+    const normalized = String(activity || "IDLE")
+      .trim()
+      .toUpperCase();
     return ACTIVITY_STATES.includes(normalized) ? normalized : "IDLE";
   };
 
   const activityLabel = (activity, detail) => {
     const normalized = normalizeActivity(activity);
-    const key = String(detail || "").trim().toLowerCase();
+    const key = String(detail || "")
+      .trim()
+      .toLowerCase();
     if (key.startsWith("collaborating_with_")) return "COLLABORATING";
     return ACTIVITY_DETAIL_LABELS[key] || normalized;
   };
@@ -107,7 +157,10 @@
 
     const pill = node.querySelector("[data-agent-activity]");
     if (pill) {
-      pill.textContent = activityLabel(normalized, detail ?? node.dataset.agentActivityDetail);
+      pill.textContent = activityLabel(
+        normalized,
+        detail ?? node.dataset.agentActivityDetail,
+      );
       ACTIVITY_STATES.forEach((state) => {
         pill.classList.toggle(state.toLowerCase(), normalized === state);
       });
@@ -116,9 +169,12 @@
 
   const bindRows = () => {
     document.querySelectorAll(".click-row[data-href]").forEach((row) => {
-      row.addEventListener("click", () => { window.location.href = row.dataset.href; });
+      row.addEventListener("click", () => {
+        window.location.href = row.dataset.href;
+      });
       row.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") window.location.href = row.dataset.href;
+        if (event.key === "Enter" || event.key === " ")
+          window.location.href = row.dataset.href;
       });
       row.tabIndex = 0;
     });
@@ -131,7 +187,8 @@
     search.addEventListener("input", () => {
       const query = search.value.trim().toLowerCase();
       table.querySelectorAll("tbody tr").forEach((row) => {
-        row.hidden = Boolean(query) && !row.textContent.toLowerCase().includes(query);
+        row.hidden =
+          Boolean(query) && !row.textContent.toLowerCase().includes(query);
       });
     });
   };
@@ -139,11 +196,16 @@
   const teamWorkflowLabel = (payload, fallback) => {
     const workflow = payload?.workflow || {};
     const incident = workflow.active_incident || {};
-    const status = String(incident.status || "").trim().toUpperCase();
+    const status = String(incident.status || "")
+      .trim()
+      .toUpperCase();
     const agentic = incident.agentic || {};
     if (status === "UNDER_ANALYSIS") {
-      if (String(agentic.peer_collaboration_state || "").toUpperCase() === "ACTIVE") return "COLLABORATING";
-      if (agentic.support_requested) return "SUPPORT PENDING";
+      if (
+        String(agentic.peer_collaboration_state || "").toUpperCase() ===
+        "ACTIVE"
+      )
+        return "COLLABORATING";
       if (agentic.review_state === "PENDING") return "TL REVIEW";
       return "UNDER ANALYSIS";
     }
@@ -188,7 +250,9 @@
       }
 
       (team.members || []).forEach((member) => {
-        const node = document.querySelector(`[data-agent-runtime-jid="${member.jid}"]`);
+        const node = document.querySelector(
+          `[data-agent-runtime-jid="${member.jid}"]`,
+        );
         setAgentActivity(node, member.activity, member.activity_detail);
       });
     } catch (_) {
@@ -206,7 +270,9 @@
       const payload = await response.json();
       overall.textContent = payload.overall_online ? "OPERATIONAL" : "DEGRADED";
       (payload.services || []).forEach((service) => {
-        const item = strip.querySelector(`[data-service-name="${service.name}"]`);
+        const item = strip.querySelector(
+          `[data-service-name="${service.name}"]`,
+        );
         const dot = item?.querySelector(".status-dot");
         if (!dot) return;
         dot.classList.toggle("online", service.status === "ONLINE");
@@ -217,20 +283,27 @@
 
   const setAgentPresence = (node, status, payload = null) => {
     if (!node) return;
-    const normalized = ["ONLINE", "DEGRADED", "OFFLINE"].includes(status) ? status : "UNKNOWN";
+    const normalized = ["ONLINE", "DEGRADED", "OFFLINE"].includes(status)
+      ? status
+      : "UNKNOWN";
     node.dataset.agentPresence = normalized;
     node.classList.toggle("presence-online", normalized === "ONLINE");
     node.classList.toggle("presence-degraded", normalized === "DEGRADED");
     node.classList.toggle("presence-offline", normalized === "OFFLINE");
     node.classList.toggle("presence-unknown", normalized === "UNKNOWN");
 
-    if (payload?.activity) setAgentActivity(node, payload.activity, payload.activity_detail);
+    if (payload?.activity)
+      setAgentActivity(node, payload.activity, payload.activity_detail);
 
     const dot = node.querySelector(".agent-presence-dot");
     if (!dot) return;
     if (payload) {
-      const xmpp = payload.xmpp_connected ? "XMPP connected" : "XMPP disconnected";
-      const communication = payload.communication_ok ? "communication verified" : "communication not verified";
+      const xmpp = payload.xmpp_connected
+        ? "XMPP connected"
+        : "XMPP disconnected";
+      const communication = payload.communication_ok
+        ? "communication verified"
+        : "communication not verified";
       dot.title = `Agent health: ${normalized} · ${xmpp} · ${communication}`;
     } else {
       dot.title = `Agent health: ${normalized.toLowerCase()}`;
@@ -268,18 +341,23 @@
       try {
         const payload = JSON.parse(event.data);
         setAgentPresence(node, payload.status, payload);
-      } catch (_) { setAgentPresence(node, "DEGRADED"); }
+      } catch (_) {
+        setAgentPresence(node, "DEGRADED");
+      }
     });
     socket.addEventListener("error", () => setAgentPresence(node, "OFFLINE"));
     socket.addEventListener("close", () => {
-      if (agentHealthSockets.get(key) === socket) agentHealthSockets.delete(key);
+      if (agentHealthSockets.get(key) === socket)
+        agentHealthSockets.delete(key);
       setAgentPresence(node, "OFFLINE");
       scheduleAgentHealthReconnect(node);
     });
   };
 
   const bindAgentHealthStreams = () => {
-    document.querySelectorAll(".agent-node[data-agent-health-port]").forEach((node) => connectAgentHealth(node));
+    document
+      .querySelectorAll(".agent-node[data-agent-health-port]")
+      .forEach((node) => connectAgentHealth(node));
   };
 
   const modal = document.getElementById("agent-observability-modal");
@@ -309,14 +387,22 @@
     const rows = Array.isArray(events) ? events : [];
     logEmpty.hidden = rows.length > 0;
     rows.forEach((event) => {
-      const action = escapeHtml(event.action || event.event_type || "Agent activity");
-      const calledBy = escapeHtml(humanizeIdentity(event.called_by || "system"));
+      const action = escapeHtml(
+        event.action || event.event_type || "Agent activity",
+      );
+      const calledBy = escapeHtml(
+        humanizeIdentity(event.called_by || "system"),
+      );
       const reason = escapeHtml(event.reason || "—");
       const tool = escapeHtml(event.tool || "");
       const outcome = escapeHtml(event.outcome || event.status || "—");
       const incident = escapeHtml(event.incident_id || "—");
-      const toolOutcome = tool ? `<strong>${tool}</strong><small>${outcome}</small>` : outcome;
-      const incidentCell = event.incident_id ? `<a href="/incidents/${encodeURIComponent(event.incident_id)}">${incident}</a>` : "—";
+      const toolOutcome = tool
+        ? `<strong>${tool}</strong><small>${outcome}</small>`
+        : outcome;
+      const incidentCell = event.incident_id
+        ? `<a href="/incidents/${encodeURIComponent(event.incident_id)}">${incident}</a>`
+        : "—";
       const row = document.createElement("tr");
       row.innerHTML = `
         <td class="nowrap">${escapeHtml(formatTimestamp(event.timestamp))}</td>
@@ -336,7 +422,10 @@
     if (logLoading) logLoading.hidden = false;
     if (logEmpty) logEmpty.hidden = true;
     try {
-      const response = await fetch(`/api/agents/${encodeURIComponent(profile.runtimeJid)}/activity?limit=100`, { cache: "no-store" });
+      const response = await fetch(
+        `/api/agents/${encodeURIComponent(profile.runtimeJid)}/activity?limit=100`,
+        { cache: "no-store" },
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       const agent = payload.agent || {};
@@ -344,19 +433,30 @@
       if (modalName) modalName.textContent = profile.name;
       if (modalJid) modalJid.textContent = profile.displayJid;
       if (modalRole) modalRole.textContent = profile.role;
-      setModalState(agent.activity || profile.node?.dataset.agentActivityState || "IDLE", agent.activity_detail);
+      setModalState(
+        agent.activity || profile.node?.dataset.agentActivityState || "IDLE",
+        agent.activity_detail,
+      );
       if (eventCount) eventCount.textContent = String(events.length);
-      if (lastActivity) lastActivity.textContent = events.length ? formatTimestamp(events[0].timestamp) : "—";
+      if (lastActivity)
+        lastActivity.textContent = events.length
+          ? formatTimestamp(events[0].timestamp)
+          : "—";
       if (currentIncident) {
-        currentIncident.textContent = agent.activity_incident_id || events.find((event) => event.incident_id)?.incident_id || "—";
+        currentIncident.textContent =
+          agent.activity_incident_id ||
+          events.find((event) => event.incident_id)?.incident_id ||
+          "—";
       }
       renderAgentEvents(events);
     } catch (_) {
       if (logBody) logBody.innerHTML = "";
       if (logEmpty) {
         logEmpty.hidden = false;
-        logEmpty.querySelector("strong").textContent = "Agent activity could not be loaded.";
-        logEmpty.querySelector("p").textContent = "Check the dashboard API and backend connectivity.";
+        logEmpty.querySelector("strong").textContent =
+          "Agent activity could not be loaded.";
+        logEmpty.querySelector("p").textContent =
+          "Check the dashboard API and backend connectivity.";
       }
     } finally {
       if (logLoading) logLoading.hidden = true;
@@ -372,13 +472,17 @@
       runtimeJid,
       displayJid: node.dataset.agentDisplayJid || fallback.jid || runtimeJid,
       name: node.dataset.agentName || fallback.name || runtimeJid,
-      role: node.dataset.agentRole || fallback.role || "Specialised technical role",
+      role:
+        node.dataset.agentRole || fallback.role || "Specialised technical role",
       node,
     };
     if (modalName) modalName.textContent = profile.name;
     if (modalJid) modalJid.textContent = profile.displayJid;
     if (modalRole) modalRole.textContent = profile.role;
-    setModalState(node.dataset.agentActivityState || "IDLE", node.dataset.agentActivityDetail);
+    setModalState(
+      node.dataset.agentActivityState || "IDLE",
+      node.dataset.agentActivityDetail,
+    );
     if (eventCount) eventCount.textContent = "—";
     if (lastActivity) lastActivity.textContent = "—";
     if (currentIncident) currentIncident.textContent = "—";
@@ -397,12 +501,18 @@
 
   const bindAgentObservability = () => {
     if (!modal) return;
-    document.querySelectorAll(".agent-node[data-agent-runtime-jid]").forEach((node) => {
-      node.addEventListener("click", () => openAgentModal(node));
-    });
-    document.querySelectorAll("[data-agent-modal-close]").forEach((control) => control.addEventListener("click", closeAgentModal));
+    document
+      .querySelectorAll(".agent-node[data-agent-runtime-jid]")
+      .forEach((node) => {
+        node.addEventListener("click", () => openAgentModal(node));
+      });
+    document
+      .querySelectorAll("[data-agent-modal-close]")
+      .forEach((control) => control.addEventListener("click", closeAgentModal));
     const refreshButton = document.getElementById("agent-modal-refresh");
-    refreshButton?.addEventListener("click", () => { if (selectedAgentProfile) loadAgentActivity(selectedAgentProfile); });
+    refreshButton?.addEventListener("click", () => {
+      if (selectedAgentProfile) loadAgentActivity(selectedAgentProfile);
+    });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !modal.hidden) closeAgentModal();
     });

@@ -32,12 +32,12 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
         if decision not in {"resolve", "operator_action_required", "request_support"}:
             raise RuntimeError(f"Unsupported Technical Lead review decision: {decision}")
 
-        # Diagnosis-first invariant: a completed autonomous diagnosis is never
-        # converted into OPERATOR_ACTION_REQUIRED. Corrective/manual actions are
-        # advisory remediation for the operator after diagnosis; they do not
-        # represent a diagnostic workflow state. Keep request_support unchanged
-        # because it is the only valid non-terminal continuation.
-        if decision == "operator_action_required":
+        # The Technical Lead review is now purely terminal. Peer collaboration is
+        # initiated autonomously by the requesting specialist before the result
+        # ever reaches the Technical Lead, so neither OPERATOR_ACTION_REQUIRED nor
+        # REQUEST_SUPPORT is a valid non-terminal continuation here. Both are
+        # normalized to a resolved, evidence-backed diagnosis.
+        if decision in {"operator_action_required", "request_support"}:
             decision = "resolve"
 
         involved_roles = await self._involved_specialist_roles(incident_id)
@@ -59,29 +59,15 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
             "status": "ADVISORY",
         }
 
-        if decision == "resolve":
-            status = "RESOLVED"
-            validation = {
-                "status": "EVIDENCE_REVIEWED",
-                "summary": (
-                    "The autonomous diagnostic workflow completed with the best evidence-backed "
-                    "diagnosis. Any human corrective actions remain advisory remediation and do "
-                    "not replace the diagnosis with an operator-escalation state."
-                ),
-            }
-            active_agents: list[str] = []
-            peer_state = "COMPLETED"
-        else:
-            status = "UNDER_ANALYSIS"
-            validation = {
-                "status": "MORE_EVIDENCE_REQUIRED",
-                "summary": (
-                    "The Technical Lead authorized one additional specialist to join the same "
-                    "incident and exchange evidence directly with the current specialist."
-                ),
-            }
-            active_agents = ["technical_lead", *involved_roles]
-            peer_state = "REQUESTED"
+        status = "RESOLVED"
+        validation = {
+            "status": "EVIDENCE_REVIEWED",
+            "summary": (
+                "The autonomous diagnostic workflow completed with the best evidence-backed "
+                "diagnosis. Any human corrective actions remain advisory remediation and do "
+                "not replace the diagnosis with an operator-escalation state."
+            ),
+        }
 
         updated = await self.repository.update_incident(
             incident_id,
@@ -92,7 +78,7 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
                 "validation": validation,
                 "agentic": {
                     "current_agent": "technical_lead",
-                    "active_agents": active_agents,
+                    "active_agents": [],
                     "review_state": "COMPLETED",
                     "review_decision": decision,
                     "review_confidence": review_confidence,
@@ -100,12 +86,9 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
                     "bdi_review_goal": review.bdi_goal,
                     "bdi_review_intention": review.bdi_review_intention,
                     "bdi_review_decision_intention": review.bdi_decision_intention,
-                    "support_requested": decision == "request_support",
-                    "support_domain": review.support_domain if decision == "request_support" else None,
-                    "support_reason": review.support_reason if decision == "request_support" else None,
                     "collaboration_roles": involved_roles,
                     "collaboration_round": max(len(involved_roles) - 1, 0),
-                    "peer_collaboration_state": peer_state,
+                    "peer_collaboration_state": "COMPLETED",
                 },
             },
         )
@@ -128,14 +111,12 @@ class ReActIncidentCoordinator(_BaseReActIncidentCoordinator):
                     "diagnostic_confidence": diagnostic_confidence,
                     "review_confidence": review_confidence,
                     "diagnosis_summary": review.diagnosis_summary,
-                    "support_domain": review.support_domain if decision == "request_support" else None,
                     "specialists_involved": involved_roles,
                 },
             },
         )
         self.technical_lead_reviews_completed_count += 1
-        if decision != "request_support":
-            self._apply_agent_activity(incident_id, decision=decision)
+        self._release_agents(incident_id)
 
         from .react_coordinator import LOGGER
 

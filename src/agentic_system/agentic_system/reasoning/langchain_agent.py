@@ -212,6 +212,8 @@ class ReActInvestigationResult:
     react_steps: int
     tools_used: tuple[str, ...]
     conversation_id: str
+    # Populated only after an autonomous peer consultation has been folded in.
+    peer_consultation: dict[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -233,6 +235,9 @@ class ReActInvestigationResult:
             "react_steps": self.react_steps,
             "tools_used": list(self.tools_used),
             "conversation_id": self.conversation_id,
+            "peer_consultation": (
+                dict(self.peer_consultation) if self.peer_consultation is not None else None
+            ),
         }
 
 
@@ -329,6 +334,8 @@ Rules:
         self._tool_names = {tool.name for tool in self.tools}
         self._langchain_tools = [self._adapt_tool(tool) for tool in self.tools]
         self._langchain_tool_by_name = {tool.name: tool for tool in self._langchain_tools}
+        self._tool_selector_base: Any | None = None
+        self._restricted_tool_selectors: dict[tuple[str, ...], Any] = {}
         self._tool_selector = tool_selector or self._build_tool_selector()
         self._finalizer = finalizer or self._build_finalizer()
 
@@ -338,7 +345,38 @@ Rules:
             base_url=self._ollama_base_url(self.tool_provider),
             temperature=0,
         )
+        self._tool_selector_base = model
         return model.bind_tools(self._langchain_tools)
+
+    def _selector_for_tools(self, names: tuple[str, ...]) -> Any:
+        """Offer the model only the tools compatible with the requested evidence.
+
+        Restricting the bound tool list is the only enforceable form of the
+        constraint: naming the allowed tools in the prompt leaves a small model
+        free to answer with any other bound tool, and each rejected answer costs
+        one full inference on the shared inference gate.
+        """
+
+        base = getattr(self, "_tool_selector_base", None)
+        if not names or base is None:
+            return self._tool_selector
+        if len(names) >= len(self._langchain_tools):
+            return self._tool_selector
+
+        cached = self._restricted_tool_selectors.get(names)
+        if cached is not None:
+            return cached
+
+        tools = [
+            self._langchain_tool_by_name[name]
+            for name in names
+            if name in self._langchain_tool_by_name
+        ]
+        if not tools:
+            return self._tool_selector
+        restricted = base.bind_tools(tools)
+        self._restricted_tool_selectors[names] = restricted
+        return restricted
 
     def _build_finalizer(self) -> _OllamaSchemaFinalizer:
         return _OllamaSchemaFinalizer(

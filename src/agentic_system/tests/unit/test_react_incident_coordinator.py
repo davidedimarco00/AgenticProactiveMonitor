@@ -188,38 +188,15 @@ class FakeAssignee:
         return self.specialists[role]
 
     async def review_investigation_result(self, incident, result):
-        support = self.decision == "request_support"
         return TechnicalLeadReviewReceipt(
             incident_id=str(incident["incident_id"]),
             decision=self.decision,
             confidence=0.9,
-            diagnosis_summary=(
-                "The probable diagnosis still requires application-domain validation."
-                if support
-                else "The specialist established an evidence-backed CPU root cause."
-            ),
-            root_cause=(
-                "A CPU-bound workload is probably saturating the service."
-                if support
-                else "A CPU-bound workload saturated processing-service."
-            ),
-            rationale=(
-                "The current diagnosis is not yet confirmed across the required domain."
-                if support
-                else "The critic accepted the confirmed causal chain."
-            ),
-            remediation_summary=(
-                "Do not remediate until the diagnosis is confirmed."
-                if support
-                else "No autonomous corrective change is required."
-            ),
+            diagnosis_summary="The specialist established an evidence-backed CPU root cause.",
+            root_cause="A CPU-bound workload saturated processing-service.",
+            rationale="The critic accepted the confirmed causal chain.",
+            remediation_summary="No autonomous corrective change is required.",
             remediation_steps=(),
-            support_domain="application" if support else None,
-            support_reason=(
-                "Application evidence is still required to confirm the probable root cause."
-                if support
-                else None
-            ),
             bdi_goal="review_investigation",
             bdi_review_intention="review_specialist_result",
             bdi_decision_intention="commit_review_decision",
@@ -254,8 +231,8 @@ def _coordinator(repository: FakeRepository, *, decision: str) -> ReActIncidentC
     )
 
 
-def _probable_receipt() -> InvestigationTaskResultReceipt:
-    return InvestigationTaskResultReceipt(
+def _probable_receipt(**overrides: Any) -> InvestigationTaskResultReceipt:
+    fields: dict[str, Any] = dict(
         task_id="TASK-REACT-001",
         incident_id="INC-REACT-001",
         agent_role="system_engineer",
@@ -290,6 +267,8 @@ def _probable_receipt() -> InvestigationTaskResultReceipt:
         conversation_id="react:system_engineer:INC-REACT-001:TASK-REACT-001",
         retryable=False,
     )
+    fields.update(overrides)
+    return InvestigationTaskResultReceipt(**fields)
 
 
 def _confirmed_receipt() -> InvestigationTaskResultReceipt:
@@ -322,9 +301,48 @@ def _confirmed_receipt() -> InvestigationTaskResultReceipt:
     )
 
 
-def test_successful_react_result_authorizes_direct_peer_support() -> None:
+def test_autonomous_peer_consultation_is_logged_centrally_and_incident_resolves() -> None:
     repository = FakeRepository()
+    # Even if the TL review still says request_support, it is now normalized to
+    # resolve: peer collaboration already happened autonomously on the specialist.
     coordinator = _coordinator(repository, decision="request_support")
+
+    receipt = _probable_receipt(
+        peer_consultation={
+            "requested": True,
+            "target_role": "application_engineer",
+            "reason": "Correlate CPU with application retry behaviour.",
+            "status": "completed",
+            "peer_confidence": 0.71,
+            "peer_findings_count": 2,
+        }
+    )
+
+    asyncio.run(
+        coordinator._persist_successful_react_result(
+            deepcopy(repository.incident),
+            deepcopy(repository.task),
+            receipt,
+        )
+    )
+
+    assert repository.task["state"] == "COMPLETED"
+    assert repository.incident["status"] == "RESOLVED"
+    assert repository.incident["agentic"]["review_decision"] == "resolve"
+    assert not any(
+        event["event_type"] == "PEER_COLLABORATION_AUTHORIZED" for event in repository.events
+    )
+    consultations = [e for e in repository.events if e["event_type"] == "PEER_CONSULTATION"]
+    assert len(consultations) == 1
+    assert consultations[0]["outcome"]["from_role"] == "system_engineer"
+    assert consultations[0]["outcome"]["to_role"] == "application_engineer"
+    assert consultations[0]["outcome"]["status"] == "completed"
+    assert coordinator.peer_consultations_logged_count == 1
+
+
+def test_result_without_peer_consultation_logs_no_consultation_event() -> None:
+    repository = FakeRepository()
+    coordinator = _coordinator(repository, decision="resolve")
 
     asyncio.run(
         coordinator._persist_successful_react_result(
@@ -334,28 +352,8 @@ def test_successful_react_result_authorizes_direct_peer_support() -> None:
         )
     )
 
-    support_task = repository.tasks["TASK-SUPPORT-APPLICATION_ENGINEER"]
-    assert repository.task["state"] == "COMPLETED"
-    assert support_task["state"] == "RUNNING"
-    assert repository.incident["status"] == "UNDER_ANALYSIS"
-    assert repository.incident["agentic"]["investigation_task_id"] == support_task["task_id"]
-    assert repository.incident["agentic"]["current_agent"] == "application_engineer"
-    assert repository.incident["agentic"]["peer_collaboration_state"] == "ACTIVE"
-    assert repository.incident["agentic"]["collaboration_roles"] == [
-        "system_engineer",
-        "application_engineer",
-    ]
-    assignee = coordinator.assignee
-    primary = assignee.specialists["system_engineer"]
-    assert len(primary.shared_contexts) == 1
-    assert primary.shared_contexts[0]["target_role"] == "application_engineer"
-    assert primary.shared_contexts[0]["support_task_id"] == support_task["task_id"]
-    shared_result = primary.shared_contexts[0]["specialist_result"]
-    assert shared_result["diagnosis_status"] == "probable"
-    assert shared_result["root_cause"] == _probable_receipt().root_cause
-    assert shared_result["causal_chain"] == list(_probable_receipt().causal_chain)
-    assert any(event["event_type"] == "PEER_COLLABORATION_AUTHORIZED" for event in repository.events)
-    assert coordinator.peer_collaborations_started_count == 1
+    assert not any(e["event_type"] == "PEER_CONSULTATION" for e in repository.events)
+    assert coordinator.peer_consultations_logged_count == 0
 
 
 def test_confirmed_react_result_can_resolve_incident_after_tl_review() -> None:
@@ -374,7 +372,6 @@ def test_confirmed_react_result_can_resolve_incident_after_tl_review() -> None:
     assert repository.incident["status"] == "RESOLVED"
     assert repository.incident["agentic"]["active_agents"] == []
     assert repository.incident["agentic"]["review_decision"] == "resolve"
-    assert repository.incident["agentic"]["support_requested"] is False
     assert repository.incident["diagnosis"]["confidence"] == 0.94
     assert repository.incident["agentic"]["review_confidence"] == 0.9
     assert repository.incident["diagnosis"]["evidence"] == [

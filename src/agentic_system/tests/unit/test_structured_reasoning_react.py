@@ -1,20 +1,21 @@
 from agentic_system.agents.factory import MAX_DIAGNOSTIC_REACT_STEPS
-from agentic_system.reasoning.diagnostic_react import _DiagnosticFinalOutput
+from agentic_system.reasoning import SpecialistReActExecutor
 from agentic_system.reasoning.langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
     _ReasoningDecision,
 )
-from agentic_system.reasoning.structured_reasoning_react import SpecialistReActExecutor
 
 
-def test_reasoning_schema_requires_evidence_needed_field() -> None:
+def test_reasoning_schema_requires_structured_evidence_request_field() -> None:
     schema = SpecialistReActExecutor._reasoning_json_schema()
 
-    assert "evidence_needed" in schema["required"]
+    assert "evidence_request" in schema["required"]
+    assert "evidence_request" in schema["properties"]
+    assert "evidence_needed" not in schema["properties"]
 
 
-def test_missing_evidence_needed_is_recovered_from_decision_summary() -> None:
+def test_legacy_injected_provider_missing_evidence_needed_is_recovered_from_summary() -> None:
     normalized = SpecialistReActExecutor._normalize_reasoning_payload(
         {
             "action": "gather_evidence",
@@ -28,7 +29,7 @@ def test_missing_evidence_needed_is_recovered_from_decision_summary() -> None:
     )
 
 
-def test_finish_forces_evidence_needed_to_null() -> None:
+def test_legacy_injected_provider_finish_forces_evidence_needed_to_null() -> None:
     normalized = SpecialistReActExecutor._normalize_reasoning_payload(
         {
             "action": "finish",
@@ -71,62 +72,25 @@ def test_best_available_hypothesis_uses_latest_nonempty_candidate() -> None:
     )
 
 
-def test_best_effort_gate_requires_live_not_rag_only_evidence() -> None:
-    rag = ReActEvidence(
-        step=1,
-        tool="apm_mcp_search_knowledge",
-        arguments={"query": "processing-service CPU behaviour"},
-        observation={"results": ["static project knowledge"]},
-        success=True,
-    )
-    live = ReActEvidence(
-        step=2,
-        tool="apm_mcp_get_processes",
-        arguments={"host_id": "processing-service"},
-        observation={"processes": [{"pid": 42, "cpu": 98.0}]},
-        success=True,
-    )
-
-    assert SpecialistReActExecutor._has_successful_live_evidence([rag]) is False
-    assert SpecialistReActExecutor._has_successful_live_evidence([rag, live]) is True
-
-
-def test_best_effort_gate_recognizes_six_step_budget_exhaustion() -> None:
-    decisions = [
-        _ReasoningDecision(
-            action="gather_evidence",
-            decision_summary=f"Diagnostic step {step}.",
-            current_hypothesis="CPU-intensive Python child processes are causing saturation.",
-            evidence_needed="Collect another discriminating live observation.",
-        )
-        for step in range(MAX_DIAGNOSTIC_REACT_STEPS)
-    ]
-
-    assert SpecialistReActExecutor._is_bounded_closure(
-        decisions,
-        MAX_DIAGNOSTIC_REACT_STEPS,
-    ) is True
-
-
-def test_best_effort_gate_recognizes_evidence_saturation_before_step_limit() -> None:
+def test_nonempty_hypothesis_is_context_not_python_validated_root_cause() -> None:
     decisions = [
         _ReasoningDecision(
             action="finish",
-            decision_summary=(
-                "The autonomous evidence path is saturated, so close with the best diagnosis."
-            ),
-            current_hypothesis="CPU-intensive Python child processes are causing saturation.",
+            decision_summary="Local checks are complete.",
+            current_hypothesis="The service is running and handling requests.",
             evidence_needed=None,
         )
     ]
 
-    assert SpecialistReActExecutor._is_bounded_closure(
-        decisions,
-        MAX_DIAGNOSTIC_REACT_STEPS,
-    ) is True
+    # Python may preserve the latest text as context for Gemma, but it does not
+    # interpret this normal-state observation as a valid causal diagnosis.
+    assert SpecialistReActExecutor._best_available_hypothesis(decisions) == (
+        "The service is running and handling requests."
+    )
+    assert "_promote_bounded_best_effort" not in SpecialistReActExecutor.__dict__
 
 
-def test_bounded_live_cpu_evidence_is_promoted_to_probable_diagnosis() -> None:
+def test_hard_stop_with_live_evidence_remains_inconclusive() -> None:
     evidence = [
         ReActEvidence(
             step=1,
@@ -134,107 +98,37 @@ def test_bounded_live_cpu_evidence_is_promoted_to_probable_diagnosis() -> None:
             arguments={"host_id": "processing-service"},
             observation={"cpu": {"usage_percent": 1200.81}},
             success=True,
-        ),
-        ReActEvidence(
-            step=2,
-            tool="apm_mcp_get_processes",
-            arguments={"host_id": "processing-service", "limit": 20},
-            observation={
-                "processes": [
-                    {"pid": 23154, "command": "python3", "cpu_percent": 99.9},
-                    {"pid": 23155, "command": "python3", "cpu_percent": 99.9},
-                ]
-            },
-            success=True,
-        ),
-    ]
-    decisions = [
-        _ReasoningDecision(
-            action="finish",
-            decision_summary="The bounded evidence path is saturated.",
-            current_hypothesis=(
-                "Multiple CPU-intensive python3 child processes are causing CPU saturation "
-                "in processing-service."
-            ),
-            evidence_needed=None,
-        )
-    ]
-    inconclusive = _DiagnosticFinalOutput(
-        summary="High CPU is sustained by multiple Python processes.",
-        diagnosis_status="inconclusive",
-        root_cause=None,
-        causal_chain=[
-            "Multiple python3 child processes consume nearly one CPU each.",
-            "Container CPU usage rises far above the normal application workload.",
-        ],
-        confidence=0.8,
-        findings=["Multiple python3 child processes are near 100% CPU."],
-        hypotheses=[
-            "Multiple CPU-intensive python3 child processes are causing CPU saturation "
-            "in processing-service."
-        ],
-        recommended_next_steps=["Inspect the parent workload that spawned the CPU-bound children."],
-        assistance_required=False,
-        assistance_domain=None,
-    )
-
-    promoted = SpecialistReActExecutor._promote_bounded_best_effort(
-        output=inconclusive,
-        assignment={"entity": "CPU-processing-service"},
-        evidence=evidence,
-        decisions=decisions,
-    )
-
-    assert promoted.diagnosis_status == "probable"
-    assert promoted.root_cause == (
-        "Multiple CPU-intensive python3 child processes are causing CPU saturation "
-        "in processing-service."
-    )
-    assert promoted.causal_chain
-    assert promoted.confidence == 0.8
-    assert promoted.assistance_required is False
-
-
-def test_bounded_best_effort_does_not_promote_rag_only_evidence() -> None:
-    evidence = [
-        ReActEvidence(
-            step=1,
-            tool="apm_mcp_search_knowledge",
-            arguments={"query": "CPU spike"},
-            observation={"results": ["static runbook"]},
-            success=True,
         )
     ]
     decisions = [
         _ReasoningDecision(
             action="finish",
-            decision_summary="The bounded evidence path is saturated.",
-            current_hypothesis="A CPU-bound worker may be responsible.",
+            decision_summary="The bounded local evidence path ended.",
+            current_hypothesis="A CPU-bound worker may be causing saturation.",
             evidence_needed=None,
         )
     ]
-    inconclusive = _DiagnosticFinalOutput(
-        summary="Only static knowledge was retrieved.",
-        diagnosis_status="inconclusive",
-        root_cause=None,
-        causal_chain=[],
-        confidence=0.4,
-        findings=[],
-        hypotheses=["A CPU-bound worker may be responsible."],
-        recommended_next_steps=[],
-        assistance_required=False,
-        assistance_domain=None,
-    )
 
-    result = SpecialistReActExecutor._promote_bounded_best_effort(
-        output=inconclusive,
-        assignment={"entity": "CPU-processing-service"},
+    output = SpecialistReActExecutor._hard_stop_output(
         evidence=evidence,
         decisions=decisions,
+        reason="finalizer could not produce a schema-valid causal diagnosis",
     )
 
-    assert result.diagnosis_status == "inconclusive"
-    assert result.root_cause is None
+    assert output.diagnosis_status == "inconclusive"
+    assert output.root_cause is None
+    assert output.assistance_required is False
+    assert output.assistance_domain is None
+
+
+def test_consolidated_executor_keeps_bounded_semantics_without_probable_promotion() -> None:
+    assert "_promote_bounded_best_effort" not in SpecialistReActExecutor.__dict__
+    assert "_is_bounded_closure" not in SpecialistReActExecutor.__dict__
+    assert "_has_successful_live_evidence" not in SpecialistReActExecutor.__dict__
+    assert "_finalize" in SpecialistReActExecutor.__dict__
+    assert "_retrieve_initial_rag_grounding" in SpecialistReActExecutor.__dict__
+    assert "_build_incident_anchor" in SpecialistReActExecutor.__dict__
+    assert "_validate_tool_semantics" in SpecialistReActExecutor.__dict__
 
 
 def test_specialist_react_is_capped_at_six_cycles() -> None:

@@ -5,6 +5,7 @@ from mcp.server import MCPServer
 from tools.opensearch_tools import register_opensearch_tools
 from tools.docker_tools import register_docker_tools
 from tools.diagnostic_tools import register_diagnostic_tools
+from tools.icmp_tools import register_icmp_tools
 from tools.qdrant_tools import register_qdrant_tools
 
 
@@ -32,6 +33,7 @@ def ping() -> dict:
 register_opensearch_tools(mcp)
 register_docker_tools(mcp)
 register_diagnostic_tools(mcp)
+register_icmp_tools(mcp)
 register_qdrant_tools(mcp)
 
 if __name__ == "__main__":
