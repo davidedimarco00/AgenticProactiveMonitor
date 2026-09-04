@@ -1,5 +1,6 @@
 (() => {
-  const TARGET_SELECTOR = ".agent-detail-disclosure pre, .audit-json-disclosure pre";
+  const TARGET_SELECTOR =
+    ".agent-detail-disclosure pre, .audit-json-disclosure pre";
 
   const looksLikeJson = (value) => {
     const text = String(value || "").trim();
@@ -67,7 +68,9 @@
 
     if (Array.isArray(value)) {
       if (!value.length) return "[]";
-      const rows = value.map((item) => `${childIndent}${formatReadable(item, level + 1)}`);
+      const rows = value.map(
+        (item) => `${childIndent}${formatReadable(item, level + 1)}`,
+      );
       return `[\n${rows.join(",\n")}\n${indent}]`;
     }
 
@@ -83,7 +86,8 @@
 
     if (value === null) return "null";
     if (value === undefined) return "—";
-    if (typeof value === "boolean" || typeof value === "number") return String(value);
+    if (typeof value === "boolean" || typeof value === "number")
+      return String(value);
 
     const cleaned = decodeEscapedText(String(value));
     return indentMultiline(cleaned, childIndent);
@@ -107,6 +111,19 @@
     pre.textContent = formatReadable(normalized);
     pre.dataset.prettyStructured = "true";
     pre.setAttribute("aria-label", "Readable structured JSON");
+  };
+
+  // Shared with the other observability views: an MCP outcome is an envelope
+  // whose payload is itself a JSON string, so it must be unwrapped before it can
+  // be shown to an operator instead of printing its escape sequences.
+  window.apmStructured = {
+    looksLikeJson,
+    normalize: normalizeStructuredValue,
+    toReadableText: (value) => formatReadable(normalizeStructuredValue(value)),
+    isStructured: (value) => {
+      if (value && typeof value === "object") return true;
+      return typeof value === "string" && looksLikeJson(value);
+    },
   };
 
   const processNode = (node) => {

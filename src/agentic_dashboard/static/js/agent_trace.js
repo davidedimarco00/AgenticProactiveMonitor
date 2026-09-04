@@ -70,7 +70,11 @@
 
   const compactValue = (value) => {
     if (value === null || value === undefined || value === "") return "—";
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
       return String(value);
     }
     try {
@@ -80,16 +84,24 @@
     }
   };
 
-  const eventKey = (event, index) => event.event_id || event.id || event.trace_id || [
-    event.timestamp || "",
-    event.action || event.event_type || "",
-    event.incident_id || "",
-    event.called_by || event.agent_role || "",
-    compactValue(event.outcome),
-  ].join("::") || String(index);
+  const eventKey = (event, index) =>
+    event.event_id ||
+    event.id ||
+    event.trace_id ||
+    [
+      event.timestamp || "",
+      event.action || event.event_type || "",
+      event.incident_id || "",
+      event.called_by || event.agent_role || "",
+      compactValue(event.outcome),
+    ].join("::") ||
+    String(index);
 
-  const eventAction = (event) => event.action || event.event_type || "agent_activity";
-  const eventStatus = (event) => event.status || (event.event_type === "AGENT_EXECUTION_TRACE" ? "LIVE" : "RECORDED");
+  const eventAction = (event) =>
+    event.action || event.event_type || "agent_activity";
+  const eventStatus = (event) =>
+    event.status ||
+    (event.event_type === "AGENT_EXECUTION_TRACE" ? "LIVE" : "RECORDED");
 
   const createText = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -98,14 +110,27 @@
     return node;
   };
 
-  const createBadge = (text, variant = "neutral") => createText("span", `agent-event-badge ${variant}`, text || "—");
+  const createBadge = (text, variant = "neutral") =>
+    createText("span", `agent-event-badge ${variant}`, text || "—");
 
   const statusVariant = (status) => {
     const normalized = String(status || "").toUpperCase();
-    if (normalized.includes("LIVE") || normalized.includes("WORKING")) return "live";
-    if (normalized.includes("FAIL") || normalized.includes("ERROR") || normalized.includes("REJECT")) return "danger";
-    if (normalized.includes("WAIT") || normalized.includes("PENDING")) return "warning";
-    if (normalized.includes("TRIAGED") || normalized.includes("ACCEPT") || normalized.includes("RESOLVED")) return "success";
+    if (normalized.includes("LIVE") || normalized.includes("WORKING"))
+      return "live";
+    if (
+      normalized.includes("FAIL") ||
+      normalized.includes("ERROR") ||
+      normalized.includes("REJECT")
+    )
+      return "danger";
+    if (normalized.includes("WAIT") || normalized.includes("PENDING"))
+      return "warning";
+    if (
+      normalized.includes("TRIAGED") ||
+      normalized.includes("ACCEPT") ||
+      normalized.includes("RESOLVED")
+    )
+      return "success";
     return "neutral";
   };
 
@@ -118,6 +143,33 @@
     return link;
   };
 
+  // A tool outcome is an MCP envelope carrying JSON inside a JSON string.
+  // Printing it raw leaks the escape sequences into the operator view.
+  const structuredHelper = () => window.apmStructured || null;
+
+  const isStructuredValue = (value) => {
+    const helper = structuredHelper();
+    if (helper) return helper.isStructured(value);
+    return Boolean(value) && typeof value === "object";
+  };
+
+  const readableValue = (value) => {
+    const helper = structuredHelper();
+    if (helper) return helper.toReadableText(value);
+    return stringify(value);
+  };
+
+  const createValueNode = (value) => {
+    if (!isStructuredValue(value)) {
+      return createText("strong", "agent-detail-value", compactValue(value));
+    }
+    return createText(
+      "pre",
+      "agent-detail-value agent-detail-value-block",
+      readableValue(value),
+    );
+  };
+
   const appendFact = (container, label, value, options = {}) => {
     const fact = document.createElement("div");
     fact.className = "agent-detail-fact";
@@ -125,7 +177,7 @@
     if (options.node) {
       fact.appendChild(options.node);
     } else {
-      fact.appendChild(createText("strong", "agent-detail-value", compactValue(value)));
+      fact.appendChild(createValueNode(value));
     }
     container.appendChild(fact);
   };
@@ -135,7 +187,19 @@
     const section = document.createElement("section");
     section.className = `agent-detail-section ${className}`.trim();
     section.appendChild(createText("h4", "", title));
-    section.appendChild(createText("div", "agent-detail-section-content", compactValue(value)));
+    section.appendChild(
+      isStructuredValue(value)
+        ? createText(
+            "pre",
+            "agent-detail-section-content agent-detail-value-block",
+            readableValue(value),
+          )
+        : createText(
+            "div",
+            "agent-detail-section-content",
+            compactValue(value),
+          ),
+    );
     container.appendChild(section);
   };
 
@@ -154,11 +218,16 @@
   };
 
   const captureDetailState = () => {
-    const disclosures = Array.from(detailPanel.querySelectorAll(".agent-detail-disclosure")).map((node, index) => {
+    const disclosures = Array.from(
+      detailPanel.querySelectorAll(".agent-detail-disclosure"),
+    ).map((node, index) => {
       const pre = node.querySelector("pre");
       return {
         index,
-        label: node.dataset.disclosureLabel || node.querySelector("summary")?.textContent || "",
+        label:
+          node.dataset.disclosureLabel ||
+          node.querySelector("summary")?.textContent ||
+          "",
         open: node.open,
         preScrollTop: pre?.scrollTop || 0,
         preScrollLeft: pre?.scrollLeft || 0,
@@ -176,11 +245,18 @@
   const restoreDetailState = (state, key) => {
     if (!state || state.eventKey !== key) return;
 
-    const disclosures = Array.from(detailPanel.querySelectorAll(".agent-detail-disclosure"));
+    const disclosures = Array.from(
+      detailPanel.querySelectorAll(".agent-detail-disclosure"),
+    );
     disclosures.forEach((node, index) => {
-      const label = node.dataset.disclosureLabel || node.querySelector("summary")?.textContent || "";
-      const saved = state.disclosures.find((item) => item.index === index && item.label === label)
-        || state.disclosures.find((item) => item.label === label);
+      const label =
+        node.dataset.disclosureLabel ||
+        node.querySelector("summary")?.textContent ||
+        "";
+      const saved =
+        state.disclosures.find(
+          (item) => item.index === index && item.label === label,
+        ) || state.disclosures.find((item) => item.label === label);
       if (!saved) return;
 
       node.open = saved.open;
@@ -211,7 +287,10 @@
     badges.className = "agent-event-detail-badges";
     const status = eventStatus(event);
     badges.appendChild(createBadge(status, statusVariant(status)));
-    if (event.event_type === "AGENT_EXECUTION_TRACE" && String(status).toUpperCase() !== "LIVE") {
+    if (
+      event.event_type === "AGENT_EXECUTION_TRACE" &&
+      String(status).toUpperCase() !== "LIVE"
+    ) {
       badges.appendChild(createBadge("LIVE TRACE", "live"));
     }
     header.append(heading, badges);
@@ -219,13 +298,24 @@
 
     const facts = document.createElement("div");
     facts.className = "agent-detail-facts";
-    appendFact(facts, "Called by", event.called_by || event.agent_role || "system");
-    appendFact(facts, "Incident", null, { node: createIncidentLink(event.incident_id) });
+    appendFact(
+      facts,
+      "Called by",
+      event.called_by || event.agent_role || "system",
+    );
+    appendFact(facts, "Incident", null, {
+      node: createIncidentLink(event.incident_id),
+    });
     appendFact(facts, "Tool", event.tool || "—");
     appendFact(facts, "Outcome", event.outcome || event.status || "—");
     detailPanel.appendChild(facts);
 
-    appendSection(detailPanel, "Operational rationale", event.reason || "No rationale recorded for this event.", "rationale");
+    appendSection(
+      detailPanel,
+      "Operational rationale",
+      event.reason || "No rationale recorded for this event.",
+      "rationale",
+    );
 
     if (event.tool || event.outcome) {
       const toolSection = document.createElement("section");
@@ -239,26 +329,38 @@
       detailPanel.appendChild(toolSection);
     }
 
-    const details = event.details && typeof event.details === "object" ? event.details : null;
+    const details =
+      event.details && typeof event.details === "object" ? event.details : null;
     if (details && Object.keys(details).length) {
-      const hasObservationViews = Object.prototype.hasOwnProperty.call(details, "raw_observation")
-        || Object.prototype.hasOwnProperty.call(details, "reasoning_observation");
+      const hasObservationViews =
+        Object.prototype.hasOwnProperty.call(details, "raw_observation") ||
+        Object.prototype.hasOwnProperty.call(details, "reasoning_observation");
 
       if (hasObservationViews) {
-        appendDisclosure(detailPanel, "Reasoning observation", details.reasoning_observation, true);
         appendDisclosure(
           detailPanel,
-          event.action === "rag_retrieval" ? "Complete retrieved knowledge" : "Complete MCP output",
+          "Reasoning observation",
+          details.reasoning_observation,
+          true,
+        );
+        appendDisclosure(
+          detailPanel,
+          event.action === "rag_retrieval"
+            ? "Complete retrieved knowledge"
+            : "Complete MCP output",
           details.raw_observation,
         );
         const metadata = { ...details };
         delete metadata.reasoning_observation;
         delete metadata.raw_observation;
-        if (Object.keys(metadata).length) appendDisclosure(detailPanel, "Trace metadata", metadata);
+        if (Object.keys(metadata).length)
+          appendDisclosure(detailPanel, "Trace metadata", metadata);
       } else {
         appendDisclosure(
           detailPanel,
-          event.action === "rag_retrieval" ? "Retrieved knowledge" : "Event payload",
+          event.action === "rag_retrieval"
+            ? "Retrieved knowledge"
+            : "Event payload",
           details,
           true,
         );
@@ -272,27 +374,41 @@
     restoreDetailState(preservedState, key);
   };
 
-  const buildSearchText = (event) => [
-    eventAction(event),
-    eventStatus(event),
-    event.called_by,
-    event.agent_role,
-    event.reason,
-    event.tool,
-    compactValue(event.outcome),
-    event.incident_id,
-    stringify(event.details),
-  ].filter(Boolean).join(" ").toLowerCase();
+  const buildSearchText = (event) =>
+    [
+      eventAction(event),
+      eventStatus(event),
+      event.called_by,
+      event.agent_role,
+      event.reason,
+      event.tool,
+      compactValue(event.outcome),
+      event.incident_id,
+      stringify(event.details),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
 
   const filteredEvents = () => {
-    const query = String(searchInput?.value || "").trim().toLowerCase();
-    const status = String(statusFilter?.value || "").trim().toLowerCase();
+    const query = String(searchInput?.value || "")
+      .trim()
+      .toLowerCase();
+    const status = String(statusFilter?.value || "")
+      .trim()
+      .toLowerCase();
     return eventsCache
       .map((event, index) => ({ event, index, key: eventKey(event, index) }))
       .filter(({ event }) => {
         if (query && !buildSearchText(event).includes(query)) return false;
-        if (status && String(eventStatus(event)).toLowerCase() !== status) return false;
-        if (currentOnly?.checked && currentIncidentId && event.incident_id !== currentIncidentId) return false;
+        if (status && String(eventStatus(event)).toLowerCase() !== status)
+          return false;
+        if (
+          currentOnly?.checked &&
+          currentIncidentId &&
+          event.incident_id !== currentIncidentId
+        )
+          return false;
         return true;
       });
   };
@@ -300,8 +416,11 @@
   const updateStatusOptions = () => {
     if (!statusFilter) return;
     const previous = statusFilter.value;
-    const values = [...new Set(eventsCache.map((event) => eventStatus(event)).filter(Boolean))]
-      .sort((a, b) => String(a).localeCompare(String(b)));
+    const values = [
+      ...new Set(
+        eventsCache.map((event) => eventStatus(event)).filter(Boolean),
+      ),
+    ].sort((a, b) => String(a).localeCompare(String(b)));
     statusFilter.replaceChildren();
     const all = document.createElement("option");
     all.value = "";
@@ -329,13 +448,30 @@
       detailPanel.classList.add("is-empty");
       const placeholder = document.createElement("div");
       placeholder.className = "agent-event-detail-empty";
-      placeholder.appendChild(createText("strong", "", eventsCache.length ? "No events match the current filters." : "Select an event to inspect it."));
-      placeholder.appendChild(createText("p", "", eventsCache.length ? "Change the search or filter settings to restore the timeline." : "The complete operational rationale and payload will appear here."));
+      placeholder.appendChild(
+        createText(
+          "strong",
+          "",
+          eventsCache.length
+            ? "No events match the current filters."
+            : "Select an event to inspect it.",
+        ),
+      );
+      placeholder.appendChild(
+        createText(
+          "p",
+          "",
+          eventsCache.length
+            ? "Change the search or filter settings to restore the timeline."
+            : "The complete operational rationale and payload will appear here.",
+        ),
+      );
       detailPanel.appendChild(placeholder);
       return;
     }
 
-    const active = items.find((item) => item.key === selectedEventKey) || items[0];
+    const active =
+      items.find((item) => item.key === selectedEventKey) || items[0];
     selectedEventKey = active.key;
 
     items.forEach((item) => {
@@ -354,17 +490,30 @@
       content.className = "agent-event-copy";
       const top = document.createElement("div");
       top.className = "agent-event-item-top";
-      top.appendChild(createText("strong", "agent-event-action", eventAction(event)));
+      top.appendChild(
+        createText("strong", "agent-event-action", eventAction(event)),
+      );
       const status = eventStatus(event);
       top.appendChild(createBadge(status, statusVariant(status)));
       content.appendChild(top);
 
-      content.appendChild(createText("p", "agent-event-preview", event.reason || compactValue(event.outcome) || "No rationale recorded."));
+      content.appendChild(
+        createText(
+          "p",
+          "agent-event-preview",
+          event.reason ||
+            compactValue(event.outcome) ||
+            "No rationale recorded.",
+        ),
+      );
 
       const meta = document.createElement("div");
       meta.className = "agent-event-meta";
-      meta.appendChild(createText("span", "", event.called_by || event.agent_role || "system"));
-      if (event.incident_id) meta.appendChild(createText("span", "incident", event.incident_id));
+      meta.appendChild(
+        createText("span", "", event.called_by || event.agent_role || "system"),
+      );
+      if (event.incident_id)
+        meta.appendChild(createText("span", "incident", event.incident_id));
       content.appendChild(meta);
 
       button.append(time, content);
@@ -384,12 +533,16 @@
 
   const render = (payload) => {
     eventsCache = Array.isArray(payload?.events) ? payload.events : [];
-    currentIncidentId = payload?.agent?.activity_incident_id
-      || eventsCache.find((event) => event.incident_id)?.incident_id
-      || null;
+    currentIncidentId =
+      payload?.agent?.activity_incident_id ||
+      eventsCache.find((event) => event.incident_id)?.incident_id ||
+      null;
 
     if (eventCount) eventCount.textContent = String(eventsCache.length);
-    if (lastActivity) lastActivity.textContent = eventsCache.length ? formatTimestamp(eventsCache[0].timestamp) : "—";
+    if (lastActivity)
+      lastActivity.textContent = eventsCache.length
+        ? formatTimestamp(eventsCache[0].timestamp)
+        : "—";
     if (currentIncident) currentIncident.textContent = currentIncidentId || "—";
     if (currentOnly) currentOnly.disabled = !currentIncidentId;
 
@@ -442,15 +595,19 @@
   statusFilter?.addEventListener("change", () => renderList());
   currentOnly?.addEventListener("change", () => renderList());
 
-  document.querySelectorAll(".agent-node[data-agent-runtime-jid]").forEach((node) => {
-    node.addEventListener("click", () => start(node.dataset.agentRuntimeJid));
-  });
+  document
+    .querySelectorAll(".agent-node[data-agent-runtime-jid]")
+    .forEach((node) => {
+      node.addEventListener("click", () => start(node.dataset.agentRuntimeJid));
+    });
   document.querySelectorAll("[data-agent-modal-close]").forEach((node) => {
     node.addEventListener("click", stop);
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") stop();
   });
-  document.getElementById("agent-modal-refresh")?.addEventListener("click", refresh);
+  document
+    .getElementById("agent-modal-refresh")
+    ?.addEventListener("click", refresh);
   window.addEventListener("beforeunload", stop);
 })();

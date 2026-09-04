@@ -13,8 +13,12 @@
   cursor: pointer;
   font-size: 10px;
   font-weight: 800;
-  letter-spacing: .03em;
-  transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+  letter-spacing: 0.03em;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease;
 }
 
 .theme-toggle:hover {
@@ -25,7 +29,7 @@
 }
 
 .theme-toggle:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, .18);
+  outline: 3px solid rgba(37, 99, 235, 0.18);
   outline-offset: 2px;
 }
 
@@ -157,7 +161,7 @@
   color: var(--accent-2);
   font-size: 8px;
   font-weight: 850;
-  letter-spacing: .08em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -200,7 +204,8 @@
   word-break: break-word;
   color: var(--text-2);
   background: var(--panel);
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family:
+    "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 10px;
   line-height: 1.55;
   scrollbar-gutter: stable;
@@ -235,7 +240,7 @@ html[data-theme="dark"] {
   --danger-soft: #2b1520;
   --violet: #c4b5fd;
   --violet-soft: #241b3b;
-  --shadow: 0 12px 32px rgba(0, 0, 0, .28);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
 }
 
 html[data-theme="dark"],
@@ -246,14 +251,18 @@ html[data-theme="dark"] body {
 html[data-theme="dark"] body {
   color: var(--text);
   background:
-    radial-gradient(circle at 18% -10%, rgba(37, 99, 235, .12), transparent 30%),
+    radial-gradient(
+      circle at 18% -10%,
+      rgba(37, 99, 235, 0.12),
+      transparent 30%
+    ),
     linear-gradient(180deg, #08111f 0%, #0b1424 100%);
 }
 
 html[data-theme="dark"] .app-header {
-  background: rgba(8, 17, 31, .94);
+  background: rgba(8, 17, 31, 0.94);
   border-bottom-color: var(--border-soft);
-  box-shadow: 0 5px 20px rgba(0, 0, 0, .22);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.22);
 }
 
 html[data-theme="dark"] .brand-copy strong,
@@ -310,7 +319,11 @@ html[data-theme="dark"] .panel {
 html[data-theme="dark"] .agent-network {
   border-color: var(--border);
   background:
-    radial-gradient(circle at 50% 50%, rgba(96, 165, 250, .10), transparent 32%),
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(96, 165, 250, 0.1),
+      transparent 32%
+    ),
     linear-gradient(180deg, #101a2b 0%, #0b1424 100%);
 }
 
@@ -329,7 +342,7 @@ html[data-theme="dark"] .agent-modal-logo {
   color: #bfdbfe;
   border-color: #3b4a61;
   background: #101a2b;
-  box-shadow: 0 9px 22px rgba(0, 0, 0, .26);
+  box-shadow: 0 9px 22px rgba(0, 0, 0, 0.26);
 }
 
 html[data-theme="dark"] .agent-node.working .agent-avatar,
@@ -503,13 +516,13 @@ html[data-theme="dark"] .task-outcome-callout {
 
 /* Agent observability workspace */
 html[data-theme="dark"] .agent-modal-backdrop {
-  background: rgba(2, 6, 23, .72);
+  background: rgba(2, 6, 23, 0.72);
 }
 
 html[data-theme="dark"] .agent-modal-dialog {
   border-color: var(--border);
   background: var(--panel);
-  box-shadow: 0 32px 90px rgba(0, 0, 0, .48);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.48);
 }
 
 html[data-theme="dark"] .agent-modal-header {
@@ -671,6 +684,12 @@ html[data-theme="dark"] .agent-trace-details pre {
   background: #08111f;
 }
 
+html[data-theme="dark"] pre.agent-detail-value-block {
+  color: var(--text-2);
+  border-color: var(--border);
+  background: #08111f;
+}
+
 html[data-theme="dark"] .audit-event {
   border-color: var(--border-soft);
   background: var(--panel);
@@ -713,8 +732,19 @@ html[data-theme="dark"] * {
 }
 
 @media (max-width: 760px) {
-  .theme-toggle-label { display: none; }
-  .theme-toggle { width: 34px; justify-content: center; padding: 0; }
-  .audit-event { grid-template-columns: 1fr; }
-  .audit-event-meta { border-right: 0; border-bottom: 1px solid var(--border-soft); }
+  .theme-toggle-label {
+    display: none;
+  }
+  .theme-toggle {
+    width: 34px;
+    justify-content: center;
+    padding: 0;
+  }
+  .audit-event {
+    grid-template-columns: 1fr;
+  }
+  .audit-event-meta {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+  }
 }
