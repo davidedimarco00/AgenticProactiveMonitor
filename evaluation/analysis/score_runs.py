@@ -57,6 +57,12 @@ def collected_evidence(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def diagnostic_text(incident: dict[str, Any], outcomes: list[dict[str, Any]]) -> str:
+    """Build correctness text from diagnostic conclusions, never from raw evidence.
+
+    LA/TA must measure what the system diagnosed, not which target happened to be
+    queried by a tool. Raw evidence is scored separately through Evidence Coverage.
+    """
+
     parts: list[Any] = []
     diagnosis = incident.get("diagnosis")
     if isinstance(diagnosis, dict):
@@ -64,7 +70,6 @@ def diagnostic_text(incident: dict[str, Any], outcomes: list[dict[str, Any]]) ->
             [
                 diagnosis.get("summary"),
                 diagnosis.get("root_cause"),
-                diagnosis.get("evidence"),
             ]
         )
     for outcome in outcomes:
@@ -73,8 +78,6 @@ def diagnostic_text(incident: dict[str, Any], outcomes: list[dict[str, Any]]) ->
                 outcome.get("summary"),
                 outcome.get("root_cause"),
                 outcome.get("causal_chain"),
-                outcome.get("findings"),
-                outcome.get("hypotheses"),
             ]
         )
     return normalize_text(parts)

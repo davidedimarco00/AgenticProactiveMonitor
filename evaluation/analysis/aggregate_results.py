@@ -172,6 +172,34 @@ def summarize_group(profile: str, scenario: str, runs: list[dict[str, Any]]) -> 
     }
 
 
+def summarize_profile(
+    profile: str,
+    profile_runs: list[dict[str, Any]],
+    scenario_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate correctness over runs and reproducibility only within same-scenario pairs."""
+
+    return {
+        "profile": profile,
+        "scenario": "overall",
+        "runs": len(profile_runs),
+        "detection_rate": safe_mean([run.get("detection_rate") for run in profile_runs]),
+        "mean_ttd_seconds": safe_mean([run.get("ttd_seconds") for run in profile_runs]),
+        "location_accuracy": safe_mean([run.get("location_accuracy") for run in profile_runs]),
+        "type_accuracy": safe_mean([run.get("type_accuracy") for run in profile_runs]),
+        "evidence_coverage": safe_mean([run.get("evidence_coverage") for run in profile_runs]),
+        "diagnostic_score": safe_mean([run.get("diagnostic_score") for run in profile_runs]),
+        "mean_react_steps": safe_mean([run.get("react_steps") for run in profile_runs]),
+        "mean_tool_calls": safe_mean([run.get("tool_calls") for run in profile_runs]),
+        "mean_diagnosis_time_seconds": safe_mean([run.get("diagnosis_time_seconds") for run in profile_runs]),
+        "tss": safe_mean([row.get("tss") for row in scenario_rows]),
+        "argument_consistency": safe_mean([row.get("argument_consistency") for row in scenario_rows]),
+        "structured_diagnosis_agreement": safe_mean([row.get("structured_diagnosis_agreement") for row in scenario_rows]),
+        "mean_divergence_point": safe_mean([row.get("mean_divergence_point") for row in scenario_rows]),
+        "pair_count": sum(int(row.get("pair_count") or 0) for row in scenario_rows),
+    }
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -197,7 +225,7 @@ def main() -> None:
         scenario = str(run.get("scenario") or "unknown")
         groups.setdefault((profile, scenario), []).append(run)
 
-    rows = [
+    scenario_rows = [
         summarize_group(profile, scenario, group_runs)
         for (profile, scenario), group_runs in sorted(groups.items())
     ]
@@ -206,18 +234,19 @@ def main() -> None:
     for run in runs:
         by_profile.setdefault(str(run.get("profile") or "unknown"), []).append(run)
 
-    profile_rows = [
-        summarize_group(profile, "overall", profile_runs)
-        for profile, profile_runs in sorted(by_profile.items())
-    ]
+    profile_rows: list[dict[str, Any]] = []
+    for profile, profile_runs in sorted(by_profile.items()):
+        matching_scenario_rows = [row for row in scenario_rows if row["profile"] == profile]
+        profile_rows.append(summarize_profile(profile, profile_runs, matching_scenario_rows))
 
+    summary_rows = [*scenario_rows, *profile_rows]
     summary = {
         "run_count": len(runs),
-        "groups": rows,
+        "groups": scenario_rows,
         "profiles": profile_rows,
     }
     write_json(results_root / "summary.json", summary)
-    write_csv(results_root / "summary.csv", rows)
+    write_csv(results_root / "summary.csv", summary_rows)
     write_csv(results_root / "model-comparison.csv", profile_rows)
     print(json.dumps(summary, ensure_ascii=False))
 

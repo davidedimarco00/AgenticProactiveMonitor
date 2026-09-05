@@ -20,8 +20,7 @@
           "cpu pressure",
           "processor saturation",
           "processor pressure",
-          "cpu resource exhaustion",
-          "resource exhaustion"
+          "cpu resource exhaustion"
         ]
       },
       "metric": {
@@ -75,8 +74,7 @@
           "memory growth",
           "memory pressure",
           "memory saturation",
-          "memory resource exhaustion",
-          "resource exhaustion"
+          "memory resource exhaustion"
         ]
       },
       "metric": {
