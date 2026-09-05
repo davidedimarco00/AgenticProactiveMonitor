@@ -1,11 +1,37 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profiles": {
     "baseline": {
       "reasoning_model": "gemma4:e4b",
       "tool_model": "qwen3.5:4b",
       "embedding_model": "ibm/granite-embedding:30m",
-      "temperature": 0
+      "temperature": 0.0,
+      "temperature_scope": "specialist_reasoning_and_finalization",
+      "max_react_steps": 6
+    },
+    "more-reasoning": {
+      "reasoning_model": "gemma4:e4b",
+      "tool_model": "qwen3.5:4b",
+      "embedding_model": "ibm/granite-embedding:30m",
+      "temperature": 0.0,
+      "temperature_scope": "specialist_reasoning_and_finalization",
+      "max_react_steps": 10
+    },
+    "different-model": {
+      "reasoning_model": "gemma4:e2b",
+      "tool_model": "qwen3.5:4b",
+      "embedding_model": "ibm/granite-embedding:30m",
+      "temperature": 0.0,
+      "temperature_scope": "specialist_reasoning_and_finalization",
+      "max_react_steps": 6
+    },
+    "higher-temperature": {
+      "reasoning_model": "gemma4:e4b",
+      "tool_model": "qwen3.5:4b",
+      "embedding_model": "ibm/granite-embedding:30m",
+      "temperature": 0.5,
+      "temperature_scope": "specialist_reasoning_and_finalization",
+      "max_react_steps": 6
     }
   }
 }
