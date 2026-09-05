@@ -182,6 +182,8 @@ class SpecialistReActExecutor(_EvidenceFirstExecutor):
             return "cpu"
         if signal == "container_memory":
             return "memory"
+        if signal == "network_transport_latency":
+            return "network_transport_latency"
         return None
 
     def _deterministic_single_tool_arguments(
