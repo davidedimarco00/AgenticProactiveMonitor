@@ -14,7 +14,7 @@ This design avoids measuring Random Cut Forest detection latency when the resear
 
 ## Main scenarios
 
-The baseline campaign uses:
+The comparison uses three controlled scenarios:
 
 - `cpu-spike` on `processing-service`;
 - `memory-leak` on `worker-service`;
@@ -41,9 +41,9 @@ There is **no combined Diagnostic Score**, no Efficiency formula, no Tool Sequen
 
 Detection Rate, Time-to-Detect, anomaly grade, detector confidence and detector score are also intentionally **not evaluation metrics** because the anomaly trigger is synthetic.
 
-## Frozen baseline
+## Reference configuration
 
-The completed baseline campaign uses:
+The reference profile is:
 
 ```text
 reasoning model: gemma4:e4b
@@ -53,45 +53,45 @@ max ReAct steps: 6
 specialist reasoning/finalization temperature: 0.0
 ```
 
-The baseline contains 15 measured runs: five CPU, five memory and five network-latency scenarios. It is treated as the fixed reference configuration and is not rerun when sensitivity experiments are executed.
-
-The final manual baseline correctness review is:
-
-```text
-CPU spike:        5/5 correct diagnoses
-Memory leak:      3/5 correct diagnoses
-Network latency:  1/5 correct diagnoses
-Overall:          9/15 correct diagnoses
-```
-
-The objective baseline measurements are:
-
-```text
-Completed workflows: 15/15
-Evidence collected:  39/45
-Mean diagnosis time: 267.55 s
-Mean ReAct steps:     5.47
-Mean tool calls:      5.07
-```
+Five repetitions are used for each scenario.
 
 ## Configuration sensitivity experiments
 
-Three additional experiments change one diagnostic configuration dimension at a time. Only `memory-leak` and `network-latency` are repeated because the baseline CPU scenario already reached 5/5 correct diagnoses.
+Three additional profiles change one diagnostic configuration dimension at a time.
 
-| Experiment | Reasoning model | Max ReAct steps | Specialist temperature | Runs |
+| Experiment | Reasoning model | Max ReAct steps | Specialist temperature | Planned runs |
 | --- | --- | ---: | ---: | ---: |
-| Baseline | `gemma4:e4b` | 6 | 0.0 | 15 already completed |
-| `more-reasoning` | `gemma4:e4b` | 10 | 0.0 | 10 |
-| `different-model` | `gemma4:e2b` | 6 | 0.0 | 10 |
-| `higher-temperature` | `gemma4:e4b` | 6 | 0.5 | 10 |
+| Baseline | `gemma4:e4b` | 6 | 0.0 | 15 |
+| `more-reasoning` | `gemma4:e4b` | 10 | 0.0 | 15 |
+| `different-model` | `gemma4:e2b` | 6 | 0.0 | 15 |
+| `higher-temperature` | `gemma4:e4b` | 6 | 0.5 | 15 |
 
-The tool model (`qwen3.5:4b`), embedding model (`ibm/granite-embedding:30m`), prompts, MCP tools, Qdrant knowledge base, fault parameters and infrastructure remain unchanged.
+The tool model (`qwen3.5:4b`), embedding model (`ibm/granite-embedding:30m`), prompts, Qdrant knowledge base, fault parameters and infrastructure remain fixed unless a documented tooling correction is being validated.
 
 ### Temperature scope
 
-The temperature experiment intentionally changes only the **specialist diagnostic reasoning and finalization** calls performed through the native Ollama structured-output path. Technical Lead reasoning and Qwen tool selection are left unchanged from the frozen baseline. This avoids introducing multiple simultaneous changes into the temperature comparison.
+The temperature experiment intentionally changes only the **specialist diagnostic reasoning and finalization** calls performed through the native Ollama structured-output path. Technical Lead reasoning and Qwen tool selection are left unchanged from the reference profile.
 
-## Running the sensitivity experiments
+## Detector-aligned network evidence correction
+
+The first network-latency campaigns exposed a tooling limitation: CPU and RAM investigations could retrieve the exact historical OpenSearch field used by their SINGLE_ENTITY detector, while NETLAT investigations mainly relied on connectivity and point-in-time TCP checks.
+
+The evaluation branch therefore extends `get_metrics` so that a `metric_history` request for a NETLAT incident can retrieve:
+
+```text
+measurement_name: network_transport_latency
+field:            network_transport_latency.response_time
+source:           metrics-<source-service>-*
+path filter:      network_target=<destination-service>
+```
+
+This is the same Layer-4 response-time field used by the implemented SINGLE_ENTITY NETLAT detectors. The source and destination are bound from the incident evidence contract; the LLM is not allowed to invent the monitored path.
+
+Earlier network results obtained before this correction are preserved as exploratory records but are **superseded for the final configuration comparison**. They must not be mixed with the corrected network measurements. CPU and RAM results remain usable because their detector-aligned metric path is unchanged.
+
+For the final comparison, rerun exactly five corrected `network-latency` repetitions for every configuration profile.
+
+## Running the experiments
 
 Pull the current `evaluation` branch first:
 
@@ -100,11 +100,9 @@ git switch evaluation
 git pull
 ```
 
-Because the sensitivity support changes the backend image, use `-PrepareEnvironment` for the first smoke test after pulling.
+Because the MCP and evaluation backend code changed, use environment preparation for the first corrected smoke test.
 
-### 1. More reasoning steps
-
-Smoke test:
+### Corrected network smoke test
 
 ```powershell
 .\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
@@ -115,60 +113,76 @@ Smoke test:
     -PrepareEnvironment
 ```
 
-Final experiment (5 memory + 5 network runs):
+The resulting incident should contain a `get_metrics` observation with:
 
-```powershell
-.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 -Experiment more-reasoning
+```text
+metric = network_transport_latency
+measurement_name = network_transport_latency
+field = network_transport_latency.response_time
+target_host = processing-service
+detector_aligned = true
 ```
 
-### 2. Different reasoning model
+Only after this smoke test passes should the corrected network campaigns be measured.
 
-Smoke test:
+### Corrected network reruns
+
+Reference profile:
+
+```powershell
+.\evaluation\scripts\Invoke-Evaluation.ps1 `
+    -Campaign baseline `
+    -Scenario network-latency `
+    -Repetitions 5
+```
+
+More reasoning:
+
+```powershell
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
+    -Experiment more-reasoning `
+    -Scenario network-latency `
+    -Repetitions 5
+```
+
+Different reasoning model:
 
 ```powershell
 .\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
     -Experiment different-model `
     -Scenario network-latency `
-    -Repetitions 1 `
-    -RecoverySeconds 10
+    -Repetitions 5
 ```
 
-Final experiment:
-
-```powershell
-.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 -Experiment different-model
-```
-
-### 3. Higher specialist reasoning temperature
-
-Smoke test:
+Higher specialist temperature:
 
 ```powershell
 .\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
     -Experiment higher-temperature `
     -Scenario network-latency `
-    -Repetitions 1 `
-    -RecoverySeconds 10
+    -Repetitions 5
 ```
 
-Final experiment:
+If CPU and memory have not yet been measured for `higher-temperature`, run the full campaign instead:
 
 ```powershell
-.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 -Experiment higher-temperature
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
+    -Experiment higher-temperature `
+    -Scenario all `
+    -Repetitions 5
 ```
 
-Each final sensitivity campaign creates a separate timestamped directory under `evaluation/results/`. Do not combine smoke-test directories with final measurements.
+Each campaign creates a separate timestamped directory under `evaluation/results/`. Do not combine smoke-test directories with final measurements. Preserve all older result directories for traceability.
 
-After a final campaign, manually review the ten final causal conclusions before reporting `correct diagnosis`, using the same scenario-specific criteria used for the frozen baseline.
+After each final campaign, manually review the final causal conclusions before reporting `correct diagnosis`, using the same scenario-specific criteria for every profile.
 
 ## Experimental controls
 
-For comparable runs the harness keeps the following conditions fixed unless they are the explicit independent variable of the experiment:
+For comparable runs the harness keeps the following conditions fixed unless they are the explicit independent variable:
 
 - real fault parameters;
 - fault stabilization time before the synthetic trigger;
 - prompts and agent coordination logic;
-- MCP tools;
 - Qdrant knowledge base;
 - embedding model;
 - hardware environment;
@@ -205,7 +219,7 @@ reset monitored system
     -> score run
 ```
 
-The synthetic anomaly contains the same type of single-entity symptom and entity information that starts the production workflow, but it is not treated as proof that the fault exists. Runtime claims must still be supported by live MCP observations.
+The synthetic anomaly contains the same type of SINGLE_ENTITY symptom and entity information that starts the production workflow, but it is not treated as proof that the fault exists. Runtime claims must still be supported by live MCP observations.
 
 ## Results
 
@@ -219,6 +233,6 @@ Each run stores `metadata.json`, `trigger.json`, `incident.json` and `scores.jso
 
 ## Evaluation integrity
 
-Do not edit the frozen ground truth or baseline results after inspecting the measured outcomes. Do not delete failed, timed-out or inconclusive runs; they are part of the experimental dataset.
+Do not edit the frozen ground truth or delete failed, timed-out, inconclusive or superseded runs. Superseded network runs remain part of the experiment history but are excluded from the final corrected network comparison for the documented tooling reason above.
 
 The thesis must explicitly state that OpenSearch anomaly detection is part of the implemented architecture but is not experimentally evaluated in these campaigns. Synthetic anomaly injection is used to isolate the diagnostic subsystem while the underlying faults and diagnostic evidence remain real.
