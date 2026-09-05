@@ -10,7 +10,7 @@ from typing import Any
 
 
 def load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8-sig") as handle:
         return json.load(handle)
 
 
@@ -25,6 +25,7 @@ def levenshtein(a: list[str], b: list[str]) -> int:
         return len(b)
     if not b:
         return len(a)
+
     previous = list(range(len(b) + 1))
     for i, left in enumerate(a, start=1):
         current = [i]
@@ -56,7 +57,10 @@ def flatten_arguments(value: Any, prefix: str = "") -> set[str]:
             child = f"{prefix}[{index}]"
             items |= flatten_arguments(child_value, child)
         return items
-    items.add(f"{prefix}={json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)}")
+
+    items.add(
+        f"{prefix}={json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)}"
+    )
     return items
 
 
@@ -74,6 +78,7 @@ def argument_consistency(run_a: dict[str, Any], run_b: dict[str, Any]) -> float:
     tools_b = list(run_b.get("tool_sequence") or [])
     args_a = list(run_a.get("tool_arguments") or [])
     args_b = list(run_b.get("tool_arguments") or [])
+
     length = max(len(tools_a), len(tools_b))
     if length == 0:
         return 1.0
@@ -86,9 +91,11 @@ def argument_consistency(run_a: dict[str, Any], run_b: dict[str, Any]) -> float:
         if tools_a[index] != tools_b[index]:
             scores.append(0.0)
             continue
+
         left = args_a[index] if index < len(args_a) else {}
         right = args_b[index] if index < len(args_b) else {}
         scores.append(jaccard(flatten_arguments(left), flatten_arguments(right)))
+
     return mean(scores)
 
 
@@ -97,16 +104,19 @@ def divergence_point(run_a: dict[str, Any], run_b: dict[str, Any]) -> int | None
     tools_b = list(run_b.get("tool_sequence") or [])
     args_a = list(run_a.get("tool_arguments") or [])
     args_b = list(run_b.get("tool_arguments") or [])
+
     length = max(len(tools_a), len(tools_b))
     for index in range(length):
         if index >= len(tools_a) or index >= len(tools_b):
             return index + 1
         if tools_a[index] != tools_b[index]:
             return index + 1
+
         left = args_a[index] if index < len(args_a) else {}
         right = args_b[index] if index < len(args_b) else {}
         if flatten_arguments(left) != flatten_arguments(right):
             return index + 1
+
     return None
 
 
@@ -131,10 +141,17 @@ def pairwise_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
     divergence_values: list[int] = []
 
     for left, right in combinations(runs, 2):
-        tss_values.append(tss(list(left.get("tool_sequence") or []), list(right.get("tool_sequence") or [])))
+        tss_values.append(
+            tss(
+                list(left.get("tool_sequence") or []),
+                list(right.get("tool_sequence") or []),
+            )
+        )
         ac_values.append(argument_consistency(left, right))
         agreement_values.append(
-            1.0 if left.get("structured_signature") == right.get("structured_signature") else 0.0
+            1.0
+            if left.get("structured_signature") == right.get("structured_signature")
+            else 0.0
         )
         point = divergence_point(left, right)
         if point is not None:
@@ -149,54 +166,56 @@ def pairwise_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def summarize_group(profile: str, scenario: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
-    reproducibility = pairwise_metrics(runs)
+def summarize_group(
+    profile: str,
+    scenario: str,
+    runs: list[dict[str, Any]],
+    *,
+    include_reproducibility: bool = True,
+) -> dict[str, Any]:
+    reproducibility = (
+        pairwise_metrics(runs)
+        if include_reproducibility
+        else {
+            "tss": None,
+            "argument_consistency": None,
+            "structured_diagnosis_agreement": None,
+            "mean_divergence_point": None,
+            "pair_count": 0,
+        }
+    )
+
+    completed = sum(
+        1
+        for run in runs
+        if str(run.get("run_outcome") or "").upper()
+        in {"COMPLETED", "RESOLVED", "CLOSED"}
+    )
+
     return {
         "profile": profile,
         "scenario": scenario,
         "runs": len(runs),
-        "detection_rate": safe_mean([run.get("detection_rate") for run in runs]),
-        "mean_ttd_seconds": safe_mean([run.get("ttd_seconds") for run in runs]),
+        "completed_runs": completed,
         "location_accuracy": safe_mean([run.get("location_accuracy") for run in runs]),
         "type_accuracy": safe_mean([run.get("type_accuracy") for run in runs]),
         "evidence_coverage": safe_mean([run.get("evidence_coverage") for run in runs]),
         "diagnostic_score": safe_mean([run.get("diagnostic_score") for run in runs]),
         "mean_react_steps": safe_mean([run.get("react_steps") for run in runs]),
         "mean_tool_calls": safe_mean([run.get("tool_calls") for run in runs]),
-        "mean_diagnosis_time_seconds": safe_mean([run.get("diagnosis_time_seconds") for run in runs]),
+        "mean_trigger_to_incident_seconds": safe_mean(
+            [run.get("trigger_to_incident_seconds") for run in runs]
+        ),
+        "mean_diagnosis_time_seconds": safe_mean(
+            [run.get("diagnosis_time_seconds") for run in runs]
+        ),
         "tss": reproducibility["tss"],
         "argument_consistency": reproducibility["argument_consistency"],
-        "structured_diagnosis_agreement": reproducibility["structured_diagnosis_agreement"],
+        "structured_diagnosis_agreement": reproducibility[
+            "structured_diagnosis_agreement"
+        ],
         "mean_divergence_point": reproducibility["mean_divergence_point"],
         "pair_count": reproducibility["pair_count"],
-    }
-
-
-def summarize_profile(
-    profile: str,
-    profile_runs: list[dict[str, Any]],
-    scenario_rows: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Aggregate correctness over runs and reproducibility only within same-scenario pairs."""
-
-    return {
-        "profile": profile,
-        "scenario": "overall",
-        "runs": len(profile_runs),
-        "detection_rate": safe_mean([run.get("detection_rate") for run in profile_runs]),
-        "mean_ttd_seconds": safe_mean([run.get("ttd_seconds") for run in profile_runs]),
-        "location_accuracy": safe_mean([run.get("location_accuracy") for run in profile_runs]),
-        "type_accuracy": safe_mean([run.get("type_accuracy") for run in profile_runs]),
-        "evidence_coverage": safe_mean([run.get("evidence_coverage") for run in profile_runs]),
-        "diagnostic_score": safe_mean([run.get("diagnostic_score") for run in profile_runs]),
-        "mean_react_steps": safe_mean([run.get("react_steps") for run in profile_runs]),
-        "mean_tool_calls": safe_mean([run.get("tool_calls") for run in profile_runs]),
-        "mean_diagnosis_time_seconds": safe_mean([run.get("diagnosis_time_seconds") for run in profile_runs]),
-        "tss": safe_mean([row.get("tss") for row in scenario_rows]),
-        "argument_consistency": safe_mean([row.get("argument_consistency") for row in scenario_rows]),
-        "structured_diagnosis_agreement": safe_mean([row.get("structured_diagnosis_agreement") for row in scenario_rows]),
-        "mean_divergence_point": safe_mean([row.get("mean_divergence_point") for row in scenario_rows]),
-        "pair_count": sum(int(row.get("pair_count") or 0) for row in scenario_rows),
     }
 
 
@@ -225,7 +244,8 @@ def main() -> None:
         scenario = str(run.get("scenario") or "unknown")
         groups.setdefault((profile, scenario), []).append(run)
 
-    scenario_rows = [
+    # Reproducibility is meaningful only between repetitions of the same scenario.
+    rows = [
         summarize_group(profile, scenario, group_runs)
         for (profile, scenario), group_runs in sorted(groups.items())
     ]
@@ -234,19 +254,24 @@ def main() -> None:
     for run in runs:
         by_profile.setdefault(str(run.get("profile") or "unknown"), []).append(run)
 
-    profile_rows: list[dict[str, Any]] = []
-    for profile, profile_runs in sorted(by_profile.items()):
-        matching_scenario_rows = [row for row in scenario_rows if row["profile"] == profile]
-        profile_rows.append(summarize_profile(profile, profile_runs, matching_scenario_rows))
+    profile_rows = [
+        summarize_group(
+            profile,
+            "overall",
+            profile_runs,
+            include_reproducibility=False,
+        )
+        for profile, profile_runs in sorted(by_profile.items())
+    ]
 
-    summary_rows = [*scenario_rows, *profile_rows]
     summary = {
+        "evaluation_scope": "agentic_diagnosis_only",
         "run_count": len(runs),
-        "groups": scenario_rows,
+        "groups": rows,
         "profiles": profile_rows,
     }
     write_json(results_root / "summary.json", summary)
-    write_csv(results_root / "summary.csv", summary_rows)
+    write_csv(results_root / "summary.csv", rows)
     write_csv(results_root / "model-comparison.csv", profile_rows)
     print(json.dumps(summary, ensure_ascii=False))
 
