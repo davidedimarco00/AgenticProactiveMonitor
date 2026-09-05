@@ -126,8 +126,8 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
         ]
         source_fields = ["@timestamp", field]
         if is_transport:
-            filters.append({"term": {"network_target": target_host}})
-            source_fields.append("network_target")
+            filters.append({"term": {"tag.network_target": target_host}})
+            source_fields.append("tag.network_target")
 
         query = {
             "size": 1,
@@ -163,7 +163,7 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
             source = hits[0].get("_source", {})
             latest_timestamp = source.get("@timestamp")
             latest_value = _nested_value(source, field)
-            observed_network_target = source.get("network_target")
+            observed_network_target = source.get("tag", {}).get("network_target")
 
         timeline = []
         for bucket in result["aggregations"]["timeline"]["buckets"]:
