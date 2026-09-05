@@ -2,7 +2,7 @@
 
 This directory contains the thesis evaluation harness for the `evaluation` branch.
 
-The evaluation now isolates the **agentic diagnosis** from OpenSearch detector quality:
+The evaluation isolates the **agentic diagnosis** from OpenSearch detector quality:
 
 - the controlled fault is real and remains active during the diagnosis;
 - the anomaly that starts the incident is injected synthetically through the backend test API;
@@ -22,25 +22,27 @@ The baseline campaign uses:
 
 The existing fault scripts under `src/monitored_system/infrastructure/scenarios/` are reused. They are not duplicated by the evaluation harness.
 
-## Metrics
+## Simple evaluation metrics
 
-The main diagnostic metrics are:
+The thesis evaluation intentionally uses simple task-oriented measurements instead of a weighted diagnostic score.
 
-- Location Accuracy (LA);
-- Type Accuracy (TA);
-- Evidence Coverage;
-- Diagnostic Score;
-- diagnosis time from synthetic trigger to terminal incident;
-- ReAct steps;
-- tool calls;
-- Tool Sequence Similarity (TSS);
-- Argument Consistency (AC);
-- Divergence Point;
-- Structured Diagnosis Agreement.
+For each scenario the harness reports:
 
-Detection Rate, Time-to-Detect, anomaly grade, detector confidence and detector score are intentionally **not evaluation metrics** in this campaign because the anomaly trigger is synthetic.
+- completed diagnoses / total runs;
+- correct fault location / total runs;
+- correct fault type / total runs;
+- expected evidence points found / expected evidence points;
+- mean diagnosis time;
+- mean number of ReAct steps;
+- mean number of tool calls.
 
-The scoring rules are deterministic and are defined in `config/ground-truth.json`. No LLM is used as an evaluation judge.
+The detailed `scores.json` file for each run also keeps the diagnosed root cause, matched evidence points and the tool sequence for qualitative inspection.
+
+There is **no combined Diagnostic Score**, no Efficiency formula, no Tool Sequence Similarity (TSS), no Argument Consistency (AC), and no weighted correctness formula in the main evaluation.
+
+Detection Rate, Time-to-Detect, anomaly grade, detector confidence and detector score are also intentionally **not evaluation metrics** because the anomaly trigger is synthetic.
+
+The correctness checks are deterministic and use the frozen expectations in `config/ground-truth.json`. No LLM is used as an evaluation judge.
 
 ## Experimental controls
 
@@ -103,29 +105,17 @@ The preflight checks:
 
 It does **not** wait for OpenSearch anomaly detectors and does not inject a fault.
 
-## Recommended smoke test
+## Recommended smoke tests
 
-Before the thesis measurements, execute one CPU diagnostic run:
+Before the final thesis measurements, execute one run for each scenario:
 
 ```powershell
 .\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario cpu-spike -Repetitions 1 -RecoverySeconds 10
+.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario memory-leak -Repetitions 1 -RecoverySeconds 10
+.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario network-latency -Repetitions 1 -RecoverySeconds 10
 ```
 
-The smoke test validates the complete path:
-
-```text
-real CPU fault
-    -> synthetic SINGLE_ENTITY anomaly trigger
-    -> durable incident
-    -> Technical Lead BDI
-    -> specialist selection and XMPP dispatch
-    -> live MCP/RAG evidence
-    -> ReAct diagnosis
-    -> Technical Lead review
-    -> scoring
-```
-
-Do not include the smoke-test result in the final thesis measurements.
+Smoke tests validate the complete workflow but must not be included in the final thesis measurements.
 
 ## Final baseline campaign
 
@@ -153,8 +143,6 @@ A single scenario can be evaluated with:
     -Repetitions 5
 ```
 
-Because detector waiting has been removed, the campaign is substantially faster than the previous detector-inclusive version.
-
 ## Run lifecycle
 
 Each measured run performs:
@@ -175,7 +163,7 @@ reset monitored system
     -> score run
 ```
 
-The synthetic anomaly contains the same kind of single-entity symptom and entity information that starts the production workflow, but it is not treated as evidence that the fault exists. Runtime claims must still be supported by live MCP observations.
+The synthetic anomaly contains the same type of single-entity symptom and entity information that starts the production workflow, but it is not treated as proof that the fault exists. Runtime claims must still be supported by live MCP observations.
 
 ## Results
 
@@ -207,15 +195,29 @@ evaluation/results/baseline-20260905-120000/
 
 `trigger.json` records the synthetic anomaly request and backend acceptance.
 
-`incident.json` contains the durable incident, timeline and tasks returned by the backend API. The specialist completion events preserve structured ReAct outcomes, evidence, tools, arguments, observations and ReAct step counts.
+`incident.json` contains the durable incident, timeline and tasks returned by the backend API.
 
-`summary.csv` aggregates the thesis metrics by scenario.
+`scores.json` contains the simple result for one run: completion state, location correctness, fault-type correctness, evidence count, diagnosis time, ReAct steps and tool calls.
 
-`model-comparison.csv` aggregates diagnostic measurements by model profile. Reproducibility metrics are not mixed across different fault scenarios.
+`summary.csv` is the main thesis-oriented export. For each scenario it reports values such as:
+
+```text
+runs
+completed_runs
+correct_location_runs
+correct_fault_runs
+evidence_points_matched
+evidence_points_expected
+mean_diagnosis_time_seconds
+mean_react_steps
+mean_tool_calls
+```
+
+`model-comparison.csv` contains the same simple measurements aggregated by model profile and can be used later if alternative model configurations are evaluated.
 
 ## Evaluation integrity
 
-Do not edit `ground-truth.json` after inspecting measured results. If a scoring rule must be changed for a methodological reason, document the change and rerun the affected campaign.
+Do not edit `ground-truth.json` after inspecting measured results. If a correctness expectation must be changed for a methodological reason, document the change and rerun the affected campaign.
 
 Do not delete failed, timed-out or inconclusive runs. They are part of the experimental dataset.
 

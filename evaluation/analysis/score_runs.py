@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -47,7 +46,6 @@ def specialist_outcomes(incident: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def collected_evidence(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # Preserve timeline order and, within each specialist result, ReAct step order.
     evidence: list[dict[str, Any]] = []
     for outcome in outcomes:
         items = [item for item in (outcome.get("evidence") or []) if isinstance(item, dict)]
@@ -57,22 +55,10 @@ def collected_evidence(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def final_diagnostic_text(incident: dict[str, Any], outcomes: list[dict[str, Any]]) -> str:
-    """Text used for LA/TA scoring.
-
-    Correctness is scored from concluded diagnostic content only. Raw
-    observations and unresolved hypotheses are excluded. The Technical Lead
-    diagnosis and structured specialist conclusions are both considered because
-    the current persisted final diagnosis has no dedicated location/type fields.
-    """
     parts: list[Any] = []
     diagnosis = incident.get("diagnosis")
     if isinstance(diagnosis, dict):
-        parts.extend(
-            [
-                diagnosis.get("summary"),
-                diagnosis.get("root_cause"),
-            ]
-        )
+        parts.extend([diagnosis.get("summary"), diagnosis.get("root_cause")])
 
     for outcome in outcomes:
         parts.extend(
@@ -86,33 +72,34 @@ def final_diagnostic_text(incident: dict[str, Any], outcomes: list[dict[str, Any
     return normalize_text(parts)
 
 
-def location_score(text: str, location: dict[str, Any]) -> tuple[float, str, list[str]]:
+def evaluate_location(text: str, location: dict[str, Any]) -> tuple[str, str, list[str]]:
     mode = str(location.get("mode") or "single").lower()
+
     if mode == "path":
         matched_endpoints: list[str] = []
         for endpoint in location.get("endpoints") or []:
             aliases = [str(value) for value in endpoint.get("aliases") or []]
             if contains_any(text, aliases):
                 matched_endpoints.append(str(endpoint.get("label") or "unknown"))
-        if len(matched_endpoints) >= 2:
-            return 1.0, str(location.get("label") or "path"), matched_endpoints
-        if len(matched_endpoints) == 1:
-            return 0.5, f"partial:{matched_endpoints[0]}", matched_endpoints
-        return 0.0, "unmatched", []
+
+        expected_endpoints = len(location.get("endpoints") or [])
+        if expected_endpoints > 0 and len(matched_endpoints) == expected_endpoints:
+            return "correct", str(location.get("label") or "path"), matched_endpoints
+        if matched_endpoints:
+            return "partial", str(location.get("label") or "path"), matched_endpoints
+        return "incorrect", str(location.get("label") or "path"), []
 
     aliases = [str(value) for value in location.get("aliases") or []]
     matched = [alias for alias in aliases if alias.casefold() in text]
     if matched:
-        return 1.0, str(location.get("label") or matched[0]), matched
-    return 0.0, "unmatched", []
+        return "correct", str(location.get("label") or matched[0]), matched
+    return "incorrect", str(location.get("label") or "unknown"), []
 
 
-def type_score(text: str, fault_type: dict[str, Any]) -> tuple[float, str, list[str]]:
+def evaluate_fault_type(text: str, fault_type: dict[str, Any]) -> tuple[bool, str, list[str]]:
     aliases = [str(value) for value in fault_type.get("aliases") or []]
     matched = [alias for alias in aliases if alias.casefold() in text]
-    if matched:
-        return 1.0, str(fault_type.get("label") or matched[0]), matched
-    return 0.0, "unmatched", []
+    return bool(matched), str(fault_type.get("label") or "unknown"), matched
 
 
 def evidence_rule_matches(item: dict[str, Any], rule: dict[str, Any]) -> bool:
@@ -132,17 +119,14 @@ def evidence_rule_matches(item: dict[str, Any], rule: dict[str, Any]) -> bool:
     return True
 
 
-def score_evidence(
+def evaluate_evidence(
     evidence: list[dict[str, Any]],
     rules: list[dict[str, Any]],
-) -> tuple[float, list[dict[str, Any]]]:
-    if not rules:
-        return 0.0, []
-
-    scored: list[dict[str, Any]] = []
+) -> tuple[int, int, list[dict[str, Any]]]:
+    results: list[dict[str, Any]] = []
     for rule in rules:
         matched = any(evidence_rule_matches(item, rule) for item in evidence)
-        scored.append(
+        results.append(
             {
                 "id": rule.get("id"),
                 "description": rule.get("description"),
@@ -150,8 +134,8 @@ def score_evidence(
             }
         )
 
-    matched_count = sum(1 for item in scored if item["matched"])
-    return matched_count / len(scored), scored
+    matched_count = sum(1 for item in results if item["matched"])
+    return matched_count, len(results), results
 
 
 def parse_iso(value: Any) -> datetime | None:
@@ -196,11 +180,17 @@ def main() -> None:
     found_incident = bool(incident.get("found", True)) and bool(incident.get("incident_id"))
     outcomes = specialist_outcomes(incident) if found_incident else []
     evidence = collected_evidence(outcomes)
-    diag_text = final_diagnostic_text(incident, outcomes) if found_incident else ""
+    diagnostic_text = final_diagnostic_text(incident, outcomes) if found_incident else ""
 
-    la, location_label, location_matches = location_score(diag_text, scenario_gt["location"])
-    ta, type_label, type_matches = type_score(diag_text, scenario_gt["fault_type"])
-    evidence_coverage, evidence_points = score_evidence(
+    location_result, expected_location, location_matches = evaluate_location(
+        diagnostic_text,
+        scenario_gt["location"],
+    )
+    fault_type_correct, expected_fault_type, fault_type_matches = evaluate_fault_type(
+        diagnostic_text,
+        scenario_gt["fault_type"],
+    )
+    evidence_matched, evidence_expected, evidence_points = evaluate_evidence(
         evidence,
         list(scenario_gt.get("evidence_points") or []),
     )
@@ -218,30 +208,7 @@ def main() -> None:
     if found_incident and isinstance(incident.get("diagnosis"), dict):
         root_cause = incident["diagnosis"].get("root_cause") or root_cause
 
-    # Adapted AIOps2025-style efficiency: shorter successful diagnostic
-    # trajectories receive more credit. Total steps include peer specialists.
-    efficiency = 0.0
-    if la > 0 and total_react_steps > 0:
-        efficiency = min(1.0, math.exp(-max(total_react_steps - 5, 0) / 5.0))
-
-    diagnostic_score = (
-        0.4 * la
-        + 0.4 * ta
-        + 0.1 * evidence_coverage
-        + 0.1 * efficiency
-    ) * 100.0
-
     tool_sequence = [str(item.get("tool") or "") for item in evidence]
-    tool_arguments = [
-        item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
-        for item in evidence
-    ]
-    tool_success = [bool(item.get("success", False)) for item in evidence]
-
-    structured_signature = {
-        "location": location_label,
-        "fault_type": type_label,
-    }
 
     scores = {
         "scenario": scenario,
@@ -250,34 +217,27 @@ def main() -> None:
         "synthetic_trigger_accepted": bool(trigger.get("accepted", False)),
         "incident_found": found_incident,
         "incident_status": incident.get("status") if found_incident else None,
+        "run_outcome": metadata.get("run_outcome"),
         "diagnosis_status": diagnosis_status,
         "root_cause": root_cause,
-        "location_accuracy": round(la, 6),
-        "location_label": location_label,
+        "location_result": location_result,
+        "location_correct": location_result == "correct",
+        "expected_location": expected_location,
         "location_matches": location_matches,
-        "type_accuracy": round(ta, 6),
-        "type_label": type_label,
-        "type_matches": type_matches,
-        "evidence_coverage": round(evidence_coverage, 6),
+        "fault_type_correct": fault_type_correct,
+        "expected_fault_type": expected_fault_type,
+        "fault_type_matches": fault_type_matches,
+        "evidence_matched": evidence_matched,
+        "evidence_expected": evidence_expected,
         "evidence_points": evidence_points,
-        "efficiency": round(efficiency, 6),
-        "diagnostic_score": round(diagnostic_score, 6),
         "react_steps": total_react_steps,
         "specialist_results": len(outcomes),
         "tool_calls": len(tool_sequence),
         "tool_sequence": tool_sequence,
-        "tool_arguments": tool_arguments,
-        "tool_success": tool_success,
-        "trigger_to_incident_seconds": elapsed_seconds(
-            metadata.get("synthetic_triggered_at_utc"),
-            metadata.get("incident_created_at_utc"),
-        ),
         "diagnosis_time_seconds": elapsed_seconds(
             metadata.get("synthetic_triggered_at_utc"),
             metadata.get("diagnosis_completed_at_utc"),
         ),
-        "structured_signature": structured_signature,
-        "run_outcome": metadata.get("run_outcome"),
     }
 
     write_json(run_dir / "scores.json", scores)
