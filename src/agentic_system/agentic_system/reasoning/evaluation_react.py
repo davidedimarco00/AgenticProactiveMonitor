@@ -49,6 +49,13 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
     )
     _DECISIONS_MARKER = "\n\nOperational reasoning summaries:\n"
     _EVIDENCE_MARKER = "\n\nCollected tool evidence:\n"
+    _MINIMAL_POLICY = (
+        "Finalize only from the supplied assignment, reasoning summaries and collected evidence. "
+        "Do not invent facts. Use confirmed only for a directly supported concrete cause; use "
+        "probable for a specific evidence-backed leading cause with a remaining material gap; "
+        "otherwise use inconclusive. The anomaly symptom alone is not a root cause. Keep every "
+        "field concise and schema-valid."
+    )
     _IMPORTANT_OBSERVATION_KEYS = (
         "measurement_name",
         "field",
@@ -385,6 +392,136 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
             rendered += "\n\n" + cls._bounded_string(trailing, retry_limit)
         return rendered
 
+    @classmethod
+    def _minimal_assignment(cls, assignment: dict[str, Any]) -> dict[str, Any]:
+        projected: dict[str, Any] = {
+            key: assignment[key]
+            for key in ("task_id", "incident_id", "agent_role", "severity", "entity")
+            if key in assignment
+        }
+        anchor = assignment.get("incident_anchor")
+        if isinstance(anchor, dict):
+            anchor_keys = (
+                "detector_name",
+                "detector_type",
+                "observed_signal",
+                "measurement_name",
+                "feature_field",
+                "affected_component",
+                "related_component",
+                "reported_entity",
+                "data_start_time",
+                "data_end_time",
+                "primary_diagnostic_question",
+            )
+            projected["incident_anchor"] = {
+                key: cls._bounded_string(anchor[key], 160)
+                if isinstance(anchor.get(key), str)
+                else anchor.get(key)
+                for key in anchor_keys
+                if key in anchor
+            }
+        anomaly = assignment.get("anomaly")
+        if isinstance(anomaly, dict):
+            anomaly_keys = (
+                "detector_name",
+                "detector_type",
+                "measurement_name",
+                "feature_field",
+                "anomaly_grade",
+                "confidence",
+                "feature_value",
+            )
+            projected["anomaly"] = {
+                key: cls._bounded_string(anomaly[key], 120)
+                if isinstance(anomaly.get(key), str)
+                else anomaly.get(key)
+                for key in anomaly_keys
+                if key in anomaly
+            }
+        return projected
+
+    @classmethod
+    def _minimal_decisions(cls, decisions: list[Any]) -> list[dict[str, Any]]:
+        selected, omitted = cls._select_sequence(decisions, 3)
+        compacted: list[dict[str, Any]] = []
+        for raw in selected:
+            item = dict(raw) if isinstance(raw, dict) else {}
+            projected = {
+                key: cls._bounded_string(item[key], 140)
+                if isinstance(item.get(key), str)
+                else item.get(key)
+                for key in ("action", "decision_summary", "current_hypothesis")
+                if key in item
+            }
+            request = item.get("evidence_request")
+            if isinstance(request, dict):
+                projected["evidence_request"] = {
+                    key: cls._bounded_string(request[key], 120)
+                    if isinstance(request.get(key), str)
+                    else request.get(key)
+                    for key in (
+                        "kind",
+                        "target_component",
+                        "related_component",
+                        "purpose",
+                        "causal_relation",
+                    )
+                    if key in request
+                }
+            compacted.append(projected)
+        if omitted:
+            compacted.insert(1 if compacted else 0, {"omitted_reasoning_summaries": omitted})
+        return compacted
+
+    @classmethod
+    def _minimal_evidence(cls, evidence: list[Any]) -> list[dict[str, Any]]:
+        selected, omitted = cls._select_sequence(evidence, 5)
+        compacted: list[dict[str, Any]] = []
+        for raw in selected:
+            item = dict(raw) if isinstance(raw, dict) else {}
+            compacted.append(
+                {
+                    "step": item.get("step"),
+                    "tool": item.get("tool"),
+                    "arguments": cls._compact_value(
+                        item.get("arguments") or {},
+                        list_limit=2,
+                        string_limit=110,
+                        dict_limit=6,
+                    ),
+                    "observation": cls._compact_value(
+                        item.get("observation"),
+                        list_limit=2,
+                        string_limit=110,
+                        dict_limit=8,
+                    ),
+                    "success": bool(item.get("success")),
+                }
+            )
+        if omitted:
+            compacted.insert(2 if len(compacted) >= 2 else len(compacted), {"omitted_evidence_items": omitted})
+        return compacted
+
+    @classmethod
+    def _render_minimal_prompt(
+        cls,
+        parsed: tuple[str, dict[str, Any], list[Any], list[Any], str],
+    ) -> str:
+        _policy, assignment, decisions, evidence, trailing = parsed
+        rendered = (
+            cls._MINIMAL_POLICY
+            + cls._ASSIGNMENT_MARKER
+            + json.dumps(cls._minimal_assignment(assignment), ensure_ascii=True, separators=(",", ":"))
+            + cls._DECISIONS_MARKER
+            + json.dumps(cls._minimal_decisions(decisions), ensure_ascii=True, separators=(",", ":"))
+            + cls._EVIDENCE_MARKER
+            + json.dumps(cls._minimal_evidence(evidence), ensure_ascii=True, separators=(",", ":"))
+        )
+        if trailing:
+            rendered += "\n\n" + cls._bounded_string(trailing, 160)
+        return rendered
+
     def _input_chars_after_schema_injection(self, messages: list[dict[str, Any]]) -> int:
         normalized = self._normalized_messages(messages)
         return sum(len(str(item.get("content") or "")) for item in normalized)
@@ -440,6 +577,23 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
                     "input_char_guard": max_chars,
                     "input_budget_tokens": self._input_budget_tokens(),
                 }
+
+        # Final deterministic fallback: preserve the incident anchor, the most
+        # recent causal hypotheses and a bounded cross-section of tool evidence,
+        # while replacing the verbose policy/RAG material with a short equivalent
+        # finalization contract. This is still structured projection, never raw
+        # string truncation, and the full evidence remains in the audit trail.
+        candidate = [dict(item) for item in prepared]
+        candidate[user_index]["content"] = self._render_minimal_prompt(parsed)
+        candidate_chars = self._input_chars_after_schema_injection(candidate)
+        if candidate_chars <= max_chars:
+            return candidate, {
+                "compacted": True,
+                "compaction_level": 4,
+                "input_chars": candidate_chars,
+                "input_char_guard": max_chars,
+                "input_budget_tokens": self._input_budget_tokens(),
+            }
 
         raise RuntimeError(
             "Structured finalizer input cannot fit the deterministic context guard without "
