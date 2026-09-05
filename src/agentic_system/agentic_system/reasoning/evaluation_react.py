@@ -37,12 +37,24 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
 
 
 class SpecialistReActExecutor(_ProductionSpecialistReActExecutor):
-    """Evaluation adapter that changes only specialist sampling temperature.
+    """Evaluation adapter for controlled specialist configuration experiments.
 
-    With AGENT_REASONING_TEMPERATURE=0 this is behaviourally equivalent to the
-    production specialist reasoning/finalization path. The evaluation harness can
-    raise the value without changing Technical Lead or Qwen tool-selection sampling.
+    With AGENT_REASONING_TEMPERATURE=0 the specialist reasoning/finalization path
+    remains equivalent to production sampling. The adapter also exposes the
+    detector-aligned NETLAT metric name to the existing deterministic metric
+    binding logic so a metric_history request on a NETLAT incident can call the
+    same get_metrics tool used for CPU/RAM without asking Qwen to invent the
+    measurement name.
     """
+
+    @staticmethod
+    def _metric_name_from_assignment(assignment: dict[str, Any]) -> str | None:
+        anchor = assignment.get("incident_anchor")
+        if isinstance(anchor, dict):
+            signal = str(anchor.get("observed_signal") or "").strip().lower()
+            if signal == "network_transport_latency":
+                return "network_transport_latency"
+        return _ProductionSpecialistReActExecutor._metric_name_from_assignment(assignment)
 
     async def _native_reasoning_request(
         self,
