@@ -1,10 +1,10 @@
 # DevOps
 
-The project uses lightweight DevOps practices to keep the thesis prototype reproducible and easy to validate. The current workflow focuses on containerised execution, controlled configuration, repeatable experiments, pull-request validation, automatic releases, and automatic documentation deployment.
+The project uses lightweight DevOps practices to keep the thesis prototype reproducible, testable, and easy to publish. The current workflow combines containerised execution, controlled configuration, layered tests, pull-request checks, automatic releases, and automatic documentation deployment.
 
 ## 1. Container strategy
 
-The project uses two independent Docker Compose projects.
+The runtime uses two independent Docker Compose projects.
 
 ### Agentic infrastructure
 
@@ -12,7 +12,7 @@ The project uses two independent Docker Compose projects.
 agentic-proactive-monitor-infrastructure
 ```
 
-This project contains the monitoring and support services, including OpenSearch, OpenSearch Dashboards, Qdrant, Open WebUI, Prosody/XMPP, MCP Server, the knowledge-base web interface, bootstrap services, and the operator dashboard.
+This project contains the monitoring and agentic services, including OpenSearch, OpenSearch Dashboards, Qdrant, MongoDB, Open WebUI, Prosody/XMPP, MCP Server, the knowledge-base services, the agentic backend, the operator dashboard, and bootstrap containers.
 
 ### Monitored workload
 
@@ -28,49 +28,47 @@ This project contains only the application under observation:
 - `data-service`;
 - `worker-service`.
 
-The two projects are connected only through the shared observability network:
+The two projects communicate through the shared observability network:
 
 ```text
 agentic-monitoring-net
 ```
 
-The monitored services also use their own private application network.
+The monitored services also use a private application network for their internal request path.
 
 ## 2. Native Ollama deployment
 
-Ollama is intentionally not part of Docker Compose. It runs directly on Windows so local language models can use the NVIDIA GPU independently from the Docker Desktop backend.
+Ollama is intentionally outside Docker Compose. It runs directly on Windows so local models can use the NVIDIA GPU independently from the Docker Desktop Linux environment.
 
-The infrastructure reaches Ollama through:
+Containers access it through:
 
 ```text
 http://host.docker.internal:11434
 ```
 
-This separation also allows the monitored network-latency scenario to use the Docker Linux environment required by `tc/netem` without coupling GPU inference to that runtime.
+The model names are configuration values, allowing the reasoning and tool models to be changed without modifying the multi-agent architecture.
 
 ## 3. Configuration management
 
-Runtime values are kept in environment variables and `.env.example` files.
+Runtime values are defined through environment variables and `.env.example` files.
 
-The repository should contain safe defaults and examples only. Real secrets, tokens, and local credentials must not be committed.
-
-Typical local preparation from PowerShell is:
+A typical local preparation step from PowerShell is:
 
 ```powershell
 cd .\src\infrastructure
-Copy-Item .env.example .env
+Copy-Item .env.example .env -ErrorAction SilentlyContinue
 ```
 
-The same principle is used for the standalone monitored system.
+The same principle is used for the monitored system. Local credentials and secrets should be replaced before non-local use.
 
-## 4. Startup order
+## 4. Local startup
 
-The expected local startup sequence is:
+The normal startup sequence is:
 
-1. start native Ollama on Windows;
+1. start Ollama on Windows and ensure the required models are available;
 2. start the agentic infrastructure;
 3. start the monitored Notes Platform;
-4. verify telemetry and detector bootstrap.
+4. verify container health, telemetry, knowledge ingestion, and detector bootstrap.
 
 From PowerShell:
 
@@ -82,42 +80,44 @@ cd ..\monitored_system
 docker compose up -d --build
 ```
 
-The infrastructure is started first because it creates the shared observability network used by the monitored system.
+The infrastructure creates the shared observability network used by the monitored system.
 
 ## 5. Health checks and bootstrap services
 
-Long-running infrastructure containers use Docker health checks where useful.
+Long-running services expose Docker health checks where useful.
 
-One-shot bootstrap services prepare:
+One-shot bootstrap containers prepare:
 
 - OpenSearch index templates;
-- Qdrant collection configuration;
+- Qdrant collections;
+- knowledge-base ingestion;
+- XMPP accounts and certificates;
 - OpenSearch Dashboards data views;
 - OpenSearch Anomaly Detection detectors.
 
-This avoids requiring the developer to manually recreate the monitoring environment after a clean deployment.
+This makes a clean local deployment reproducible without manual recreation of monitoring objects.
 
 ## 6. Reproducible fault experiments
 
-Controlled failure scenarios are stored with the monitored workload rather than inside the agentic infrastructure.
-
-Scenario control is implemented with PowerShell scripts so experiments can be repeated from the Windows development environment.
+Fault scenarios are stored with the monitored workload rather than inside the agentic backend.
 
 A common reset command is:
 
 ```powershell
+cd .\src\monitored_system
 .\infrastructure\scenarios\reset-to-base.ps1
 ```
 
-Detector experiments include an explicit recovery window because OpenSearch Anomaly Detection uses an adaptive model. Repeating a synthetic fault immediately after recovery is not considered equivalent to testing a static threshold.
+Detector experiments include recovery periods because OpenSearch Anomaly Detection uses an adaptive model. Repeating a fault immediately after a previous anomaly would not be equivalent to testing an independent static threshold.
 
-## 7. Automated monitored-system tests
+## 7. Monitored-system test runner
 
 The monitored-system test runner is implemented in PowerShell.
 
 Examples:
 
 ```powershell
+cd .\src\monitored_system
 .\infrastructure\tests\run-tests.ps1 -Test preflight
 .\infrastructure\tests\run-tests.ps1 -Test cpu-spike
 .\infrastructure\tests\run-tests.ps1 -Test memory-leak
@@ -125,96 +125,151 @@ Examples:
 .\infrastructure\tests\run-tests.ps1 -Test all
 ```
 
-The test suite validates both infrastructure conditions and experimental behaviour. It also checks that all OpenSearch detectors are `SINGLE_ENTITY`.
+The suite validates infrastructure conditions, telemetry, scenario behaviour, detector results, recovery, and the invariant that all anomaly detectors are `SINGLE_ENTITY`.
 
-Generated experimental outputs are kept outside version control so the repository contains source and test definitions rather than local experiment results.
+Generated local experiment outputs are excluded from version control where appropriate.
 
-## 8. Git workflow
+## 8. Agentic backend test strategy
 
-Development is organised through feature branches and pull requests.
-
-Relevant development branches have been used to isolate work on:
-
-- infrastructure cleanup;
-- monitored system;
-- MCP Server;
-- operator dashboard;
-- agentic backend;
-- documentation and release automation.
-
-Pull requests provide a clear integration point before changes reach `main`.
-
-## 9. Conventional Commits validation
-
-Pull requests targeting `main` run the `Validate Commits` GitHub Actions workflow.
-
-The workflow installs the Node.js project dependencies and executes Commitlint against all commits introduced by the pull request.
-
-The project therefore uses Conventional Commit-style messages such as:
+The backend test suite is separated by responsibility:
 
 ```text
-feat: add diagnostic tool
-fix: correct detector configuration
-docs: update architecture documentation
+tests/unit/         isolated project logic
+tests/integration/  running infrastructure interactions
+tests/e2e/          Gherkin acceptance scenarios
 ```
 
-## 10. Automatic releases
+### Unit tests
 
-Every push to `main` triggers the `Release` workflow.
+Unit tests cover areas such as:
 
-The current release strategy is intentionally simple for the thesis repository:
+- AgentSpeak BDI execution;
+- incident and task state machines;
+- anomaly intake and recovery;
+- detector-focus metadata;
+- ReAct evidence contracts;
+- tool schema and target validation;
+- peer collaboration;
+- Technical Lead triage and review;
+- persistence and reporting logic.
 
-- if no release tag exists, the workflow uses the version stored in `package.json`;
-- otherwise, it increments the patch component of the latest `vMAJOR.MINOR.PATCH` tag;
-- GitHub creates and publishes the release;
-- release notes are generated automatically.
+They do not require the Docker stack.
 
-Example sequence:
+### Integration tests
+
+Integration tests exercise real infrastructure boundaries, including XMPP communication, MCP discovery, MongoDB persistence, FastAPI reads, runtime services, and model routing.
+
+The expensive live model-routing test is opt-in and verifies:
 
 ```text
-v1.0.0
-v1.0.1
-v1.0.2
-...
+Gemma reasoning -> Qwen tool selection -> SPADE-LLM MCP execution
 ```
 
-The workflow uses the GitHub-provided token and requires repository `contents: write` permission.
+### End-to-end tests
 
-## 11. Documentation deployment
+End-to-end tests use Gherkin scenarios through `pytest-bdd` and validate externally observable backend and operator behaviour against the running stack.
 
-The documentation site is built with VitePress.
+## 9. Running backend tests locally
+
+From Windows PowerShell:
+
+```powershell
+cd .\src\agentic_system
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[test]"
+
+python -m pytest tests\unit
+python -m pytest tests\integration -m integration
+python -m pytest tests\e2e -m e2e
+```
+
+Integration and e2e suites require the necessary Docker services and Ollama models.
+
+To run the live routing integration test:
+
+```powershell
+$env:RUN_LIVE_MODEL_ROUTING = "1"
+python -m pytest tests\integration\test_live_model_routing.py -v
+```
+
+## 10. GitHub Actions backend unit tests
+
+The repository contains an `Agentic Backend Unit Tests` workflow.
+
+For relevant backend changes it:
+
+```text
+checkout
+  -> Python 3.12
+  -> pip install -e ".[test]"
+  -> pytest tests/unit -v
+```
+
+Hosted CI runs the isolated unit suite, while Docker-, network-, GPU-, and live-model-dependent checks remain local or explicitly opt-in.
+
+## 11. Git workflow
+
+Development is organised through feature branches and pull requests. `main` is the integration baseline, while dedicated branches are used for focused work such as the agentic backend and documentation.
+
+Documentation is maintained on the `docs` branch and merged into `main` when ready for publication.
+
+## 12. Conventional Commits validation
+
+Pull requests targeting `main` run the `Validate Commits` workflow.
+
+Commit messages follow Conventional Commit-style prefixes such as:
+
+```text
+feat: add diagnostic capability
+fix: correct incident recovery
+docs: update backend architecture
+```
+
+This keeps change history easier to read and supports automated release notes.
+
+## 13. Automatic releases
+
+Every push to `main` triggers the release workflow.
+
+The strategy is intentionally simple for the thesis repository:
+
+- if no version tag exists, use the version in `package.json`;
+- otherwise increment the patch component of the latest semantic version;
+- create and publish a GitHub Release;
+- generate release notes automatically.
+
+The workflow uses the repository-provided GitHub token with `contents: write` permission.
+
+## 14. Documentation deployment
+
+The documentation website is built with VitePress.
 
 Changes under `docs/**` on `main` trigger the GitHub Pages workflow:
 
 ```text
 checkout
-  -> setup Node.js 24
-  -> install docs dependencies
+  -> setup Node.js
+  -> install documentation dependencies
   -> build VitePress
   -> upload Pages artifact
   -> deploy GitHub Pages
 ```
 
-The VitePress build output is:
+The build output is:
 
 ```text
 docs/.vitepress/dist
 ```
 
-The project site is configured for the repository base path:
+and the configured repository base path is:
 
 ```text
 /AgenticProactiveMonitor/
 ```
 
-## 12. Current CI/CD scope
+## 15. CI/CD boundary
 
-The current GitHub automation focuses on repository quality and publishing. Full integration tests of the Docker-based monitoring environment are not yet executed by hosted GitHub Actions because the thesis experiments depend on a local Docker Desktop environment and, for some scenarios, specific network and GPU behaviour.
+The project deliberately separates fast hosted checks from environment-dependent thesis experiments.
 
-For this reason, the current approach is:
-
-- GitHub Actions for commit validation, releases, and documentation publishing;
-- local PowerShell tests for monitored-system and anomaly-detection experiments;
-- pytest for the MCP Server tool layer.
-
-This separation keeps automated repository checks fast while preserving realistic experimental validation on the target development environment.
+GitHub Actions currently covers repository-level checks, backend unit tests, releases, and documentation publishing. Full Docker integration, controlled fault injection, `tc/netem` behaviour, and real local-model evaluation depend on the target Windows/Docker/Ollama environment and are therefore executed locally with repeatable commands.
