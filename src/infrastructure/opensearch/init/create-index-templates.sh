@@ -65,6 +65,7 @@ cat >/tmp/metrics-template.json <<'JSON'
             "container_image": {"type": "keyword"},
             "container_status": {"type": "keyword"},
             "network_target": {"type": "keyword"},
+            "application_target": {"type": "keyword"},
             "url": {"type": "keyword"},
             "server": {"type": "keyword"},
             "port": {"type": "keyword"},
@@ -140,12 +141,21 @@ cat >/tmp/metrics-template.json <<'JSON'
             "result_code": {"type": "integer"}
           }
         },
-        "network_service_latency": {
+        "network_transport_latency": {
           "type": "object",
           "dynamic": true,
           "properties": {
             "response_time": {"type": "float"},
             "result_code": {"type": "integer"}
+          }
+        },
+        "application_service_latency": {
+          "type": "object",
+          "dynamic": true,
+          "properties": {
+            "response_time": {"type": "float"},
+            "result_code": {"type": "integer"},
+            "response_status_code": {"type": "integer"}
           }
         },
         "docker_container_net": {"type": "object", "dynamic": true},

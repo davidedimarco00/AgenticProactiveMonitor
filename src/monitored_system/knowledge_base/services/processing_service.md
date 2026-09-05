@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.processing-service
-version: 2
+version: 3
 domain: monitored_system
 document_type: service-reference
 roles:
@@ -91,21 +91,39 @@ The presence of an error in processing-service logs therefore describes where th
 
 ## Network observations
 
-The configured dependency probe is:
+The configured downstream target is:
 
 ```text
 source: processing-service
 target: data-service:8000
-HTTP path: /docs
 ```
 
-The corresponding detector is:
+Transport-level telemetry for this link is:
+
+```text
+measurement: network_transport_latency
+field:       network_transport_latency.response_time
+target tag:  tag.network_target = data-service
+```
+
+This is TCP connection-establishment timing and is the telemetry used by the corresponding SINGLE_ENTITY detector:
 
 ```text
 NETLAT-processing-service-data-service
 ```
 
-It is SINGLE_ENTITY and represents only this source/link.
+Application-service timing is collected separately with an HTTP probe to `/docs`:
+
+```text
+measurement: application_service_latency
+field:       application_service_latency.response_time
+```
+
+The corresponding application-latency detector is:
+
+```text
+APPLAT-processing-service-data-service
+```
 
 ## Resource telemetry
 
@@ -129,7 +147,8 @@ Application timing and network timing are distinct observations:
 
 - api-gateway `downstream_request_completed.latency_ms` measures the complete call from api-gateway to processing-service;
 - processing-service `downstream_request_completed.latency_ms` measures the call from processing-service to data-service;
-- `network_service_latency.response_time` measures the configured active service probe;
+- `network_transport_latency.response_time` measures TCP connection-establishment latency for the configured target;
+- `application_service_latency.response_time` measures the configured HTTP service-probe response time;
 - `ping` measures ICMP timing.
 
 These values can overlap in time but they represent different parts of the request and observation path.

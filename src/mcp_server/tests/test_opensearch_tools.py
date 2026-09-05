@@ -41,6 +41,7 @@ def test_get_metrics_returns_detector_aligned_transport_latency(mcp_client):
 
     assert payload["host_id"] == "api-gateway"
     assert payload["target_host"] == "processing-service"
+    assert payload["observed_network_target"] == "processing-service"
     assert payload["metric"] == "network_transport_latency"
     assert payload["measurement_name"] == "network_transport_latency"
     assert payload["field"] == "network_transport_latency.response_time"
