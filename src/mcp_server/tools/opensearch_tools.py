@@ -20,7 +20,7 @@ TransportTargetHostId = Literal[
     "data-service",
 ]
 
-MetricName = Literal["cpu", "memory"]
+MetricName = Literal["cpu", "memory", "network_transport_latency"]
 LogLevel = Literal["ALL", "DEBUG", "INFO", "WARN", "ERROR"]
 LogSource = Literal["all", "application", "system"]
 TimeWindowMinutes = Annotated[int, Field(ge=1, le=120)]
@@ -32,11 +32,9 @@ OPENSEARCH_URL = os.getenv(
     "http://opensearch:9200",
 ).rstrip("/")
 
-# These definitions intentionally match the SINGLE_ENTITY CPU/RAM detector
-# inputs created by infrastructure/opensearch/init/create-anomaly-detectors.sh.
-# A specialist investigating a detector therefore reads the same telemetry
-# quantity that OpenSearch marked as anomalous instead of silently switching to
-# host-level inputs.cpu / inputs.mem measurements.
+# These definitions intentionally match the fields used by the implemented
+# SINGLE_ENTITY OpenSearch detectors. A specialist therefore reads the same
+# telemetry quantity that the detector marked as anomalous.
 METRICS = {
     "cpu": {
         "measurement": "docker_container_cpu",
@@ -50,13 +48,12 @@ METRICS = {
         "unit": "percent",
         "scope": "container",
     },
-}
-
-TRANSPORT_LATENCY_METRIC = {
-    "measurement": "network_transport_latency",
-    "field": "network_transport_latency.response_time",
-    "unit": "seconds",
-    "scope": "service_path",
+    "network_transport_latency": {
+        "measurement": "network_transport_latency",
+        "field": "network_transport_latency.response_time",
+        "unit": "seconds",
+        "scope": "service_path",
+    },
 }
 
 
@@ -82,15 +79,31 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
     async def get_metrics(
         host_id: HostId,
         metric: MetricName,
+        target_host: TransportTargetHostId | None = None,
         minutes: TimeWindowMinutes = 15,
     ) -> dict:
         """
-        Retrieve recent detector-aligned container CPU or memory metrics for one
-        monitored service. These are the same telemetry fields used by the
-        SINGLE_ENTITY CPU/RAM OpenSearch anomaly detectors. The tool is read-only.
+        Retrieve recent detector-aligned telemetry from OpenSearch.
+
+        CPU and memory read the exact container fields used by the SINGLE_ENTITY
+        CPU/RAM detectors. network_transport_latency reads the exact Layer-4
+        response_time field used by NETLAT and additionally requires target_host
+        so the requested source-to-target path is preserved. The tool is read-only.
         """
         if minutes < 1 or minutes > 120:
             raise ValueError("minutes must be between 1 and 120")
+
+        is_transport = metric == "network_transport_latency"
+        if is_transport and not target_host:
+            raise ValueError(
+                "target_host is required when metric is network_transport_latency"
+            )
+        if not is_transport and target_host is not None:
+            raise ValueError(
+                "target_host is only valid when metric is network_transport_latency"
+            )
+        if target_host is not None and host_id == target_host:
+            raise ValueError("host_id and target_host must identify different services")
 
         metric_config = METRICS[metric]
         measurement = metric_config["measurement"]
@@ -99,26 +112,28 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
         scope = metric_config["scope"]
         index_pattern = f"metrics-{host_id}-*"
 
-        query = {
-            "size": 1,
-            "_source": ["@timestamp", field],
-            "sort": [{"@timestamp": {"order": "desc"}}],
-            "query": {
-                "bool": {
-                    "filter": [
-                        {
-                            "range": {
-                                "@timestamp": {
-                                    "gte": f"now-{minutes}m",
-                                    "lte": "now",
-                                }
-                            }
-                        },
-                        {"term": {"measurement_name": measurement}},
-                        {"exists": {"field": field}},
-                    ]
+        filters = [
+            {
+                "range": {
+                    "@timestamp": {
+                        "gte": f"now-{minutes}m",
+                        "lte": "now",
+                    }
                 }
             },
+            {"term": {"measurement_name": measurement}},
+            {"exists": {"field": field}},
+        ]
+        source_fields = ["@timestamp", field]
+        if is_transport:
+            filters.append({"term": {"network_target": target_host}})
+            source_fields.append("network_target")
+
+        query = {
+            "size": 1,
+            "_source": source_fields,
+            "sort": [{"@timestamp": {"order": "desc"}}],
+            "query": {"bool": {"filter": filters}},
             "aggs": {
                 "statistics": {"stats": {"field": field}},
                 "timeline": {
@@ -143,24 +158,50 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
 
         latest_timestamp = None
         latest_value = None
+        observed_network_target = None
         if hits:
             source = hits[0].get("_source", {})
             latest_timestamp = source.get("@timestamp")
             latest_value = _nested_value(source, field)
+            observed_network_target = source.get("network_target")
 
         timeline = []
         for bucket in result["aggregations"]["timeline"]["buckets"]:
             value = bucket["value"]["value"]
-            timeline.append(
+            item = {
+                "timestamp": bucket["key_as_string"],
+                "value": round(value, 6) if value is not None else None,
+            }
+            if is_transport:
+                item["value_ms"] = _milliseconds(value)
+            timeline.append(item)
+
+        summary = {
+            "latest_timestamp": latest_timestamp,
+            "latest": (
+                round(latest_value, 6)
+                if isinstance(latest_value, (int, float))
+                else latest_value
+            ),
+            "average": round(stats["avg"], 6) if stats["avg"] is not None else None,
+            "minimum": round(stats["min"], 6) if stats["min"] is not None else None,
+            "maximum": round(stats["max"], 6) if stats["max"] is not None else None,
+        }
+        if is_transport:
+            summary.update(
                 {
-                    "timestamp": bucket["key_as_string"],
-                    "value": round(value, 2) if value is not None else None,
+                    "latest_ms": _milliseconds(latest_value),
+                    "average_ms": _milliseconds(stats["avg"]),
+                    "minimum_ms": _milliseconds(stats["min"]),
+                    "maximum_ms": _milliseconds(stats["max"]),
                 }
             )
 
         return {
             "status": "ok",
             "host_id": host_id,
+            "target_host": target_host,
+            "observed_network_target": observed_network_target,
             "metric": metric,
             "measurement_name": measurement,
             "field": field,
@@ -169,142 +210,7 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
             "detector_aligned": True,
             "window_minutes": minutes,
             "samples": stats["count"],
-            "summary": {
-                "latest_timestamp": latest_timestamp,
-                "latest": (
-                    round(latest_value, 2)
-                    if isinstance(latest_value, (int, float))
-                    else latest_value
-                ),
-                "average": round(stats["avg"], 2) if stats["avg"] is not None else None,
-                "minimum": round(stats["min"], 2) if stats["min"] is not None else None,
-                "maximum": round(stats["max"], 2) if stats["max"] is not None else None,
-            },
-            "timeline": timeline,
-        }
-
-    @mcp.tool()
-    async def get_transport_latency(
-        host_id: HostId,
-        target_host: TransportTargetHostId,
-        minutes: TimeWindowMinutes = 15,
-    ) -> dict:
-        """
-        Retrieve detector-aligned Layer-4 transport latency for one monitored
-        source-to-target service path from OpenSearch. The returned response_time
-        field is the same field used by the SINGLE_ENTITY NETLAT detectors.
-        Values are returned in detector-native seconds and also converted to
-        milliseconds for direct diagnostic interpretation. The tool is read-only.
-        """
-        if minutes < 1 or minutes > 120:
-            raise ValueError("minutes must be between 1 and 120")
-        if host_id == target_host:
-            raise ValueError("host_id and target_host must identify different services")
-
-        measurement = TRANSPORT_LATENCY_METRIC["measurement"]
-        field = TRANSPORT_LATENCY_METRIC["field"]
-        unit = TRANSPORT_LATENCY_METRIC["unit"]
-        scope = TRANSPORT_LATENCY_METRIC["scope"]
-        index_pattern = f"metrics-{host_id}-*"
-
-        query = {
-            "size": 1,
-            "_source": ["@timestamp", "network_target", field],
-            "sort": [{"@timestamp": {"order": "desc"}}],
-            "query": {
-                "bool": {
-                    "filter": [
-                        {
-                            "range": {
-                                "@timestamp": {
-                                    "gte": f"now-{minutes}m",
-                                    "lte": "now",
-                                }
-                            }
-                        },
-                        {"term": {"measurement_name": measurement}},
-                        {"term": {"network_target": target_host}},
-                        {"exists": {"field": field}},
-                    ]
-                }
-            },
-            "aggs": {
-                "statistics": {"stats": {"field": field}},
-                "timeline": {
-                    "date_histogram": {
-                        "field": "@timestamp",
-                        "fixed_interval": "1m",
-                        "min_doc_count": 1,
-                    },
-                    "aggs": {"value": {"avg": {"field": field}}},
-                },
-            },
-        }
-
-        url = f"{OPENSEARCH_URL}/{index_pattern}/_search?ignore_unavailable=true"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(url, json=query)
-            response.raise_for_status()
-            result = response.json()
-
-        stats = result["aggregations"]["statistics"]
-        hits = result.get("hits", {}).get("hits", [])
-
-        latest_timestamp = None
-        latest_target = None
-        latest_value = None
-        if hits:
-            source = hits[0].get("_source", {})
-            latest_timestamp = source.get("@timestamp")
-            latest_target = source.get("network_target")
-            latest_value = _nested_value(source, field)
-
-        timeline = []
-        for bucket in result["aggregations"]["timeline"]["buckets"]:
-            value = bucket["value"]["value"]
-            rounded = round(value, 6) if value is not None else None
-            timeline.append(
-                {
-                    "timestamp": bucket["key_as_string"],
-                    "value_seconds": rounded,
-                    "value_ms": _milliseconds(value),
-                }
-            )
-
-        return {
-            "status": "ok",
-            "host_id": host_id,
-            "target_host": target_host,
-            "observed_network_target": latest_target,
-            "metric": "transport_latency",
-            "measurement_name": measurement,
-            "field": field,
-            "unit": unit,
-            "scope": scope,
-            "detector_aligned": True,
-            "window_minutes": minutes,
-            "samples": stats["count"],
-            "summary": {
-                "latest_timestamp": latest_timestamp,
-                "latest_seconds": (
-                    round(latest_value, 6)
-                    if isinstance(latest_value, (int, float))
-                    else latest_value
-                ),
-                "latest_ms": _milliseconds(latest_value),
-                "average_seconds": (
-                    round(stats["avg"], 6) if stats["avg"] is not None else None
-                ),
-                "average_ms": _milliseconds(stats["avg"]),
-                "minimum_seconds": (
-                    round(stats["min"], 6) if stats["min"] is not None else None
-                ),
-                "minimum_ms": _milliseconds(stats["min"]),
-                "maximum_seconds": (
-                    round(stats["max"], 6) if stats["max"] is not None else None
-                ),
-                "maximum_ms": _milliseconds(stats["max"]),
-            },
+            "summary": summary,
             "timeline": timeline,
         }
 
