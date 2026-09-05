@@ -1,104 +1,135 @@
-# Automated Evaluation Harness
+# Automated Diagnostic Evaluation Harness
 
 This directory contains the thesis evaluation harness for the `evaluation` branch.
-It does not replace the existing monitored-system fault scripts. Instead, it orchestrates them, waits for the real OpenSearch anomaly, waits for the agentic diagnosis, stores the raw evidence, and computes the metrics used in Chapter 4.
 
-## Scope
+The evaluation now isolates the **agentic diagnosis** from OpenSearch detector quality:
 
-The main campaign evaluates three controlled scenarios:
+- the controlled fault is real and remains active during the diagnosis;
+- the anomaly that starts the incident is injected synthetically through the backend test API;
+- the OpenSearch anomaly watcher is disabled for the evaluation backend;
+- OpenSearch remains available as a telemetry source for MCP diagnostic tools;
+- MongoDB persistence, FIFO admission, incident creation, Technical Lead BDI, XMPP delegation, specialist BDI, ReAct execution, peer collaboration, RAG, MCP evidence collection and Technical Lead review remain real.
+
+This design avoids measuring Random Cut Forest detection latency when the research question concerns diagnostic quality.
+
+## Main scenarios
+
+The baseline campaign uses:
 
 - `cpu-spike` on `processing-service`;
 - `memory-leak` on `worker-service`;
 - `network-latency` from `api-gateway` to `processing-service`.
 
-The harness checks the complete current detector set before starting: 5 CPU + 5 RAM + 3 NETLAT + 3 APPLAT detectors. Every detector must be `SINGLE_ENTITY` and `RUNNING`.
+The existing fault scripts under `src/monitored_system/infrastructure/scenarios/` are reused. They are not duplicated by the evaluation harness.
 
-The main metrics are:
+## Metrics
 
-- Detection Rate and Time-to-Detect (TTD);
-- Location Accuracy (LA) and Type Accuracy (TA);
-- Evidence Coverage and Diagnostic Score;
-- diagnosis time, ReAct steps, and tool calls;
+The main diagnostic metrics are:
+
+- Location Accuracy (LA);
+- Type Accuracy (TA);
+- Evidence Coverage;
+- Diagnostic Score;
+- diagnosis time from synthetic trigger to terminal incident;
+- ReAct steps;
+- tool calls;
 - Tool Sequence Similarity (TSS);
 - Argument Consistency (AC);
 - Divergence Point;
 - Structured Diagnosis Agreement.
 
+Detection Rate, Time-to-Detect, anomaly grade, detector confidence and detector score are intentionally **not evaluation metrics** in this campaign because the anomaly trigger is synthetic.
+
 The scoring rules are deterministic and are defined in `config/ground-truth.json`. No LLM is used as an evaluation judge.
 
-## Important experimental controls
+## Experimental controls
 
 For comparable runs the harness keeps the following conditions fixed:
 
-- fault parameters;
-- OpenSearch detector configuration;
+- real fault parameters;
+- fault stabilization time before the synthetic trigger;
 - prompts and agent coordination logic;
 - MCP tools;
-- Qdrant knowledge base and embedding model;
+- Qdrant knowledge base;
+- embedding model;
 - reasoning temperature;
-- recovery period;
 - maximum ReAct steps;
-- hardware environment.
+- hardware environment;
+- runtime recovery between runs.
 
-The backend is recreated before each measured run so in-memory agent state is reset. Ollama models are warmed before the clean detector recovery window. Automatic fallback is not used: if the selected model fails, the failure remains visible in the experiment.
+Automatic model fallback is not used. A selected model failure remains visible as an experimental outcome.
 
-The controlled fault remains active until the agentic incident reaches a terminal state. This is intentional: the specialist must inspect the actual faulty runtime state rather than a system that has already recovered.
+The backend is recreated before each run with:
 
-## Requirements
-
-Run the harness from Windows PowerShell. The following commands must be available:
-
-```powershell
-git --version
-docker --version
-docker compose version
-python --version
-ollama list
+```text
+ENABLE_TEST_ANOMALY_INJECTION=1
+ENABLE_OPENSEARCH_ANOMALY_WATCHER=0
 ```
 
-Ollama must already be running on the Windows host.
+through the existing `src/infrastructure/docker-compose.test.yml` overlay.
 
-The current baseline profile follows the `evaluation` branch configuration:
+## Baseline model profile
 
 ```text
 reasoning: gemma4:e4b
 tool:      qwen3.5:4b
 embedding: ibm/granite-embedding:30m
+temperature: 0
 ```
 
-The preflight stops immediately if one of the configured models is not installed. This is deliberate: the evaluation never substitutes another model silently.
+All configured models must already be installed in Ollama.
 
 ## First preparation
 
-From the repository root:
+Run from Windows PowerShell in the repository root:
 
 ```powershell
 git switch evaluation
 git pull
+
 .\evaluation\scripts\Invoke-Evaluation.ps1 -PrepareEnvironment -PreflightOnly
 ```
 
-`-PrepareEnvironment` starts/recreates the required infrastructure, starts the monitored system in the base scenario, and starts the detector-initialisation service. On a fresh OpenSearch volume, the detector initialisation needs the configured normal baseline before all detectors can become available, so the first preparation can take significantly longer than later runs.
+The preflight checks:
 
-If the complete infrastructure is already running and all detectors already have their baseline, use:
+- Git branch;
+- Docker and Python;
+- configured Ollama models;
+- OpenSearch availability for telemetry;
+- backend health;
+- monitored API Gateway health;
+- availability of the synthetic anomaly injection route;
+- absence of non-terminal incidents.
 
-```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1 -PreflightOnly
-```
+It does **not** wait for OpenSearch anomaly detectors and does not inject a fault.
 
 ## Recommended smoke test
 
-Before the final campaign, execute one CPU run with a short development recovery window:
+Before the thesis measurements, execute one CPU diagnostic run:
 
 ```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario cpu-spike -Repetitions 1 -RecoveryMinutes 2
+.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario cpu-spike -Repetitions 1 -RecoverySeconds 10
 ```
 
-This smoke test is for validating the harness only. Do not use its result as a final thesis measurement.
+The smoke test validates the complete path:
+
+```text
+real CPU fault
+    -> synthetic SINGLE_ENTITY anomaly trigger
+    -> durable incident
+    -> Technical Lead BDI
+    -> specialist selection and XMPP dispatch
+    -> live MCP/RAG evidence
+    -> ReAct diagnosis
+    -> Technical Lead review
+    -> scoring
+```
+
+Do not include the smoke-test result in the final thesis measurements.
 
 ## Final baseline campaign
 
-The default `baseline` campaign executes the three main scenarios five times each with a 10-minute clean recovery period:
+The default baseline campaign executes all three scenarios five times:
 
 ```powershell
 .\evaluation\scripts\Invoke-Evaluation.ps1
@@ -107,16 +138,44 @@ The default `baseline` campaign executes the three main scenarios five times eac
 Equivalent explicit command:
 
 ```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1 -Campaign baseline -Scenario all -Repetitions 5 -RecoveryMinutes 10
+.\evaluation\scripts\Invoke-Evaluation.ps1 `
+    -Campaign baseline `
+    -Scenario all `
+    -Repetitions 5 `
+    -RecoverySeconds 30
 ```
 
-The complete campaign intentionally takes a long time because detector recovery is part of the experimental control.
-
-You can run one scenario only:
+A single scenario can be evaluated with:
 
 ```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario memory-leak -Repetitions 5
+.\evaluation\scripts\Invoke-Evaluation.ps1 `
+    -Scenario memory-leak `
+    -Repetitions 5
 ```
+
+Because detector waiting has been removed, the campaign is substantially faster than the previous detector-inclusive version.
+
+## Run lifecycle
+
+Each measured run performs:
+
+```text
+reset monitored system
+    -> recreate evaluation backend
+    -> warm local models
+    -> short runtime recovery
+    -> start REAL controlled fault
+    -> wait scenario-specific stabilization time
+    -> inject SYNTHETIC anomaly
+    -> wait for incident
+    -> keep fault active while agents diagnose
+    -> collect final incident and ReAct evidence
+    -> stop fault
+    -> reset monitored system
+    -> score run
+```
+
+The synthetic anomaly contains the same kind of single-entity symptom and entity information that starts the production workflow, but it is not treated as evidence that the fault exists. Runtime claims must still be supported by live MCP observations.
 
 ## Results
 
@@ -129,13 +188,13 @@ evaluation/results/
 Example:
 
 ```text
-evaluation/results/baseline-20260905-101500/
+evaluation/results/baseline-20260905-120000/
     campaign-metadata.json
     baseline/
         cpu-spike/
             run-01/
                 metadata.json
-                detection.json
+                trigger.json
                 incident.json
                 scores.json
             ...
@@ -146,12 +205,18 @@ evaluation/results/baseline-20260905-101500/
     model-comparison.csv
 ```
 
-The raw incident file contains the incident timeline and durable tasks returned by the backend API. The `SPECIALIST_INVESTIGATION_COMPLETED` timeline event contains the structured ReAct outcome, including the complete evidence list, tool sequence information, tool arguments, observations, diagnosis status, root cause, causal chain, findings, and ReAct step count.
+`trigger.json` records the synthetic anomaly request and backend acceptance.
 
-`summary.csv` is the main table-oriented export for Chapter 4. `model-comparison.csv` aggregates the same measurements by model profile; initially it contains the baseline profile and becomes useful when explicit alternative profiles are added to `config/model-profiles.json`.
+`incident.json` contains the durable incident, timeline and tasks returned by the backend API. The specialist completion events preserve structured ReAct outcomes, evidence, tools, arguments, observations and ReAct step counts.
+
+`summary.csv` aggregates the thesis metrics by scenario.
+
+`model-comparison.csv` aggregates diagnostic measurements by model profile. Reproducibility metrics are not mixed across different fault scenarios.
 
 ## Evaluation integrity
 
 Do not edit `ground-truth.json` after inspecting measured results. If a scoring rule must be changed for a methodological reason, document the change and rerun the affected campaign.
 
-Do not delete failed or missed runs. Detector misses, diagnosis timeouts, task failures, and inconsistent trajectories are experimental outcomes and must remain part of the dataset.
+Do not delete failed, timed-out or inconclusive runs. They are part of the experimental dataset.
+
+The thesis must explicitly state that OpenSearch anomaly detection is part of the implemented architecture but is not experimentally evaluated in this campaign. Synthetic anomaly injection is used to isolate the diagnostic subsystem while the underlying faults and diagnostic evidence remain real.
