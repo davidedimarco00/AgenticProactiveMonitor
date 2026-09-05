@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.api-gateway
-version: 2
+version: 3
 domain: monitored_system
 document_type: service-reference
 roles:
@@ -80,23 +80,41 @@ Therefore the HTTP status emitted by the gateway can represent either local gate
 
 ## Network observations
 
-The configured dependency probe is:
+The configured downstream target is:
 
 ```text
 source: api-gateway
 target: processing-service:8000
-HTTP path: /docs
 ```
 
-The corresponding OpenSearch detector is:
+Transport-level telemetry for this link is:
+
+```text
+measurement: network_transport_latency
+field:       network_transport_latency.response_time
+target tag:  tag.network_target = processing-service
+```
+
+This is TCP connection-establishment timing and is the telemetry used by the corresponding SINGLE_ENTITY detector:
 
 ```text
 NETLAT-api-gateway-processing-service
 ```
 
-It is SINGLE_ENTITY and represents only this configured source/link.
+Application-service timing is collected separately with an HTTP probe to `/docs`:
 
-Raw ICMP RTT, `network_service_latency.response_time` and `downstream_request_completed.latency_ms` are different observations: the first is ICMP timing, the second is the configured active service probe, and the third is application-call timing produced by the gateway.
+```text
+measurement: application_service_latency
+field:       application_service_latency.response_time
+```
+
+The corresponding application-latency detector is:
+
+```text
+APPLAT-api-gateway-processing-service
+```
+
+Raw ICMP RTT, `network_transport_latency.response_time`, `application_service_latency.response_time` and `downstream_request_completed.latency_ms` are different observations. They respectively represent ICMP timing, TCP connection establishment, the configured HTTP service probe and application-call timing produced by the gateway.
 
 ## Resource telemetry
 
