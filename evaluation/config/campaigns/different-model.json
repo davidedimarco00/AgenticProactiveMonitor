@@ -3,6 +3,7 @@
   "name": "different-model",
   "profile": "different-model",
   "scenarios": [
+    "cpu-spike",
     "memory-leak",
     "network-latency"
   ],
