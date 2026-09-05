@@ -2,7 +2,7 @@ param(
     [string]$Campaign = "baseline",
     [string]$Scenario = "all",
     [int]$Repetitions = 0,
-    [int]$RecoveryMinutes = -1,
+    [int]$RecoverySeconds = -1,
     [string]$Profile = "",
     [switch]$PrepareEnvironment,
     [switch]$PreflightOnly,
@@ -37,6 +37,7 @@ function Write-Step {
 
 function Get-JsonFile {
     param([string]$Path)
+
     if (-not (Test-Path $Path)) {
         throw "Required file does not exist: $Path"
     }
@@ -48,6 +49,7 @@ function Save-JsonFile {
         [string]$Path,
         [object]$Value
     )
+
     $parent = Split-Path -Parent $Path
     if ($parent -and -not (Test-Path $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -60,6 +62,7 @@ function Get-NamedProperty {
         [object]$Object,
         [string]$Name
     )
+
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) {
         throw "Configuration entry '$Name' was not found."
@@ -69,6 +72,7 @@ function Get-NamedProperty {
 
 function ConvertTo-Hashtable {
     param([object]$Object)
+
     $table = @{}
     if ($null -eq $Object) {
         return $table
@@ -81,6 +85,7 @@ function ConvertTo-Hashtable {
 
 function Assert-Command {
     param([string]$Name)
+
     if ($null -eq (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Required command '$Name' is not available in PATH."
     }
@@ -105,13 +110,21 @@ function Invoke-JsonRequest {
         [string]$Uri,
         [ValidateSet("Get", "Post")]
         [string]$Method = "Get",
-        [object]$Body = $null
+        [object]$Body = $null,
+        [int]$TimeoutSeconds = 60
     )
+
     if ($null -eq $Body) {
-        return Invoke-RestMethod -Uri $Uri -Method $Method -TimeoutSec 30
+        return Invoke-RestMethod -Uri $Uri -Method $Method -TimeoutSec $TimeoutSeconds
     }
+
     $json = $Body | ConvertTo-Json -Depth 100 -Compress
-    return Invoke-RestMethod -Uri $Uri -Method $Method -ContentType "application/json" -Body $json -TimeoutSec 60
+    return Invoke-RestMethod `
+        -Uri $Uri `
+        -Method $Method `
+        -ContentType "application/json" `
+        -Body $json `
+        -TimeoutSec $TimeoutSeconds
 }
 
 function Wait-ForHttp {
@@ -119,6 +132,7 @@ function Wait-ForHttp {
         [string]$Uri,
         [int]$TimeoutSeconds = 180
     )
+
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         try {
@@ -134,10 +148,15 @@ function Wait-ForHttp {
 
 function Wait-ForGatewayHealthy {
     param([int]$TimeoutSeconds = 120)
+
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         try {
-            $response = Invoke-WebRequest -Uri "$GatewayUrl/health" -Method Get -UseBasicParsing -TimeoutSec 10
+            $response = Invoke-WebRequest `
+                -Uri "$GatewayUrl/health" `
+                -Method Get `
+                -UseBasicParsing `
+                -TimeoutSec 10
             if ([int]$response.StatusCode -eq 200) {
                 return
             }
@@ -152,9 +171,13 @@ function Wait-ForGatewayHealthy {
 function Get-InstalledOllamaModels {
     $tags = Invoke-JsonRequest -Uri "$OllamaUrl/api/tags"
     $names = New-Object System.Collections.Generic.List[string]
+
     foreach ($model in @($tags.models)) {
-        $name = [string]($model.name)
-        if ([string]::IsNullOrWhiteSpace($name) -and $model.PSObject.Properties.Name -contains "model") {
+        $name = [string]$model.name
+        if (
+            [string]::IsNullOrWhiteSpace($name) -and
+            $model.PSObject.Properties.Name -contains "model"
+        ) {
             $name = [string]$model.model
         }
         if (-not [string]::IsNullOrWhiteSpace($name)) {
@@ -166,6 +189,7 @@ function Get-InstalledOllamaModels {
 
 function Assert-ModelsAvailable {
     param([object]$ModelProfile)
+
     $installed = @(Get-InstalledOllamaModels)
     $required = @(
         [string]$ModelProfile.reasoning_model,
@@ -175,42 +199,68 @@ function Assert-ModelsAvailable {
 
     foreach ($model in $required) {
         if ($installed -notcontains $model) {
-            throw "Required Ollama model '$model' is not installed. No fallback is allowed during evaluation. Installed models: $($installed -join ', ')"
+            throw (
+                "Required Ollama model '$model' is not installed. " +
+                "No fallback is allowed during evaluation. Installed models: " +
+                ($installed -join ", ")
+            )
         }
     }
 }
 
 function Warm-Models {
     param([object]$ModelProfile)
+
     if ($SkipModelWarmup) {
         return
     }
 
     Write-Step "Warming Ollama models"
-    foreach ($model in @([string]$ModelProfile.reasoning_model, [string]$ModelProfile.tool_model) | Select-Object -Unique) {
-        Invoke-JsonRequest -Uri "$OllamaUrl/api/chat" -Method Post -Body @{
-            model = $model
-            messages = @(
-                @{ role = "user"; content = "Evaluation warm-up. Reply with OK." }
-            )
-            stream = $false
-            options = @{ temperature = 0 }
-        } | Out-Null
+    foreach (
+        $model in @(
+            [string]$ModelProfile.reasoning_model,
+            [string]$ModelProfile.tool_model
+        ) | Select-Object -Unique
+    ) {
+        Invoke-JsonRequest `
+            -Uri "$OllamaUrl/api/chat" `
+            -Method Post `
+            -Body @{
+                model = $model
+                messages = @(
+                    @{
+                        role = "user"
+                        content = "Evaluation warm-up. Reply with OK."
+                    }
+                )
+                stream = $false
+                options = @{ temperature = 0 }
+            } `
+            -TimeoutSeconds 180 | Out-Null
         Write-Host "Warmed model: $model"
     }
 
-    Invoke-JsonRequest -Uri "$OllamaUrl/api/embed" -Method Post -Body @{
-        model = [string]$ModelProfile.embedding_model
-        input = @("evaluation warm-up")
-    } | Out-Null
+    Invoke-JsonRequest `
+        -Uri "$OllamaUrl/api/embed" `
+        -Method Post `
+        -Body @{
+            model = [string]$ModelProfile.embedding_model
+            input = @("evaluation warm-up")
+        } `
+        -TimeoutSeconds 180 | Out-Null
     Write-Host "Warmed embedding model: $($ModelProfile.embedding_model)"
 }
 
-function Set-ModelEnvironment {
+function Set-EvaluationEnvironment {
     param([object]$ModelProfile)
+
     $env:OLLAMA_CHAT_MODEL = [string]$ModelProfile.reasoning_model
     $env:OLLAMA_TOOL_MODEL = [string]$ModelProfile.tool_model
     $env:OLLAMA_EMBEDDING_MODEL = [string]$ModelProfile.embedding_model
+
+    # Evaluation isolates diagnosis from detector quality.
+    $env:ENABLE_TEST_ANOMALY_INJECTION = "1"
+    $env:ENABLE_OPENSEARCH_ANOMALY_WATCHER = "0"
 }
 
 function Restart-AgenticBackend {
@@ -218,248 +268,168 @@ function Restart-AgenticBackend {
         [object]$ModelProfile,
         [switch]$Build
     )
-    Set-ModelEnvironment -ModelProfile $ModelProfile
+
+    Set-EvaluationEnvironment -ModelProfile $ModelProfile
     Push-Location $infrastructureRoot
     try {
+        $composeArgs = @(
+            "compose",
+            "-f", "docker-compose.yml",
+            "-f", "docker-compose.test.yml",
+            "up", "-d",
+            "--force-recreate"
+        )
         if ($Build) {
-            docker compose up -d --build --force-recreate agentic-backend
+            $composeArgs += "--build"
         }
-        else {
-            docker compose up -d --force-recreate agentic-backend
-        }
+        $composeArgs += "agentic-backend"
+
+        & docker @composeArgs
         if ($LASTEXITCODE -ne 0) {
-            throw "docker compose could not start the agentic backend."
+            throw "docker compose could not start the evaluation agentic backend."
         }
     }
     finally {
         Pop-Location
     }
+
     Wait-ForHttp -Uri "$BackendUrl/health" -TimeoutSeconds 300
 }
 
 function Reset-MonitoredSystem {
     Write-Host "Restoring monitored system to normal base state..."
     & $resetScript
-    if ($LASTEXITCODE -ne 0) {
-        throw "reset-to-base.ps1 failed."
-    }
     Wait-ForGatewayHealthy
 }
 
 function Prepare-Environment {
     param([object]$ModelProfile)
-    Write-Step "Preparing infrastructure"
+
+    Write-Step "Preparing diagnostic evaluation environment"
     Restart-AgenticBackend -ModelProfile $ModelProfile -Build
     Reset-MonitoredSystem
-
-    Push-Location $infrastructureRoot
-    try {
-        docker compose up -d --force-recreate opensearch-detectors-init
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not start OpenSearch detector initialisation."
-        }
-    }
-    finally {
-        Pop-Location
-    }
 }
 
-function Get-ExpectedDetectorNames {
-    $hosts = @("traffic-generator", "api-gateway", "processing-service", "data-service", "worker-service")
-    $names = New-Object System.Collections.Generic.List[string]
-    foreach ($hostName in $hosts) {
-        $names.Add("CPU-$hostName") | Out-Null
-        $names.Add("RAM-$hostName") | Out-Null
+function Assert-TestInjectionRoute {
+    $openApi = Invoke-JsonRequest -Uri "$BackendUrl/openapi.json"
+    $pathNames = @($openApi.paths.PSObject.Properties.Name)
+    if ($pathNames -notcontains "/internal/v1/test/anomalies") {
+        throw (
+            "Synthetic anomaly injection route is not mounted. " +
+            "The evaluation backend must run with ENABLE_TEST_ANOMALY_INJECTION=1."
+        )
     }
-    foreach ($name in @(
-        "NETLAT-traffic-generator-api-gateway",
-        "NETLAT-api-gateway-processing-service",
-        "NETLAT-processing-service-data-service",
-        "APPLAT-traffic-generator-api-gateway",
-        "APPLAT-api-gateway-processing-service",
-        "APPLAT-processing-service-data-service"
-    )) {
-        $names.Add($name) | Out-Null
-    }
-    return @($names)
-}
-
-function Get-DetectorInfo {
-    param([string]$Name)
-    $search = Invoke-JsonRequest -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/_search" -Method Post -Body @{
-        size = 100
-        _source = @("name")
-        query = @{ match_phrase = @{ name = $Name } }
-    }
-
-    $hit = @($search.hits.hits) | Where-Object { $_._source.name -eq $Name } | Select-Object -First 1
-    if ($null -eq $hit) {
-        throw "Detector '$Name' was not found."
-    }
-
-    $detectorId = [string]$hit._id
-    $detail = Invoke-JsonRequest -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/$detectorId"
-    $detectorType = "UNKNOWN"
-    if ($detail.PSObject.Properties.Name -contains "anomaly_detector") {
-        if ($detail.anomaly_detector.PSObject.Properties.Name -contains "detector_type") {
-            $detectorType = [string]$detail.anomaly_detector.detector_type
-        }
-    }
-    elseif ($detail.PSObject.Properties.Name -contains "detector_type") {
-        $detectorType = [string]$detail.detector_type
-    }
-
-    $profile = Invoke-JsonRequest -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/$detectorId/_profile?_all=true"
-    $state = if ($profile.PSObject.Properties.Name -contains "state") { [string]$profile.state } else { "UNKNOWN" }
-
-    return [pscustomobject]@{
-        name = $Name
-        id = $detectorId
-        type = $detectorType
-        state = $state
-    }
-}
-
-function Assert-DetectorSet {
-    $expected = @(Get-ExpectedDetectorNames)
-    if ($expected.Count -ne 16) {
-        throw "Evaluation preflight expected 16 detector names but generated $($expected.Count)."
-    }
-
-    foreach ($name in $expected) {
-        $detector = Get-DetectorInfo -Name $name
-        if ($detector.type -ne "SINGLE_ENTITY") {
-            throw "Detector '$name' is '$($detector.type)' instead of SINGLE_ENTITY."
-        }
-        if ($detector.state -ne "RUNNING") {
-            throw "Detector '$name' is not RUNNING. Current state: $($detector.state)."
-        }
-    }
-}
-
-function Wait-ForDetectorSet {
-    param([int]$TimeoutMinutes)
-    $deadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
-    $lastError = ""
-    while ([DateTimeOffset]::UtcNow -lt $deadline) {
-        try {
-            Assert-DetectorSet
-            Write-Host "All 16 OpenSearch detectors are RUNNING and SINGLE_ENTITY." -ForegroundColor Green
-            return
-        }
-        catch {
-            $lastError = $_.Exception.Message
-            Write-Host "Waiting for detector preflight: $lastError"
-            Start-Sleep -Seconds 30
-        }
-    }
-    throw "Detector preflight timed out after $TimeoutMinutes minute(s). Last error: $lastError"
 }
 
 function Assert-NoActiveIncidents {
     $response = Invoke-JsonRequest -Uri "$BackendUrl/api/v1/incidents?limit=500"
     $terminal = @("RESOLVED", "CLOSED", "OPERATOR_ACTION_REQUIRED")
-    $active = @(@($response.incidents) | Where-Object { $terminal -notcontains ([string]$_.status).ToUpperInvariant() })
+    $active = @(
+        @($response.incidents) |
+            Where-Object {
+                $terminal -notcontains ([string]$_.status).ToUpperInvariant()
+            }
+    )
+
     if ($active.Count -gt 0) {
-        $ids = @($active | ForEach-Object { "$($_.incident_id):$($_.status)" }) -join ", "
+        $ids = @(
+            $active |
+                ForEach-Object { "$($_.incident_id):$($_.status)" }
+        ) -join ", "
         throw "There are non-terminal incidents before the measured run: $ids"
     }
 }
 
-function Get-MetricStats {
-    param(
-        [object]$Metric,
-        [DateTimeOffset]$From,
-        [DateTimeOffset]$To = [DateTimeOffset]::MinValue
-    )
-    $range = @{ gte = $From.UtcDateTime.ToString("o") }
-    if ($To -ne [DateTimeOffset]::MinValue) {
-        $range.lte = $To.UtcDateTime.ToString("o")
+function Start-ControlledFault {
+    param([object]$ScenarioConfig)
+
+    $relative = [string]$ScenarioConfig.fault.start_script
+    $scriptPath = Join-Path $repoRoot $relative
+    if (-not (Test-Path $scriptPath)) {
+        throw "Fault start script was not found: $scriptPath"
     }
 
-    $response = Invoke-JsonRequest -Uri "$OpenSearchUrl/metrics-$($Metric.host)-*/_search?ignore_unavailable=true" -Method Post -Body @{
-        size = 0
-        query = @{
-            bool = @{
-                filter = @(
-                    @{ range = @{ "@timestamp" = $range } },
-                    @{ term = @{ measurement_name = [string]$Metric.measurement } },
-                    @{ exists = @{ field = [string]$Metric.field } }
-                )
-            }
-        }
-        aggs = @{
-            avg_value = @{ avg = @{ field = [string]$Metric.field } }
-            max_value = @{ max = @{ field = [string]$Metric.field } }
-        }
+    $parameters = ConvertTo-Hashtable -Object $ScenarioConfig.fault.parameters
+    & $scriptPath @parameters
+}
+
+function Stop-ControlledFault {
+    param([object]$ScenarioConfig)
+
+    $relative = [string]$ScenarioConfig.fault.stop_script
+    $scriptPath = Join-Path $repoRoot $relative
+    if (-not (Test-Path $scriptPath)) {
+        return
     }
 
-    return [pscustomobject]@{
-        average = $response.aggregations.avg_value.value
-        max = $response.aggregations.max_value.value
+    try {
+        & $scriptPath
+    }
+    catch {
+        Write-Warning "Fault stop script failed: $($_.Exception.Message)"
     }
 }
 
-function Wait-ForAnomaly {
+function Invoke-SyntheticAnomaly {
     param(
-        [string]$DetectorId,
-        [DateTimeOffset]$FaultStartedAt,
-        [int]$TimeoutMinutes
+        [string]$ScenarioName,
+        [object]$ScenarioConfig,
+        [string]$RunToken
     )
-    $deadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
-    $faultStartMs = $FaultStartedAt.ToUnixTimeMilliseconds()
 
-    while ([DateTimeOffset]::UtcNow -lt $deadline) {
-        $response = Invoke-JsonRequest -Uri "$OpenSearchUrl/_plugins/_anomaly_detection/detectors/results/_search/" -Method Post -Body @{
-            size = 1
-            sort = @(@{ execution_start_time = @{ order = "desc" } })
-            query = @{
-                bool = @{
-                    filter = @(
-                        @{ term = @{ detector_id = $DetectorId } },
-                        @{ range = @{ anomaly_grade = @{ gt = 0 } } },
-                        @{ range = @{ data_end_time = @{ gte = $faultStartMs } } }
-                    )
-                    must_not = @(@{ exists = @{ field = "task_id" } })
-                }
-            }
-        }
+    $synthetic = $ScenarioConfig.synthetic_anomaly
+    $detectorId = "evaluation-$ScenarioName-$RunToken"
+    $resultId = "evaluation-result-$ScenarioName-$RunToken"
 
-        $hits = @($response.hits.hits)
-        if ($hits.Count -gt 0) {
-            return $hits[0]._source
-        }
-        Write-Host "Waiting for anomaly from detector $DetectorId..."
-        Start-Sleep -Seconds 15
+    $body = @{
+        detector_id = $detectorId
+        detector_name = [string]$synthetic.detector_name
+        detector_description = [string]$synthetic.detector_description
+        anomaly_grade = [double]$synthetic.anomaly_grade
+        confidence = [double]$synthetic.confidence
+        anomaly_score = [double]$synthetic.anomaly_score
+        result_id = $resultId
     }
-    return $null
+
+    $response = Invoke-JsonRequest `
+        -Uri "$BackendUrl/internal/v1/test/anomalies" `
+        -Method Post `
+        -Body $body `
+        -TimeoutSeconds 60
+
+    return [pscustomobject]@{
+        detector_id = $detectorId
+        result_id = $resultId
+        request = $body
+        response = $response
+    }
 }
 
 function Wait-ForIncident {
     param(
         [string]$DetectorId,
-        [DateTimeOffset]$FaultStartedAt,
         [int]$TimeoutMinutes
     )
-    $deadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
-    $faultStartMs = $FaultStartedAt.ToUnixTimeMilliseconds()
 
+    $deadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         $response = Invoke-JsonRequest -Uri "$BackendUrl/api/v1/incidents?limit=500"
-        $matches = @(@($response.incidents) | Where-Object {
-            $anomaly = $_.anomaly
-            if ($null -eq $anomaly) { return $false }
-            if ([string]$anomaly.detector_id -ne $DetectorId) { return $false }
-            $execution = 0
-            try { $execution = [int64]$anomaly.execution_start_time } catch { $execution = 0 }
-            return $execution -ge $faultStartMs
-        } | Sort-Object -Property created_at -Descending)
+        $matches = @(
+            @($response.incidents) |
+                Where-Object {
+                    $anomaly = $_.anomaly
+                    $null -ne $anomaly -and
+                    [string]$anomaly.detector_id -eq $DetectorId
+                } |
+                Sort-Object -Property created_at -Descending
+        )
 
         if ($matches.Count -gt 0) {
             return [string]$matches[0].incident_id
         }
-        Write-Host "Waiting for agentic incident associated with detector $DetectorId..."
-        Start-Sleep -Seconds 5
+
+        Write-Host "Waiting for synthetic diagnostic incident..."
+        Start-Sleep -Seconds 2
     }
     return $null
 }
@@ -469,6 +439,7 @@ function Wait-ForTerminalIncident {
         [string]$IncidentId,
         [int]$TimeoutMinutes
     )
+
     $terminal = @("RESOLVED", "CLOSED", "OPERATOR_ACTION_REQUIRED")
     $deadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
     $last = $null
@@ -477,45 +448,41 @@ function Wait-ForTerminalIncident {
         $last = Invoke-JsonRequest -Uri "$BackendUrl/api/v1/incidents/$IncidentId"
         $status = ([string]$last.status).ToUpperInvariant()
         Write-Host "Incident $IncidentId status: $status"
+
         if ($terminal -contains $status) {
             return $last
         }
-        Start-Sleep -Seconds 5
+        Start-Sleep -Seconds 3
     }
+
     return $last
 }
 
-function Start-ControlledFault {
+function Invoke-OneEvaluationRunCleanup {
     param([object]$ScenarioConfig)
-    $relative = [string]$ScenarioConfig.fault.start_script
-    $scriptPath = Join-Path $repoRoot $relative
-    if (-not (Test-Path $scriptPath)) {
-        throw "Fault start script was not found: $scriptPath"
-    }
-    $parameters = ConvertTo-Hashtable -Object $ScenarioConfig.fault.parameters
-    & $scriptPath @parameters
-    if ($LASTEXITCODE -ne 0) {
-        throw "Fault start script failed: $scriptPath"
-    }
-}
 
-function Stop-ControlledFault {
-    param([object]$ScenarioConfig)
-    $relative = [string]$ScenarioConfig.fault.stop_script
-    $scriptPath = Join-Path $repoRoot $relative
-    if (Test-Path $scriptPath) {
-        try {
-            & $scriptPath
-        }
-        catch {
-            Write-Warning "Fault stop script failed: $($_.Exception.Message)"
-        }
+    try {
+        Stop-ControlledFault -ScenarioConfig $ScenarioConfig
+    }
+    catch {
+        Write-Warning $_.Exception.Message
+    }
+
+    try {
+        Reset-MonitoredSystem
+    }
+    catch {
+        Write-Warning "Final monitored-system reset failed: $($_.Exception.Message)"
     }
 }
 
 function Invoke-RunScoring {
     param([string]$RunDirectory)
-    & python $scoreScript --run-dir $RunDirectory --ground-truth $groundTruthPath | Out-Host
+
+    & python $scoreScript `
+        --run-dir $RunDirectory `
+        --ground-truth $groundTruthPath | Out-Host
+
     if ($LASTEXITCODE -ne 0) {
         throw "Run scoring failed for $RunDirectory"
     }
@@ -529,40 +496,28 @@ function Invoke-OneEvaluationRun {
         [object]$ModelProfile,
         [int]$RunNumber,
         [int]$Recovery,
-        [int]$DetectorWait,
         [int]$IncidentWait,
         [int]$DiagnosisWait,
         [string]$CampaignResultsRoot,
         [string]$GitSha
     )
 
-    $runDirectory = Join-Path $CampaignResultsRoot "$ProfileName\$ScenarioName\run-$($RunNumber.ToString('00'))"
+    $runDirectory = Join-Path `
+        $CampaignResultsRoot `
+        "$ProfileName\$ScenarioName\run-$($RunNumber.ToString('00'))"
+
     if (Test-Path $runDirectory) {
         throw "Run directory already exists and will not be overwritten: $runDirectory"
     }
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
 
     Write-Step "$ScenarioName / repetition $RunNumber"
-    Reset-MonitoredSystem
-    Restart-AgenticBackend -ModelProfile $ModelProfile
-    Warm-Models -ModelProfile $ModelProfile
 
-    if ($Recovery -gt 0) {
-        Write-Host "Clean detector recovery: $Recovery minute(s)."
-        Start-Sleep -Seconds ($Recovery * 60)
-    }
-
-    Assert-NoActiveIncidents
-
-    $detector = Get-DetectorInfo -Name ([string]$ScenarioConfig.expected_detector)
-    if ($detector.type -ne "SINGLE_ENTITY" -or $detector.state -ne "RUNNING") {
-        throw "Expected detector '$($detector.name)' is not a RUNNING SINGLE_ENTITY detector."
-    }
-
-    $baselineStats = Get-MetricStats -Metric $ScenarioConfig.metric -From ([DateTimeOffset]::UtcNow.AddMinutes(-5))
-    $faultStartedAt = [DateTimeOffset]::UtcNow
     $metadata = [ordered]@{
         campaign = $Campaign
+        evaluation_scope = "agentic_diagnosis_only"
+        anomaly_trigger_mode = "synthetic"
+        opensearch_detector_evaluated = $false
         profile = $ProfileName
         scenario = $ScenarioName
         repetition = $RunNumber
@@ -571,186 +526,248 @@ function Invoke-OneEvaluationRun {
         tool_model = [string]$ModelProfile.tool_model
         embedding_model = [string]$ModelProfile.embedding_model
         temperature = $ModelProfile.temperature
-        expected_detector = [string]$ScenarioConfig.expected_detector
         fault_parameters = $ScenarioConfig.fault.parameters
-        recovery_minutes = $Recovery
-        fault_started_at_utc = $faultStartedAt.UtcDateTime.ToString("o")
+        fault_stabilization_seconds = [int]$ScenarioConfig.fault_stabilization_seconds
+        recovery_seconds = $Recovery
+        fault_started_at_utc = $null
+        synthetic_triggered_at_utc = $null
+        incident_created_at_utc = $null
         diagnosis_completed_at_utc = $null
         run_outcome = "RUNNING"
         error = $null
     }
     Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
 
-    $anomaly = $null
-    $incident = $null
     try {
+        Reset-MonitoredSystem
+        Restart-AgenticBackend -ModelProfile $ModelProfile
+        Warm-Models -ModelProfile $ModelProfile
+
+        if ($Recovery -gt 0) {
+            Write-Host "Clean runtime recovery: $Recovery second(s)."
+            Start-Sleep -Seconds $Recovery
+        }
+
+        Assert-TestInjectionRoute
+        Assert-NoActiveIncidents
+
+        $metadata.fault_started_at_utc = (
+            [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
+        )
+        Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
+
         Start-ControlledFault -ScenarioConfig $ScenarioConfig
 
-        $anomaly = Wait-ForAnomaly -DetectorId $detector.id -FaultStartedAt $faultStartedAt -TimeoutMinutes $DetectorWait
-        $faultObservedUntil = [DateTimeOffset]::UtcNow
-        $faultStats = Get-MetricStats -Metric $ScenarioConfig.metric -From $faultStartedAt -To $faultObservedUntil
-
-        if ($null -eq $anomaly) {
-            $detection = [ordered]@{
-                detected = $false
-                detector_name = $detector.name
-                detector_id = $detector.id
-                detector_type = $detector.type
-                anomaly_grade = $null
-                confidence = $null
-                anomaly_score = $null
-                ttd_seconds = $null
-                baseline_metric_value = $baselineStats.average
-                max_metric_value = $faultStats.max
-                metric_field = [string]$ScenarioConfig.metric.field
-                metric_unit = [string]$ScenarioConfig.metric.unit
-                failure_reason = "No anomaly_grade > 0 result was observed before the detector timeout."
-            }
-            Save-JsonFile -Path (Join-Path $runDirectory "detection.json") -Value $detection
-            Save-JsonFile -Path (Join-Path $runDirectory "incident.json") -Value @{ found = $false; reason = "No detected anomaly, therefore no target diagnostic incident was expected." }
-            $metadata.run_outcome = "DETECTOR_MISS"
-            $metadata.diagnosis_completed_at_utc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
-            Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
-            Invoke-OneEvaluationRunCleanup -ScenarioConfig $ScenarioConfig
-            Invoke-RunScoring -RunDirectory $runDirectory
-            return
+        $stabilization = [int]$ScenarioConfig.fault_stabilization_seconds
+        if ($stabilization -gt 0) {
+            Write-Host (
+                "Fault is real. Waiting $stabilization second(s) before " +
+                "injecting the synthetic anomaly trigger..."
+            )
+            Start-Sleep -Seconds $stabilization
         }
 
-        $executionStartMs = [int64]$anomaly.execution_start_time
-        $ttdSeconds = [math]::Round(($executionStartMs - $faultStartedAt.ToUnixTimeMilliseconds()) / 1000.0, 3)
-        $detection = [ordered]@{
-            detected = $true
-            detector_name = $detector.name
-            detector_id = $detector.id
-            detector_type = $detector.type
-            anomaly_grade = $anomaly.anomaly_grade
-            confidence = $anomaly.confidence
-            anomaly_score = $anomaly.anomaly_score
-            ttd_seconds = $ttdSeconds
-            anomaly_execution_start_time = $anomaly.execution_start_time
-            anomaly_data_start_time = $anomaly.data_start_time
-            anomaly_data_end_time = $anomaly.data_end_time
-            baseline_metric_value = $baselineStats.average
-            max_metric_value = $faultStats.max
-            metric_field = [string]$ScenarioConfig.metric.field
-            metric_unit = [string]$ScenarioConfig.metric.unit
-            raw_anomaly = $anomaly
-            failure_reason = ""
-        }
-        Save-JsonFile -Path (Join-Path $runDirectory "detection.json") -Value $detection
+        $runToken = [guid]::NewGuid().ToString("N")
+        $triggeredAt = [DateTimeOffset]::UtcNow
+        $triggerResult = Invoke-SyntheticAnomaly `
+            -ScenarioName $ScenarioName `
+            -ScenarioConfig $ScenarioConfig `
+            -RunToken $runToken
 
-        $incidentId = Wait-ForIncident -DetectorId $detector.id -FaultStartedAt $faultStartedAt -TimeoutMinutes $IncidentWait
-        if ([string]::IsNullOrWhiteSpace($incidentId)) {
-            Save-JsonFile -Path (Join-Path $runDirectory "incident.json") -Value @{ found = $false; reason = "OpenSearch detected the fault but no matching incident appeared before the timeout." }
-            $metadata.run_outcome = "INCIDENT_TIMEOUT"
-            $metadata.diagnosis_completed_at_utc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
-            Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
-            Invoke-OneEvaluationRunCleanup -ScenarioConfig $ScenarioConfig
-            Invoke-RunScoring -RunDirectory $runDirectory
-            throw "No agentic incident was created for detected anomaly $($detector.name). Campaign stopped to avoid contaminating later runs."
-        }
-
-        $incident = Wait-ForTerminalIncident -IncidentId $incidentId -TimeoutMinutes $DiagnosisWait
-        if ($null -eq $incident) {
-            throw "Incident $incidentId could not be read."
-        }
-
-        Save-JsonFile -Path (Join-Path $runDirectory "incident.json") -Value $incident
-        $status = ([string]$incident.status).ToUpperInvariant()
-        if (@("RESOLVED", "CLOSED", "OPERATOR_ACTION_REQUIRED") -notcontains $status) {
-            $metadata.run_outcome = "DIAGNOSIS_TIMEOUT"
-            $metadata.diagnosis_completed_at_utc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
-            Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
-            Invoke-OneEvaluationRunCleanup -ScenarioConfig $ScenarioConfig
-            Invoke-RunScoring -RunDirectory $runDirectory
-            throw "Incident $incidentId did not reach a terminal state before the diagnosis timeout. Campaign stopped to preserve isolation."
-        }
-
-        $finalFaultStats = Get-MetricStats -Metric $ScenarioConfig.metric -From $faultStartedAt
-        $detection.max_metric_value = $finalFaultStats.max
-        Save-JsonFile -Path (Join-Path $runDirectory "detection.json") -Value $detection
-
-        $metadata.run_outcome = if ($status -eq "RESOLVED" -or $status -eq "CLOSED") { "COMPLETED" } else { $status }
-        $metadata.diagnosis_completed_at_utc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
+        $metadata.synthetic_triggered_at_utc = (
+            $triggeredAt.UtcDateTime.ToString("o")
+        )
         Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
+
+        Save-JsonFile `
+            -Path (Join-Path $runDirectory "trigger.json") `
+            -Value ([ordered]@{
+                accepted = $true
+                accepted_at_utc = $triggeredAt.UtcDateTime.ToString("o")
+                detector_id = $triggerResult.detector_id
+                result_id = $triggerResult.result_id
+                request = $triggerResult.request
+                response = $triggerResult.response
+            })
+
+        Write-Host (
+            "Synthetic SINGLE_ENTITY anomaly queued: " +
+            "$($triggerResult.request.detector_name)"
+        )
+
+        $incidentId = Wait-ForIncident `
+            -DetectorId $triggerResult.detector_id `
+            -TimeoutMinutes $IncidentWait
+
+        if ([string]::IsNullOrWhiteSpace($incidentId)) {
+            Save-JsonFile `
+                -Path (Join-Path $runDirectory "incident.json") `
+                -Value @{
+                    found = $false
+                    reason = "Synthetic trigger was accepted but no incident appeared before timeout."
+                }
+            $metadata.run_outcome = "INCIDENT_TIMEOUT"
+        }
+        else {
+            $firstIncident = Invoke-JsonRequest `
+                -Uri "$BackendUrl/api/v1/incidents/$incidentId"
+
+            $createdAt = [string]$firstIncident.created_at
+            if ([string]::IsNullOrWhiteSpace($createdAt)) {
+                $createdAt = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
+            }
+            $metadata.incident_created_at_utc = $createdAt
+            Save-JsonFile `
+                -Path (Join-Path $runDirectory "metadata.json") `
+                -Value $metadata
+
+            $incident = Wait-ForTerminalIncident `
+                -IncidentId $incidentId `
+                -TimeoutMinutes $DiagnosisWait
+
+            if ($null -eq $incident) {
+                Save-JsonFile `
+                    -Path (Join-Path $runDirectory "incident.json") `
+                    -Value @{
+                        found = $false
+                        incident_id = $incidentId
+                        reason = "Incident could not be read after creation."
+                    }
+                $metadata.run_outcome = "INCIDENT_READ_FAILED"
+            }
+            else {
+                Save-JsonFile `
+                    -Path (Join-Path $runDirectory "incident.json") `
+                    -Value $incident
+
+                $status = ([string]$incident.status).ToUpperInvariant()
+                if ($status -in @("RESOLVED", "CLOSED")) {
+                    $metadata.run_outcome = "COMPLETED"
+                }
+                elseif ($status -eq "OPERATOR_ACTION_REQUIRED") {
+                    $metadata.run_outcome = "OPERATOR_ACTION_REQUIRED"
+                }
+                else {
+                    $metadata.run_outcome = "DIAGNOSIS_TIMEOUT"
+                }
+            }
+        }
     }
     catch {
-        $metadata.run_outcome = if ($metadata.run_outcome -eq "RUNNING") { "FAILED" } else { $metadata.run_outcome }
+        $metadata.run_outcome = "FAILED"
         $metadata.error = $_.Exception.Message
-        $metadata.diagnosis_completed_at_utc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
-        Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
-        throw
+
+        $triggerPath = Join-Path $runDirectory "trigger.json"
+        if (-not (Test-Path $triggerPath)) {
+            Save-JsonFile `
+                -Path $triggerPath `
+                -Value @{
+                    accepted = $false
+                    error = $_.Exception.Message
+                }
+        }
+
+        $incidentPath = Join-Path $runDirectory "incident.json"
+        if (-not (Test-Path $incidentPath)) {
+            Save-JsonFile `
+                -Path $incidentPath `
+                -Value @{
+                    found = $false
+                    reason = $_.Exception.Message
+                }
+        }
+
+        Write-Warning "Run failed and was recorded: $($_.Exception.Message)"
     }
     finally {
+        $metadata.diagnosis_completed_at_utc = (
+            [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
+        )
+        Save-JsonFile -Path (Join-Path $runDirectory "metadata.json") -Value $metadata
         Invoke-OneEvaluationRunCleanup -ScenarioConfig $ScenarioConfig
     }
 
     Invoke-RunScoring -RunDirectory $runDirectory
 }
 
-function Invoke-OneEvaluationRunCleanup {
-    param([object]$ScenarioConfig)
-    try {
-        Stop-ControlledFault -ScenarioConfig $ScenarioConfig
-    }
-    catch {
-        Write-Warning $_.Exception.Message
-    }
-    try {
-        Reset-MonitoredSystem
-    }
-    catch {
-        Write-Warning "Final reset failed: $($_.Exception.Message)"
-    }
-}
-
 Write-Step "Loading evaluation configuration"
 Assert-Command -Name "git"
 Assert-Command -Name "docker"
 Assert-Command -Name "python"
-$gitSha = Assert-EvaluationBranch
 
+$gitSha = Assert-EvaluationBranch
 $groundTruth = Get-JsonFile -Path $groundTruthPath
 $modelProfiles = Get-JsonFile -Path $modelProfilesPath
 $campaignConfig = Get-JsonFile -Path $campaignPath
 
-$profileName = if ([string]::IsNullOrWhiteSpace($Profile)) { [string]$campaignConfig.profile } else { $Profile }
-$modelProfile = Get-NamedProperty -Object $modelProfiles.profiles -Name $profileName
+$profileName = if ([string]::IsNullOrWhiteSpace($Profile)) {
+    [string]$campaignConfig.profile
+}
+else {
+    $Profile
+}
+$modelProfile = Get-NamedProperty `
+    -Object $modelProfiles.profiles `
+    -Name $profileName
+
 Assert-ModelsAvailable -ModelProfile $modelProfile
 
 if ($PrepareEnvironment) {
     Prepare-Environment -ModelProfile $modelProfile
 }
 
-Write-Step "Evaluation preflight"
+Write-Step "Diagnostic evaluation preflight"
 Wait-ForHttp -Uri "$OpenSearchUrl/_cluster/health" -TimeoutSeconds 300
 Wait-ForHttp -Uri "$BackendUrl/health" -TimeoutSeconds 300
 Wait-ForGatewayHealthy
-$preflightWait = [int]$campaignConfig.detector_preflight_wait_minutes
-Wait-ForDetectorSet -TimeoutMinutes $preflightWait
+Assert-TestInjectionRoute
 Assert-NoActiveIncidents
-Write-Host "Evaluation preflight passed." -ForegroundColor Green
+
+Write-Host (
+    "Preflight passed. Real OpenSearch anomaly detection is not part of " +
+    "this campaign; the OpenSearch watcher is disabled for the evaluation backend."
+) -ForegroundColor Green
 
 if ($PreflightOnly) {
-    Write-Host "Preflight-only execution completed. No fault was injected."
+    Write-Host "Preflight-only execution completed. No fault or synthetic anomaly was injected."
     exit 0
 }
 
 $scenarioNames = @()
 if ($Scenario.Trim().ToLowerInvariant() -eq "all") {
-    $scenarioNames = @($campaignConfig.scenarios | ForEach-Object { [string]$_ })
+    $scenarioNames = @(
+        $campaignConfig.scenarios |
+            ForEach-Object { [string]$_ }
+    )
 }
 else {
-    $scenarioNames = @($Scenario.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $scenarioNames = @(
+        $Scenario.Split(",") |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ }
+    )
 }
 
 foreach ($scenarioName in $scenarioNames) {
-    Get-NamedProperty -Object $groundTruth.scenarios -Name $scenarioName | Out-Null
+    Get-NamedProperty `
+        -Object $groundTruth.scenarios `
+        -Name $scenarioName | Out-Null
 }
 
-$runCount = if ($Repetitions -gt 0) { $Repetitions } else { [int]$campaignConfig.repetitions }
-$recovery = if ($RecoveryMinutes -ge 0) { $RecoveryMinutes } else { [int]$campaignConfig.recovery_minutes }
-$detectorWait = [int]$campaignConfig.detector_wait_minutes
+$runCount = if ($Repetitions -gt 0) {
+    $Repetitions
+}
+else {
+    [int]$campaignConfig.repetitions
+}
+
+$recovery = if ($RecoverySeconds -ge 0) {
+    $RecoverySeconds
+}
+else {
+    [int]$campaignConfig.recovery_seconds
+}
+
 $incidentWait = [int]$campaignConfig.incident_wait_minutes
 $diagnosisWait = [int]$campaignConfig.diagnosis_wait_minutes
 
@@ -758,7 +775,7 @@ if ($runCount -le 0) {
     throw "Repetitions must be greater than zero."
 }
 if ($recovery -lt 0) {
-    throw "RecoveryMinutes cannot be negative."
+    throw "RecoverySeconds cannot be negative."
 }
 
 $campaignId = "$Campaign-$([DateTimeOffset]::Now.ToString('yyyyMMdd-HHmmss'))"
@@ -768,6 +785,10 @@ New-Item -ItemType Directory -Path $campaignResultsRoot -Force | Out-Null
 $campaignMetadata = [ordered]@{
     campaign_id = $campaignId
     campaign = $Campaign
+    evaluation_scope = "agentic_diagnosis_only"
+    anomaly_trigger_mode = "synthetic"
+    opensearch_anomaly_watcher_enabled = $false
+    opensearch_detector_quality_evaluated = $false
     started_at_utc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
     git_sha = $gitSha
     profile = $profileName
@@ -777,21 +798,26 @@ $campaignMetadata = [ordered]@{
     temperature = $modelProfile.temperature
     scenarios = $scenarioNames
     repetitions = $runCount
-    recovery_minutes = $recovery
-    detector_wait_minutes = $detectorWait
+    recovery_seconds = $recovery
     incident_wait_minutes = $incidentWait
     diagnosis_wait_minutes = $diagnosisWait
 }
-Save-JsonFile -Path (Join-Path $campaignResultsRoot "campaign-metadata.json") -Value $campaignMetadata
+Save-JsonFile `
+    -Path (Join-Path $campaignResultsRoot "campaign-metadata.json") `
+    -Value $campaignMetadata
 
-Write-Step "Starting campaign $campaignId"
+Write-Step "Starting diagnostic campaign $campaignId"
 Write-Host "Profile: $profileName"
 Write-Host "Scenarios: $($scenarioNames -join ', ')"
 Write-Host "Repetitions per scenario: $runCount"
-Write-Host "Recovery before each measured fault: $recovery minute(s)"
+Write-Host "Runtime recovery before each fault: $recovery second(s)"
+Write-Host "Faults are REAL; anomaly triggers are SYNTHETIC."
 
 foreach ($scenarioName in $scenarioNames) {
-    $scenarioConfig = Get-NamedProperty -Object $groundTruth.scenarios -Name $scenarioName
+    $scenarioConfig = Get-NamedProperty `
+        -Object $groundTruth.scenarios `
+        -Name $scenarioName
+
     for ($run = 1; $run -le $runCount; $run++) {
         Invoke-OneEvaluationRun `
             -ScenarioName $scenarioName `
@@ -800,7 +826,6 @@ foreach ($scenarioName in $scenarioNames) {
             -ModelProfile $modelProfile `
             -RunNumber $run `
             -Recovery $recovery `
-            -DetectorWait $detectorWait `
             -IncidentWait $incidentWait `
             -DiagnosisWait $diagnosisWait `
             -CampaignResultsRoot $campaignResultsRoot `
@@ -808,17 +833,21 @@ foreach ($scenarioName in $scenarioNames) {
     }
 }
 
-Write-Step "Aggregating campaign results"
+Write-Step "Aggregating diagnostic results"
 & python $aggregateScript --results-root $campaignResultsRoot | Out-Host
 if ($LASTEXITCODE -ne 0) {
     throw "Campaign aggregation failed."
 }
 
-$campaignMetadata.completed_at_utc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
-Save-JsonFile -Path (Join-Path $campaignResultsRoot "campaign-metadata.json") -Value $campaignMetadata
+$campaignMetadata.completed_at_utc = (
+    [DateTimeOffset]::UtcNow.UtcDateTime.ToString("o")
+)
+Save-JsonFile `
+    -Path (Join-Path $campaignResultsRoot "campaign-metadata.json") `
+    -Value $campaignMetadata
 
 Write-Host ""
-Write-Host "Evaluation completed." -ForegroundColor Green
+Write-Host "Diagnostic evaluation completed." -ForegroundColor Green
 Write-Host "Results: $campaignResultsRoot"
 Write-Host "Summary CSV: $(Join-Path $campaignResultsRoot 'summary.csv')"
 Write-Host "Model comparison CSV: $(Join-Path $campaignResultsRoot 'model-comparison.csv')"
