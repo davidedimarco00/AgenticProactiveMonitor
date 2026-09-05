@@ -14,6 +14,12 @@ HostId = Literal[
     "worker-service",
 ]
 
+TransportTargetHostId = Literal[
+    "api-gateway",
+    "processing-service",
+    "data-service",
+]
+
 MetricName = Literal["cpu", "memory"]
 LogLevel = Literal["ALL", "DEBUG", "INFO", "WARN", "ERROR"]
 LogSource = Literal["all", "application", "system"]
@@ -46,6 +52,13 @@ METRICS = {
     },
 }
 
+TRANSPORT_LATENCY_METRIC = {
+    "measurement": "network_transport_latency",
+    "field": "network_transport_latency.response_time",
+    "unit": "seconds",
+    "scope": "service_path",
+}
+
 
 def _nested_value(document: dict, field: str):
     value = document
@@ -56,6 +69,12 @@ def _nested_value(document: dict, field: str):
         if value is None:
             return None
     return value
+
+
+def _milliseconds(value):
+    if not isinstance(value, (int, float)):
+        return None
+    return round(float(value) * 1000.0, 2)
 
 
 def register_opensearch_tools(mcp: MCPServer) -> None:
@@ -160,6 +179,131 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
                 "average": round(stats["avg"], 2) if stats["avg"] is not None else None,
                 "minimum": round(stats["min"], 2) if stats["min"] is not None else None,
                 "maximum": round(stats["max"], 2) if stats["max"] is not None else None,
+            },
+            "timeline": timeline,
+        }
+
+    @mcp.tool()
+    async def get_transport_latency(
+        host_id: HostId,
+        target_host: TransportTargetHostId,
+        minutes: TimeWindowMinutes = 15,
+    ) -> dict:
+        """
+        Retrieve detector-aligned Layer-4 transport latency for one monitored
+        source-to-target service path from OpenSearch. The returned response_time
+        field is the same field used by the SINGLE_ENTITY NETLAT detectors.
+        Values are returned in detector-native seconds and also converted to
+        milliseconds for direct diagnostic interpretation. The tool is read-only.
+        """
+        if minutes < 1 or minutes > 120:
+            raise ValueError("minutes must be between 1 and 120")
+        if host_id == target_host:
+            raise ValueError("host_id and target_host must identify different services")
+
+        measurement = TRANSPORT_LATENCY_METRIC["measurement"]
+        field = TRANSPORT_LATENCY_METRIC["field"]
+        unit = TRANSPORT_LATENCY_METRIC["unit"]
+        scope = TRANSPORT_LATENCY_METRIC["scope"]
+        index_pattern = f"metrics-{host_id}-*"
+
+        query = {
+            "size": 1,
+            "_source": ["@timestamp", "network_target", field],
+            "sort": [{"@timestamp": {"order": "desc"}}],
+            "query": {
+                "bool": {
+                    "filter": [
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": f"now-{minutes}m",
+                                    "lte": "now",
+                                }
+                            }
+                        },
+                        {"term": {"measurement_name": measurement}},
+                        {"term": {"network_target": target_host}},
+                        {"exists": {"field": field}},
+                    ]
+                }
+            },
+            "aggs": {
+                "statistics": {"stats": {"field": field}},
+                "timeline": {
+                    "date_histogram": {
+                        "field": "@timestamp",
+                        "fixed_interval": "1m",
+                        "min_doc_count": 1,
+                    },
+                    "aggs": {"value": {"avg": {"field": field}}},
+                },
+            },
+        }
+
+        url = f"{OPENSEARCH_URL}/{index_pattern}/_search?ignore_unavailable=true"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=query)
+            response.raise_for_status()
+            result = response.json()
+
+        stats = result["aggregations"]["statistics"]
+        hits = result.get("hits", {}).get("hits", [])
+
+        latest_timestamp = None
+        latest_target = None
+        latest_value = None
+        if hits:
+            source = hits[0].get("_source", {})
+            latest_timestamp = source.get("@timestamp")
+            latest_target = source.get("network_target")
+            latest_value = _nested_value(source, field)
+
+        timeline = []
+        for bucket in result["aggregations"]["timeline"]["buckets"]:
+            value = bucket["value"]["value"]
+            rounded = round(value, 6) if value is not None else None
+            timeline.append(
+                {
+                    "timestamp": bucket["key_as_string"],
+                    "value_seconds": rounded,
+                    "value_ms": _milliseconds(value),
+                }
+            )
+
+        return {
+            "status": "ok",
+            "host_id": host_id,
+            "target_host": target_host,
+            "observed_network_target": latest_target,
+            "metric": "transport_latency",
+            "measurement_name": measurement,
+            "field": field,
+            "unit": unit,
+            "scope": scope,
+            "detector_aligned": True,
+            "window_minutes": minutes,
+            "samples": stats["count"],
+            "summary": {
+                "latest_timestamp": latest_timestamp,
+                "latest_seconds": (
+                    round(latest_value, 6)
+                    if isinstance(latest_value, (int, float))
+                    else latest_value
+                ),
+                "latest_ms": _milliseconds(latest_value),
+                "average_seconds": (
+                    round(stats["avg"], 6) if stats["avg"] is not None else None
+                ),
+                "average_ms": _milliseconds(stats["avg"]),
+                "minimum_seconds": (
+                    round(stats["min"], 6) if stats["min"] is not None else None
+                ),
+                "minimum_ms": _milliseconds(stats["min"]),
+                "maximum_seconds": (
+                    round(stats["max"], 6) if stats["max"] is not None else None
+                ),
+                "maximum_ms": _milliseconds(stats["max"]),
             },
             "timeline": timeline,
         }
@@ -313,8 +457,6 @@ def register_opensearch_tools(mcp: MCPServer) -> None:
                 "event_type",
                 "latency_ms",
                 "error_code",
-                "uptime_seconds",
-                "load_average",
             ],
             "query": {
                 "bool": {
