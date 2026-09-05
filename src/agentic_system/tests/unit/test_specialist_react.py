@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,6 +10,7 @@ from langchain_core.messages import AIMessage
 from spade_llm.context import ContextManager
 
 from agentic_system.reasoning import ReActInvestigationError, SpecialistReActExecutor
+from agentic_system.reasoning.react_contracts import UNCONFIRMED_ROOT_CAUSE
 
 
 class FakeTool:
@@ -276,7 +278,9 @@ def test_inconclusive_finalization_can_stop_without_artificial_peer_request() ->
     result = asyncio.run(_investigate(_executor(finalizer=finalizer, max_steps=2)))
 
     assert result.diagnosis_status == "inconclusive"
-    assert result.root_cause is None
+    # The cause is stated, not omitted: the operator report shows why the
+    # investigation closed instead of an empty field.
+    assert result.root_cause == UNCONFIRMED_ROOT_CAUSE
     assert result.assistance_required is False
     assert result.assistance_domain is None
     assert len(finalizer.calls) == 1
@@ -323,3 +327,113 @@ def test_search_knowledge_is_traced_as_rag_retrieval() -> None:
     assert len(rag_events) == 1
     assert rag_events[0]["details"]["source"] == "Qdrant RAG"
     assert "data_service.md" in rag_events[0]["outcome"]
+
+
+def test_finalization_retry_quotes_the_hypothesis_the_model_already_stated() -> None:
+    """A rejected closure is repaired with the agent's own words, not a bare validator message."""
+
+    from pydantic import ValidationError as _ValidationError
+
+    from agentic_system.reasoning.react_contracts import _PromptDiagnosticFinalOutput
+
+    try:
+        _PromptDiagnosticFinalOutput.model_validate(
+            {
+                "summary": "s",
+                "diagnosis_status": "probable",
+                "root_cause": "a cause",
+                "causal_chain": ["link"],
+                "confidence": 7.0,
+                "findings": [],
+                "hypotheses": [],
+                "recommended_next_steps": [],
+            }
+        )
+    except _ValidationError as exc:
+        rejection: Exception = exc
+    else:  # pragma: no cover - the payload above is invalid by construction
+        raise AssertionError("the fixture payload must be rejected")
+
+    hypothesis = (
+        "High CPU on processing-service is caused by sustained computation in "
+        "the running Python worker processes."
+    )
+    decision = SimpleNamespace(
+        current_hypothesis=hypothesis,
+        model_dump=lambda: {"current_hypothesis": hypothesis},
+    )
+    accepted = {
+        "summary": "The CPU anomaly is explained by the injected workload.",
+        "diagnosis_status": "probable",
+        "root_cause": hypothesis,
+        "causal_chain": ["Workers consume CPU.", "Container CPU saturates."],
+        "confidence": 0.8,
+        "findings": ["Process listing shows sustained CPU usage."],
+        "hypotheses": [],
+        "recommended_next_steps": [],
+        "assistance_domain": None,
+    }
+    finalizer = FakeFinalizer([rejection, accepted])
+    executor = _executor(finalizer=finalizer)
+
+    output = asyncio.run(
+        executor._finalize(
+            assignment={
+                "agent_role": "system_engineer",
+                "incident_id": "INC-REACT-001",
+                "task_id": "TASK-REACT-001",
+                "entity": "CPU-processing-service",
+                "anomaly": {"detector_name": "CPU-processing-service"},
+            },
+            evidence=[],
+            decisions=[decision],
+        )
+    )
+
+    assert output.diagnosis_status == "probable"
+    assert len(finalizer.calls) == 2
+
+    retry_prompt = finalizer.calls[1][-1]["content"]
+    assert "You already stated this causal hypothesis" in retry_prompt
+    assert hypothesis in retry_prompt
+    assert "Either write it as root_cause" in retry_prompt
+
+
+def test_self_directed_peer_request_is_dropped_instead_of_failing_the_task() -> None:
+    """A request the runtime cannot route must not destroy a completed investigation."""
+
+    accepted = {
+        "summary": "The CPU anomaly is explained by the injected workload.",
+        "diagnosis_status": "probable",
+        "root_cause": "CPU-bound python workers saturate processing-service.",
+        "causal_chain": ["Workers consume CPU.", "Container CPU saturates."],
+        "confidence": 0.78,
+        "findings": ["Process listing shows sustained CPU usage."],
+        "hypotheses": [],
+        "recommended_next_steps": [],
+        # system_engineer asking the system domain for help: unroutable.
+        "assistance_domain": "system",
+    }
+    finalizer = FakeFinalizer([accepted])
+    executor = _executor(finalizer=finalizer)
+
+    output = asyncio.run(
+        executor._finalize(
+            assignment={
+                "agent_role": "system_engineer",
+                "incident_id": "INC-REACT-001",
+                "task_id": "TASK-REACT-001",
+                "entity": "CPU-processing-service",
+                "anomaly": {"detector_name": "CPU-processing-service"},
+            },
+            evidence=[],
+            decisions=[],
+        )
+    )
+
+    # One call: the contradiction is repaired, not retried until the task dies.
+    assert len(finalizer.calls) == 1
+    assert output.diagnosis_status == "probable"
+    assert output.root_cause == accepted["root_cause"]
+    assert output.assistance_domain is None
+    assert output.assistance_required is False

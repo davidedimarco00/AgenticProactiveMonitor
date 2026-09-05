@@ -10,6 +10,7 @@ from langchain_core.tools import StructuredTool
 from spade_llm.context import create_assistant_tool_call_message
 
 from .diagnostic_react import _DiagnosticFinalOutput, _ROLE_GUIDANCE
+from .react_contracts import UNCONFIRMED_ROOT_CAUSE
 from .langchain_agent import (
     ReActEvidence,
     ReActInvestigationError,
@@ -213,7 +214,10 @@ Output discipline:
                 "not be established before the bounded ReAct investigation ended."
             ),
             diagnosis_status="inconclusive",
-            root_cause=None,
+            # A stated outcome rather than an empty field: every other closure
+            # path now reports a cause, and the operator report must not show a
+            # blank one here.
+            root_cause=UNCONFIRMED_ROOT_CAUSE,
             causal_chain=[],
             confidence=0.0,
             findings=findings,
