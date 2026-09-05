@@ -1,43 +1,56 @@
 # Introduction
 
-AgenticProactiveMonitor is a thesis prototype for **proactive monitoring and explainable diagnosis of distributed software systems**. The project combines observability, machine-learning-based anomaly detection, retrieval-augmented generation, and a multi-agent architecture designed to support technical incident investigation.
+AgenticProactiveMonitor is a thesis prototype for **proactive monitoring and explainable diagnosis of distributed software systems**. The project combines observability, online anomaly detection, retrieval-augmented generation (RAG), and a hybrid multi-agent reasoning architecture.
 
-The main objective is not only to detect that a system is behaving abnormally. The system is designed to move from an anomaly signal to an investigation process in which specialised agents can collect evidence, consult technical knowledge, compare possible causes, and produce an explainable diagnosis for a human operator.
+The objective is not only to detect that a monitored service is behaving abnormally. The complete workflow moves from an anomaly signal to an autonomous investigation in which specialised agents collect live evidence, consult project knowledge, collaborate when needed, and produce a structured diagnosis and remediation proposal for a human operator.
 
 ## Project idea
 
-The project separates the system under observation from the monitoring and reasoning infrastructure.
+The project separates the application under observation from the monitoring and reasoning infrastructure.
 
-The monitored workload is a small distributed **Notes Platform** composed of five containers:
+The monitored workload is a distributed **Notes Platform** composed of five containers:
 
 - `traffic-generator`, which simulates real user activity;
 - `api-gateway`, which exposes the web interface and routes requests;
 - `processing-service`, which implements application processing logic;
 - `data-service`, which persists notes in SQLite;
-- `worker-service`, which represents an independent background workload.
+- `worker-service`, which provides an independent background workload.
 
-The monitoring infrastructure is deployed as a separate Docker Compose project and contains OpenSearch, OpenSearch Dashboards, Qdrant, Open WebUI, Prosody/XMPP, the MCP Server, and the operator dashboard. Ollama runs directly on the Windows host and provides local LLM and embedding models.
+The agentic infrastructure is a separate Docker Compose project. It contains OpenSearch, OpenSearch Dashboards, Qdrant, MongoDB, Prosody/XMPP, the MCP Server, the agentic backend, the operator dashboard, and the knowledge-base services. Ollama runs directly on the Windows host and provides local language-model and embedding inference.
 
-## Monitoring and diagnosis flow
+## End-to-end flow
 
 ```mermaid
 flowchart LR
-    MS[Monitored Notes Platform] --> T[Telegraf]
-    MS --> F[Fluent Bit]
-    T --> OS[OpenSearch]
-    F --> OS
-    OS --> AD[Anomaly Detection]
+    MS[Monitored Notes Platform] -->|Telegraf metrics| OS[OpenSearch]
+    MS -->|Fluent Bit logs| OS
+    OS --> AD[OpenSearch Anomaly Detection]
+    AD --> WATCH[Anomaly Watcher]
+    WATCH --> INBOX[(MongoDB Anomaly Inbox)]
+    INBOX --> MAS[Hybrid Multi-Agent Backend]
     OS --> MCP[MCP Server]
     KB[Qdrant Knowledge Base] --> MCP
-    OL[Ollama] --> MCP
-    AD --> AG[Agentic Investigation]
-    MCP --> AG
-    AG --> DASH[Operator Dashboard]
+    MCP --> MAS
+    OL[Ollama on Windows] --> MAS
+    MAS --> DB[(MongoDB Incidents + Tasks)]
+    DB --> API[Read-only FastAPI]
+    API --> DASH[Operator Dashboard]
 ```
 
-Metrics and logs are collected continuously. OpenSearch Anomaly Detection is used to identify unusual behaviour in CPU, memory, and network-service latency. Every detector is intentionally configured as **SINGLE_ENTITY**, with a dedicated detector for each monitored source or network link.
+Metrics and logs are continuously stored in OpenSearch. OpenSearch Anomaly Detection currently monitors four metric families: container CPU, container memory, network transport latency, and application-service latency.
 
-When an anomaly is available, the target architecture assigns the investigation to a virtual technical team composed of five professional roles:
+A strict project rule is applied to anomaly detection: **every detector is SINGLE_ENTITY**. The current configuration contains **16 detectors**:
+
+- 5 CPU detectors;
+- 5 RAM detectors;
+- 3 network transport-latency detectors (`NETLAT`);
+- 3 application-service-latency detectors (`APPLAT`).
+
+Logs are not used as a separate semantic anomaly-detection mechanism in the current implementation. They are collected as live diagnostic evidence and can be queried by the agents through MCP.
+
+## Hybrid multi-agent backend
+
+The production backend is implemented as a five-agent virtual technical team:
 
 - **Technical Lead**;
 - **System Engineer**;
@@ -45,26 +58,33 @@ When an anomaly is available, the target architecture assigns the investigation 
 - **Application Engineer**;
 - **Software Developer**.
 
-The specialists are intended to use a BDI-oriented deliberative state together with an operational ReAct loop: reason about the current incident, invoke a controlled diagnostic tool, observe the result, and continue the investigation until enough evidence is available.
+The agents are implemented with SPADE and communicate through Prosody/XMPP. The runtime combines two reasoning levels:
 
-## Current implementation status
+- **AgentSpeak BDI**, which represents explicit goals, beliefs, and committed intentions for coordination and task handling;
+- **ReAct**, which is used by specialists to gather and interpret live diagnostic evidence through bounded tool calls.
 
-The repository already contains the main infrastructure required for the thesis experiments:
+The Technical Lead takes an incident in charge, performs triage, selects a primary investigator, delegates a durable task, and critically reviews the returned diagnosis. A specialist first commits the delegated task through its BDI policy and then executes a bounded ReAct investigation.
 
-- a standalone monitored distributed application;
-- Telegraf and Fluent Bit telemetry collection;
-- OpenSearch indices, dashboards, and anomaly detectors;
-- controlled CPU, memory, network, latency, and service-outage scenarios;
-- a repeatable PowerShell test suite for detector experiments;
-- Qdrant-based knowledge storage and RAG retrieval;
-- a Model Context Protocol server exposing read-only diagnostic tools;
-- Prosody/XMPP configuration and validated SPADE communication;
-- a Flask operator dashboard for incidents, infrastructure health, and agent activity.
+The model roles are intentionally separated. In the current runtime, Gemma performs Technical Lead reasoning and specialist diagnostic reasoning, while Qwen is dedicated to specialist tool selection and argument generation. Python code validates structured evidence requests, tool schemas, target components, execution limits, and trace invariants before a tool is executed.
 
-The complete production-style multi-agent reasoning backend is the next major implementation step. The dashboard already represents the final five-role team, while the autonomous specialist runtime is still being developed and integrated.
+## Dynamic collaboration
+
+The system does not use a fixed pipeline in which all specialists must run for every incident. The Technical Lead selects the primary specialist according to the anomaly and the current evidence.
+
+If the primary specialist cannot sufficiently confirm a root cause, it can autonomously request help from one peer specialist. This collaboration happens directly over XMPP and does not require a new Technical Lead authorization. The returned peer evidence is combined with the primary investigation and then reviewed by the Technical Lead.
+
+## Evidence and knowledge boundaries
+
+The project separates live evidence from static knowledge:
+
+- **OpenSearch and Docker diagnostics** provide current runtime evidence;
+- **Qdrant RAG** provides stable project and domain knowledge;
+- **MongoDB** stores durable agentic state, incidents, tasks, anomaly-inbox records, and structured activity history.
+
+RAG supports diagnosis but does not replace live evidence. The knowledge base intentionally excludes scenario ground truth, expected test answers, and evaluation labels.
 
 ## Human-in-the-loop principle
 
-The project follows a human-in-the-loop approach. The system may autonomously investigate an anomaly and propose a diagnosis or remediation, but the operator remains responsible for approving potentially disruptive corrective actions.
+The system is autonomous at the investigation level, but potentially disruptive remediation remains under human control. The current MCP diagnostic surface is read-only and does not expose a generic shell.
 
-This boundary is important for two reasons. First, the system is a research prototype operating on infrastructure components. Second, explainability and auditability are part of the thesis objective: the operator should be able to understand which evidence supported a diagnosis and why a remediation was suggested.
+The operator dashboard is also outside the control loop. It exposes incident state, diagnosis, evidence summaries, remediation guidance, agent activity, tools used, and system health without exposing private model chain-of-thought.
