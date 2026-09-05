@@ -4,9 +4,9 @@ import asyncio
 import json
 
 import pytest
-from pydantic import ValidationError
 
 import agentic_system.reasoning.context_robust_react as module
+from agentic_system.reasoning.react_contracts import UNCONFIRMED_ROOT_CAUSE
 from agentic_system.reasoning.context_robust_react import (
     SpecialistReActExecutor,
     _ContextAwarePromptGemmaDiagnosticFinalizer,
@@ -178,7 +178,7 @@ def test_diagnostic_finalizer_sends_same_context_size(monkeypatch) -> None:
     assert any("JSON Schema" in message["content"] for message in payload["messages"])
 
 
-def test_diagnostic_finalizer_propagates_semantic_schema_validation(monkeypatch) -> None:
+def test_diagnostic_finalizer_demotes_a_causal_claim_without_a_cause(monkeypatch) -> None:
     monkeypatch.setattr(module.httpx, "AsyncClient", _FakeAsyncClient)
     _FakeAsyncClient.response_body = {
         "done": True,
@@ -201,8 +201,51 @@ def test_diagnostic_finalizer_propagates_semantic_schema_validation(monkeypatch)
         },
     }
 
-    with pytest.raises(ValidationError, match="probable diagnosis requires a root_cause"):
-        asyncio.run(_finalizer().ainvoke(_finalizer_messages()))
+    # A causal claim without a stated cause is not rejected anymore: rejecting it
+    # consumed the finalization attempts and ended the investigation with an
+    # empty result even though evidence had been collected. It is demoted, and
+    # the collected findings and hypotheses survive.
+    output = asyncio.run(_finalizer().ainvoke(_finalizer_messages()))
+
+    assert output.diagnosis_status == "inconclusive"
+    assert output.root_cause == UNCONFIRMED_ROOT_CAUSE
+    assert output.confidence <= 0.5
+    assert output.findings == ["Live evidence was collected."]
+    assert output.hypotheses == ["A CPU-bound workload remains possible."]
+
+
+def test_diagnostic_finalizer_weakens_a_confirmed_claim_that_still_asks_for_help(monkeypatch) -> None:
+    monkeypatch.setattr(module.httpx, "AsyncClient", _FakeAsyncClient)
+    _FakeAsyncClient.response_body = {
+        "done": True,
+        "done_reason": "stop",
+        "message": {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "summary": "The mechanism is established.",
+                    "diagnosis_status": "confirmed",
+                    "root_cause": "A CPU-bound workload saturates the container.",
+                    "causal_chain": ["Workload runs.", "CPU saturates."],
+                    "confidence": 0.9,
+                    "findings": ["Live evidence was collected."],
+                    "hypotheses": [],
+                    "recommended_next_steps": [],
+                    "assistance_domain": "network",
+                }
+            ),
+        },
+    }
+
+    # A confirmed mechanism that still asks a peer for evidence contradicts
+    # itself. The causal claim is weakened rather than rejected, and the
+    # collaboration request the specialist asked for survives.
+    output = asyncio.run(_finalizer().ainvoke(_finalizer_messages()))
+
+    assert output.diagnosis_status == "probable"
+    assert output.assistance_domain == "network"
+    assert output.assistance_required is True
+    assert output.root_cause == "A CPU-bound workload saturates the container."
 
 
 def test_diagnostic_finalizer_wraps_only_json_syntax_failure(monkeypatch) -> None:

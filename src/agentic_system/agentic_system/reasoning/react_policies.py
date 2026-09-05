@@ -149,7 +149,8 @@ Diagnostic status:
   causal mechanism is supported by evidence but one or more material links remain uncertain. Never
   use probable to mean "the cause is unknown" or normal operation.
 - inconclusive: use when no concrete causal mechanism is sufficiently supported after the bounded
-  investigation. root_cause may be null.
+  investigation. root_cause is still mandatory: write exactly
+  "Unconfirmed causal mechanism after bounded autonomous investigation".
 
 Causal and evidence rules:
 - Normal-state facts such as a running service, successful DNS, existing connections or normal
@@ -183,8 +184,11 @@ Cross-domain collaboration:
   assistance_domain=null rather than inventing a cause.
 
 Output discipline:
-- NEVER output confirmed or probable with root_cause null/unknown/empty.
-- NEVER output confirmed or probable without a non-empty causal_chain.
+- root_cause is ALWAYS required and is never null, empty or "unknown". If you stated a concrete
+  causal hypothesis while reasoning, that hypothesis belongs in root_cause; do not leave the field
+  out and do not restate it only in hypotheses.
+- confirmed or probable with the unconfirmed-mechanism label, or without a non-empty causal_chain,
+  is a contradiction: the runtime demotes such a result to inconclusive.
 - recommended_next_steps are diagnostic/advisory verification only, never remediation, and must not
   postpone a safe diagnostic check already available to the current action layer.
 - Never invent evidence, measurements, logs, architecture facts, identifiers or remediation.

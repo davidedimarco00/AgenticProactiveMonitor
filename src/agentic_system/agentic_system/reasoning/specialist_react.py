@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -26,6 +27,9 @@ from .react_contracts import (
     _configured_ollama_context,
 )
 from .react_policies import FINALIZATION_POLICY, REASONING_POLICY, TOOL_SELECTION_POLICY
+
+
+LOGGER = logging.getLogger("agentic_system.reasoning.specialist_react")
 
 
 class SpecialistReActExecutor(_CoreReActExecutor):
@@ -868,6 +872,22 @@ class SpecialistReActExecutor(_CoreReActExecutor):
             context_size=self._ollama_context_size(),
         )
 
+    @staticmethod
+    def _last_concrete_hypothesis(decisions: list[Any]) -> str | None:
+        """Return the most recent non-empty causal hypothesis stated so far."""
+
+        for item in reversed(decisions):
+            hypothesis = str(getattr(item, "current_hypothesis", "") or "").strip()
+            if hypothesis and hypothesis.lower() not in {
+                "none",
+                "null",
+                "unknown",
+                "unconfirmed",
+                "n/a",
+            }:
+                return hypothesis
+        return None
+
     async def _finalize(
         self,
         *,
@@ -911,6 +931,20 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                     "diagnostic object using the same evidence; do not gather or invent evidence. "
                     f"Validation feedback: {validation_feedback}"
                 )
+                # The rejection is almost always about a field the model
+                # already reasoned about but did not carry into the object.
+                # Quoting its own wording back is far more effective than
+                # the bare validator message.
+                stated_hypothesis = self._last_concrete_hypothesis(decisions)
+                if stated_hypothesis:
+                    final_prompt += (
+                        "\n\nYou already stated this causal hypothesis during the "
+                        f"investigation: {stated_hypothesis!r}. Either write it as "
+                        "root_cause together with the material links in causal_chain, "
+                        "or set diagnosis_status to inconclusive with the "
+                        "unconfirmed-mechanism label. Do not leave the cause only in "
+                        "hypotheses."
+                    )
             try:
                 structured = await self._invoke_with_provider_slot(
                     self.reasoning_provider,
@@ -935,10 +969,17 @@ class SpecialistReActExecutor(_CoreReActExecutor):
                     output = _PromptDiagnosticFinalOutput.model_validate(structured)
 
                 if current_domain and output.assistance_domain == current_domain:
-                    raise ValueError(
-                        f"{grounded_assignment.get('agent_role')} cannot request assistance from its "
-                        f"own domain {current_domain!r}; choose a different peer domain or null"
+                    # Asking a peer for evidence this specialist already owns is
+                    # not a request the runtime can route anywhere. Dropping the
+                    # request keeps the diagnosis, where rejecting the object
+                    # used to consume every attempt and fail the whole task.
+                    LOGGER.warning(
+                        "%s requested peer assistance from its own domain %s; dropping the "
+                        "request and keeping the diagnosis",
+                        grounded_assignment.get("agent_role"),
+                        current_domain,
                     )
+                    output.assistance_domain = None
                 return output
             except asyncio.CancelledError:
                 raise

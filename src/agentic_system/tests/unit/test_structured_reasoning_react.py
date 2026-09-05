@@ -5,6 +5,7 @@ from agentic_system.reasoning.langchain_agent import (
     ReActInvestigationError,
     _ReasoningDecision,
 )
+from agentic_system.reasoning.react_contracts import UNCONFIRMED_ROOT_CAUSE
 
 
 def test_reasoning_schema_requires_structured_evidence_request_field() -> None:
@@ -116,7 +117,9 @@ def test_hard_stop_with_live_evidence_remains_inconclusive() -> None:
     )
 
     assert output.diagnosis_status == "inconclusive"
-    assert output.root_cause is None
+    # The last-resort closure states its outcome instead of leaving the field
+    # blank, so the operator report is never empty where a cause belongs.
+    assert output.root_cause == UNCONFIRMED_ROOT_CAUSE
     assert output.assistance_required is False
     assert output.assistance_domain is None
 
