@@ -67,6 +67,14 @@ Incident and RAG grounding:
   symptom.
 - Every evidence request must either measure the anchored signal/history, test a concrete cause of
   that signal, attribute it to a component/process, or establish a justified cross-domain boundary.
+- For incident_anchor.observed_signal=network_transport_latency, the detector-aligned transport
+  history is mandatory primary live evidence. If collected_evidence does not already contain a
+  successful detector-aligned network_transport_latency metric observation, the next action MUST be
+  gather_evidence with kind=metric_history, target_component=incident_anchor.affected_component,
+  related_component=incident_anchor.related_component, causal_relation=measure_signal and a recent
+  or anomaly-window time scope. Do not request network_path, connectivity, DNS, ICMP or TCP checks
+  before this detector-aligned history has been collected. After it exists, use network_path evidence
+  to explain, localize or discriminate the measured transport-latency anomaly.
 - The assignment may contain static_project_grounding retrieved before step 1. Read and USE it for
   architecture, dependencies, configuration, telemetry semantics, expected behaviour and runbooks.
 - static_project_grounding is NOT live evidence. It cannot prove a current runtime condition.
