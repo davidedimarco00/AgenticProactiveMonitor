@@ -9,7 +9,12 @@ from tools.diagnostic_tools import (
 )
 from tools.docker_tools import ConnectionLimit, ProcessLimit
 from tools.icmp_tools import PingCount, PingTimeoutSeconds
-from tools.opensearch_tools import ResultLimit, TimeWindowMinutes
+from tools.opensearch_tools import (
+    MetricName,
+    ResultLimit,
+    TimeWindowMinutes,
+    TransportTargetHostId,
+)
 from tools.qdrant_tools import KnowledgeLimit, KnowledgeQuery
 
 
@@ -35,6 +40,22 @@ def test_opensearch_tool_limits_publish_numeric_bounds() -> None:
     assert minutes["maximum"] == 120
     assert limit["minimum"] == 1
     assert limit["maximum"] == 100
+
+
+def test_opensearch_metric_schema_exposes_detector_aligned_netlat_input() -> None:
+    metric = _schema(MetricName)
+    target = _schema(TransportTargetHostId)
+
+    assert set(metric["enum"]) == {
+        "cpu",
+        "memory",
+        "network_transport_latency",
+    }
+    assert set(target["enum"]) == {
+        "api-gateway",
+        "processing-service",
+        "data-service",
+    }
 
 
 def test_qdrant_tool_schema_publishes_query_and_limit_bounds() -> None:
