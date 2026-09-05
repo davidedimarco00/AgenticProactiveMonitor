@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "baseline": {
+      "reasoning_model": "gemma4:e4b",
+      "tool_model": "qwen3.5:4b",
+      "embedding_model": "ibm/granite-embedding:30m",
+      "temperature": 0
+    }
+  }
+}

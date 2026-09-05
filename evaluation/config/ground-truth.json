@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "scenarios": {
+    "cpu-spike": {
+      "expected_detector": "CPU-processing-service",
+      "location": {
+        "mode": "single",
+        "label": "processing-service",
+        "aliases": [
+          "processing-service",
+          "processing service"
+        ]
+      },
+      "fault_type": {
+        "label": "cpu_resource_exhaustion",
+        "aliases": [
+          "cpu-bound",
+          "cpu bound",
+          "cpu saturation",
+          "cpu pressure",
+          "processor saturation",
+          "processor pressure",
+          "cpu resource exhaustion",
+          "resource exhaustion"
+        ]
+      },
+      "metric": {
+        "host": "processing-service",
+        "measurement": "docker_container_cpu",
+        "field": "docker_container_cpu.usage_percent",
+        "unit": "percent"
+      },
+      "fault": {
+        "start_script": "src/monitored_system/infrastructure/scenarios/cpu-spike/start.ps1",
+        "stop_script": "src/monitored_system/infrastructure/scenarios/cpu-spike/stop.ps1",
+        "parameters": {
+          "Workers": 6
+        }
+      },
+      "evidence_points": [
+        {
+          "id": "cpu_metric",
+          "description": "CPU utilisation of processing-service is inspected and is consistent with the anomaly.",
+          "tools_any": ["get_metrics"],
+          "text_any": ["cpu", "docker_container_cpu", "usage_percent"]
+        },
+        {
+          "id": "runtime_cpu_pressure",
+          "description": "Runtime evidence is collected to identify CPU pressure or the process causing it.",
+          "tools_any": ["get_runtime_stats", "get_processes", "get_system_load"],
+          "text_any": ["cpu", "load", "usage", "process"]
+        },
+        {
+          "id": "service_reachable",
+          "description": "The affected service is shown to remain available while CPU pressure is present.",
+          "tools_any": ["check_http_endpoint", "test_tcp_connection", "get_runtime_stats"],
+          "text_any": ["processing-service", "reachable", "running", "healthy", "status"]
+        }
+      ]
+    },
+    "memory-leak": {
+      "expected_detector": "RAM-worker-service",
+      "location": {
+        "mode": "single",
+        "label": "worker-service",
+        "aliases": [
+          "worker-service",
+          "worker service"
+        ]
+      },
+      "fault_type": {
+        "label": "memory_resource_exhaustion",
+        "aliases": [
+          "memory leak",
+          "memory growth",
+          "memory pressure",
+          "memory saturation",
+          "memory resource exhaustion",
+          "resource exhaustion"
+        ]
+      },
+      "metric": {
+        "host": "worker-service",
+        "measurement": "docker_container_mem",
+        "field": "docker_container_mem.usage_percent",
+        "unit": "percent"
+      },
+      "fault": {
+        "start_script": "src/monitored_system/infrastructure/scenarios/memory-leak/start.ps1",
+        "stop_script": "src/monitored_system/infrastructure/scenarios/memory-leak/stop.ps1",
+        "parameters": {
+          "TotalMB": 1024,
+          "StepMB": 64,
+          "StepSeconds": 10
+        }
+      },
+      "evidence_points": [
+        {
+          "id": "memory_metric",
+          "description": "Memory utilisation of worker-service is inspected and is consistent with progressive growth.",
+          "tools_any": ["get_metrics"],
+          "text_any": ["memory", "docker_container_mem", "usage_percent"]
+        },
+        {
+          "id": "runtime_memory_pressure",
+          "description": "Runtime evidence is collected to identify retained memory or memory pressure.",
+          "tools_any": ["get_runtime_stats", "get_processes", "get_system_load"],
+          "text_any": ["memory", "mem", "rss", "usage", "process"]
+        },
+        {
+          "id": "worker_target",
+          "description": "The diagnostic evidence is explicitly associated with worker-service.",
+          "tools_any": [],
+          "text_all": ["worker-service"]
+        }
+      ]
+    },
+    "network-latency": {
+      "expected_detector": "NETLAT-api-gateway-processing-service",
+      "location": {
+        "mode": "path",
+        "label": "api-gateway->processing-service",
+        "endpoints": [
+          {
+            "label": "api-gateway",
+            "aliases": ["api-gateway", "api gateway"]
+          },
+          {
+            "label": "processing-service",
+            "aliases": ["processing-service", "processing service"]
+          }
+        ]
+      },
+      "fault_type": {
+        "label": "network_transport_delay",
+        "aliases": [
+          "network delay",
+          "network latency",
+          "transport delay",
+          "transport latency",
+          "tcp latency",
+          "netem"
+        ]
+      },
+      "metric": {
+        "host": "api-gateway",
+        "measurement": "network_transport_latency",
+        "field": "network_transport_latency.response_time",
+        "unit": "seconds"
+      },
+      "fault": {
+        "start_script": "src/monitored_system/infrastructure/scenarios/network-latency/start.ps1",
+        "stop_script": "src/monitored_system/infrastructure/scenarios/network-latency/stop.ps1",
+        "parameters": {
+          "DelayMs": 400,
+          "JitterMs": 50
+        }
+      },
+      "evidence_points": [
+        {
+          "id": "transport_latency",
+          "description": "Transport-level latency is inspected for the affected path.",
+          "tools_any": ["get_metrics", "test_tcp_connection"],
+          "text_any": ["network_transport_latency", "response_time", "latency", "delay"]
+        },
+        {
+          "id": "correct_path",
+          "description": "The evidence identifies both endpoints of the affected communication path.",
+          "tools_any": [],
+          "text_all": ["api-gateway", "processing-service"]
+        },
+        {
+          "id": "services_reachable",
+          "description": "Connectivity or service availability is checked while latency is present.",
+          "tools_any": ["test_tcp_connection", "check_http_endpoint", "resolve_service_dns"],
+          "text_any": ["reachable", "connected", "healthy", "success", "status", "api-gateway", "processing-service"]
+        }
+      ]
+    }
+  }
+}
