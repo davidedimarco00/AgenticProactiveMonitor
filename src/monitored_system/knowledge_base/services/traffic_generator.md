@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.service.traffic-generator
-version: 2
+version: 3
 domain: monitored_system
 document_type: service-reference
 roles:
@@ -84,21 +84,40 @@ A 5xx response is recorded as a failed synthetic user action. A request exceptio
 The configured network target is `api-gateway`:
 
 ```text
-ICMP target:     api-gateway
-TCP/HTTP target: api-gateway:5000
-probe path:      /notes/new
+ICMP target: api-gateway
+TCP target:  api-gateway:5000
+HTTP probe:  http://api-gateway:5000/notes/new
 ```
 
-The corresponding OpenSearch detector is:
+Transport-level telemetry for this link is:
+
+```text
+measurement: network_transport_latency
+field:       network_transport_latency.response_time
+target tag:  tag.network_target = api-gateway
+```
+
+The corresponding SINGLE_ENTITY transport detector is:
 
 ```text
 NETLAT-traffic-generator-api-gateway
 ```
 
-It is SINGLE_ENTITY and represents only the `traffic-generator -> api-gateway` source/link.
+Application-service timing is collected separately as:
+
+```text
+measurement: application_service_latency
+field:       application_service_latency.response_time
+```
+
+The corresponding SINGLE_ENTITY application-latency detector is:
+
+```text
+APPLAT-traffic-generator-api-gateway
+```
 
 ## Interpretation boundaries
 
 A request result observed by traffic-generator describes the outcome visible at the client side. It does not identify which component in the downstream chain caused that result.
 
-`latency_ms` includes the complete request path seen by the generator. It is therefore different from the latency of an individual internal service call.
+`network_transport_latency.response_time` measures TCP connection establishment to the gateway, while `application_service_latency.response_time` measures the configured HTTP probe. The traffic-generator application `latency_ms` includes the complete user-visible request path. These values are therefore different observations and must not be treated as equivalent.
