@@ -170,33 +170,20 @@ def summarize_group(
     profile: str,
     scenario: str,
     runs: list[dict[str, Any]],
-    *,
-    include_reproducibility: bool = True,
 ) -> dict[str, Any]:
-    reproducibility = (
-        pairwise_metrics(runs)
-        if include_reproducibility
-        else {
-            "tss": None,
-            "argument_consistency": None,
-            "structured_diagnosis_agreement": None,
-            "mean_divergence_point": None,
-            "pair_count": 0,
-        }
-    )
-
+    reproducibility = pairwise_metrics(runs)
     completed = sum(
         1
         for run in runs
         if str(run.get("run_outcome") or "").upper()
         in {"COMPLETED", "RESOLVED", "CLOSED"}
     )
-
     return {
         "profile": profile,
         "scenario": scenario,
         "runs": len(runs),
         "completed_runs": completed,
+        "completion_rate": completed / len(runs) if runs else None,
         "location_accuracy": safe_mean([run.get("location_accuracy") for run in runs]),
         "type_accuracy": safe_mean([run.get("type_accuracy") for run in runs]),
         "evidence_coverage": safe_mean([run.get("evidence_coverage") for run in runs]),
@@ -216,6 +203,62 @@ def summarize_group(
         ],
         "mean_divergence_point": reproducibility["mean_divergence_point"],
         "pair_count": reproducibility["pair_count"],
+    }
+
+
+def summarize_profile(
+    profile: str,
+    profile_runs: list[dict[str, Any]],
+    scenario_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate accuracy over runs and reproducibility only within scenario."""
+    completed = sum(
+        1
+        for run in profile_runs
+        if str(run.get("run_outcome") or "").upper()
+        in {"COMPLETED", "RESOLVED", "CLOSED"}
+    )
+    return {
+        "profile": profile,
+        "scenario": "overall",
+        "runs": len(profile_runs),
+        "completed_runs": completed,
+        "completion_rate": completed / len(profile_runs) if profile_runs else None,
+        "location_accuracy": safe_mean(
+            [run.get("location_accuracy") for run in profile_runs]
+        ),
+        "type_accuracy": safe_mean(
+            [run.get("type_accuracy") for run in profile_runs]
+        ),
+        "evidence_coverage": safe_mean(
+            [run.get("evidence_coverage") for run in profile_runs]
+        ),
+        "diagnostic_score": safe_mean(
+            [run.get("diagnostic_score") for run in profile_runs]
+        ),
+        "mean_react_steps": safe_mean(
+            [run.get("react_steps") for run in profile_runs]
+        ),
+        "mean_tool_calls": safe_mean(
+            [run.get("tool_calls") for run in profile_runs]
+        ),
+        "mean_trigger_to_incident_seconds": safe_mean(
+            [run.get("trigger_to_incident_seconds") for run in profile_runs]
+        ),
+        "mean_diagnosis_time_seconds": safe_mean(
+            [run.get("diagnosis_time_seconds") for run in profile_runs]
+        ),
+        "tss": safe_mean([row.get("tss") for row in scenario_rows]),
+        "argument_consistency": safe_mean(
+            [row.get("argument_consistency") for row in scenario_rows]
+        ),
+        "structured_diagnosis_agreement": safe_mean(
+            [row.get("structured_diagnosis_agreement") for row in scenario_rows]
+        ),
+        "mean_divergence_point": safe_mean(
+            [row.get("mean_divergence_point") for row in scenario_rows]
+        ),
+        "pair_count": sum(int(row.get("pair_count") or 0) for row in scenario_rows),
     }
 
 
@@ -254,15 +297,12 @@ def main() -> None:
     for run in runs:
         by_profile.setdefault(str(run.get("profile") or "unknown"), []).append(run)
 
-    profile_rows = [
-        summarize_group(
-            profile,
-            "overall",
-            profile_runs,
-            include_reproducibility=False,
+    profile_rows: list[dict[str, Any]] = []
+    for profile, profile_runs in sorted(by_profile.items()):
+        matching_rows = [row for row in rows if row["profile"] == profile]
+        profile_rows.append(
+            summarize_profile(profile, profile_runs, matching_rows)
         )
-        for profile, profile_runs in sorted(by_profile.items())
-    ]
 
     summary = {
         "evaluation_scope": "agentic_diagnosis_only",
