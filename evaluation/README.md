@@ -26,27 +26,144 @@ The existing fault scripts under `src/monitored_system/infrastructure/scenarios/
 
 The thesis evaluation intentionally uses simple task-oriented measurements instead of a weighted diagnostic score.
 
-For each scenario the harness reports:
+For each scenario the main reported measurements are:
 
 - completed diagnoses / total runs;
-- correct fault location / total runs;
-- correct fault type / total runs;
+- manually reviewed correct diagnoses / total runs;
 - expected evidence points found / expected evidence points;
 - mean diagnosis time;
 - mean number of ReAct steps;
 - mean number of tool calls.
 
-The detailed `scores.json` file for each run also keeps the diagnosed root cause, matched evidence points and the tool sequence for qualitative inspection.
+The harness still writes deterministic keyword-oriented location/fault fields to `scores.json`, but these fields are **not the final correctness judgement used in the thesis**. A diagnosis can mention an expected term while explicitly rejecting that cause. Therefore final diagnostic correctness is reviewed manually against the known injected fault and the final causal conclusion in `incident.json`.
 
 There is **no combined Diagnostic Score**, no Efficiency formula, no Tool Sequence Similarity (TSS), no Argument Consistency (AC), and no weighted correctness formula in the main evaluation.
 
 Detection Rate, Time-to-Detect, anomaly grade, detector confidence and detector score are also intentionally **not evaluation metrics** because the anomaly trigger is synthetic.
 
-The correctness checks are deterministic and use the frozen expectations in `config/ground-truth.json`. No LLM is used as an evaluation judge.
+## Frozen baseline
+
+The completed baseline campaign uses:
+
+```text
+reasoning model: gemma4:e4b
+tool model:      qwen3.5:4b
+embedding model: ibm/granite-embedding:30m
+max ReAct steps: 6
+specialist reasoning/finalization temperature: 0.0
+```
+
+The baseline contains 15 measured runs: five CPU, five memory and five network-latency scenarios. It is treated as the fixed reference configuration and is not rerun when sensitivity experiments are executed.
+
+The final manual baseline correctness review is:
+
+```text
+CPU spike:        5/5 correct diagnoses
+Memory leak:      3/5 correct diagnoses
+Network latency:  1/5 correct diagnoses
+Overall:          9/15 correct diagnoses
+```
+
+The objective baseline measurements are:
+
+```text
+Completed workflows: 15/15
+Evidence collected:  39/45
+Mean diagnosis time: 267.55 s
+Mean ReAct steps:     5.47
+Mean tool calls:      5.07
+```
+
+## Configuration sensitivity experiments
+
+Three additional experiments change one diagnostic configuration dimension at a time. Only `memory-leak` and `network-latency` are repeated because the baseline CPU scenario already reached 5/5 correct diagnoses.
+
+| Experiment | Reasoning model | Max ReAct steps | Specialist temperature | Runs |
+| --- | --- | ---: | ---: | ---: |
+| Baseline | `gemma4:e4b` | 6 | 0.0 | 15 already completed |
+| `more-reasoning` | `gemma4:e4b` | 10 | 0.0 | 10 |
+| `different-model` | `gemma4:e2b` | 6 | 0.0 | 10 |
+| `higher-temperature` | `gemma4:e4b` | 6 | 0.5 | 10 |
+
+The tool model (`qwen3.5:4b`), embedding model (`ibm/granite-embedding:30m`), prompts, MCP tools, Qdrant knowledge base, fault parameters and infrastructure remain unchanged.
+
+### Temperature scope
+
+The temperature experiment intentionally changes only the **specialist diagnostic reasoning and finalization** calls performed through the native Ollama structured-output path. Technical Lead reasoning and Qwen tool selection are left unchanged from the frozen baseline. This avoids introducing multiple simultaneous changes into the temperature comparison.
+
+## Running the sensitivity experiments
+
+Pull the current `evaluation` branch first:
+
+```powershell
+git switch evaluation
+git pull
+```
+
+Because the sensitivity support changes the backend image, use `-PrepareEnvironment` for the first smoke test after pulling.
+
+### 1. More reasoning steps
+
+Smoke test:
+
+```powershell
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
+    -Experiment more-reasoning `
+    -Scenario network-latency `
+    -Repetitions 1 `
+    -RecoverySeconds 10 `
+    -PrepareEnvironment
+```
+
+Final experiment (5 memory + 5 network runs):
+
+```powershell
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 -Experiment more-reasoning
+```
+
+### 2. Different reasoning model
+
+Smoke test:
+
+```powershell
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
+    -Experiment different-model `
+    -Scenario network-latency `
+    -Repetitions 1 `
+    -RecoverySeconds 10
+```
+
+Final experiment:
+
+```powershell
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 -Experiment different-model
+```
+
+### 3. Higher specialist reasoning temperature
+
+Smoke test:
+
+```powershell
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 `
+    -Experiment higher-temperature `
+    -Scenario network-latency `
+    -Repetitions 1 `
+    -RecoverySeconds 10
+```
+
+Final experiment:
+
+```powershell
+.\evaluation\scripts\Invoke-ConfigurationExperiment.ps1 -Experiment higher-temperature
+```
+
+Each final sensitivity campaign creates a separate timestamped directory under `evaluation/results/`. Do not combine smoke-test directories with final measurements.
+
+After a final campaign, manually review the ten final causal conclusions before reporting `correct diagnosis`, using the same scenario-specific criteria used for the frozen baseline.
 
 ## Experimental controls
 
-For comparable runs the harness keeps the following conditions fixed:
+For comparable runs the harness keeps the following conditions fixed unless they are the explicit independent variable of the experiment:
 
 - real fault parameters;
 - fault stabilization time before the synthetic trigger;
@@ -54,8 +171,6 @@ For comparable runs the harness keeps the following conditions fixed:
 - MCP tools;
 - Qdrant knowledge base;
 - embedding model;
-- reasoning temperature;
-- maximum ReAct steps;
 - hardware environment;
 - runtime recovery between runs.
 
@@ -68,80 +183,7 @@ ENABLE_TEST_ANOMALY_INJECTION=1
 ENABLE_OPENSEARCH_ANOMALY_WATCHER=0
 ```
 
-through the existing `src/infrastructure/docker-compose.test.yml` overlay.
-
-## Baseline model profile
-
-```text
-reasoning: gemma4:e4b
-tool:      qwen3.5:4b
-embedding: ibm/granite-embedding:30m
-temperature: 0
-```
-
-All configured models must already be installed in Ollama.
-
-## First preparation
-
-Run from Windows PowerShell in the repository root:
-
-```powershell
-git switch evaluation
-git pull
-
-.\evaluation\scripts\Invoke-Evaluation.ps1 -PrepareEnvironment -PreflightOnly
-```
-
-The preflight checks:
-
-- Git branch;
-- Docker and Python;
-- configured Ollama models;
-- OpenSearch availability for telemetry;
-- backend health;
-- monitored API Gateway health;
-- availability of the synthetic anomaly injection route;
-- absence of non-terminal incidents.
-
-It does **not** wait for OpenSearch anomaly detectors and does not inject a fault.
-
-## Recommended smoke tests
-
-Before the final thesis measurements, execute one run for each scenario:
-
-```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario cpu-spike -Repetitions 1 -RecoverySeconds 10
-.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario memory-leak -Repetitions 1 -RecoverySeconds 10
-.\evaluation\scripts\Invoke-Evaluation.ps1 -Scenario network-latency -Repetitions 1 -RecoverySeconds 10
-```
-
-Smoke tests validate the complete workflow but must not be included in the final thesis measurements.
-
-## Final baseline campaign
-
-The default baseline campaign executes all three scenarios five times:
-
-```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1
-```
-
-Equivalent explicit command:
-
-```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1 `
-    -Campaign baseline `
-    -Scenario all `
-    -Repetitions 5 `
-    -RecoverySeconds 30
-```
-
-A single scenario can be evaluated with:
-
-```powershell
-.\evaluation\scripts\Invoke-Evaluation.ps1 `
-    -Scenario memory-leak `
-    -Repetitions 5
-```
+through `src/infrastructure/docker-compose.test.yml`.
 
 ## Run lifecycle
 
@@ -154,7 +196,7 @@ reset monitored system
     -> short runtime recovery
     -> start REAL controlled fault
     -> wait scenario-specific stabilization time
-    -> inject SYNTHETIC anomaly
+    -> inject SYNTHETIC SINGLE_ENTITY anomaly
     -> wait for incident
     -> keep fault active while agents diagnose
     -> collect final incident and ReAct evidence
@@ -173,52 +215,10 @@ Every campaign creates a timestamped directory under:
 evaluation/results/
 ```
 
-Example:
-
-```text
-evaluation/results/baseline-20260905-120000/
-    campaign-metadata.json
-    baseline/
-        cpu-spike/
-            run-01/
-                metadata.json
-                trigger.json
-                incident.json
-                scores.json
-            ...
-        memory-leak/
-        network-latency/
-    summary.json
-    summary.csv
-    model-comparison.csv
-```
-
-`trigger.json` records the synthetic anomaly request and backend acceptance.
-
-`incident.json` contains the durable incident, timeline and tasks returned by the backend API.
-
-`scores.json` contains the simple result for one run: completion state, location correctness, fault-type correctness, evidence count, diagnosis time, ReAct steps and tool calls.
-
-`summary.csv` is the main thesis-oriented export. For each scenario it reports values such as:
-
-```text
-runs
-completed_runs
-correct_location_runs
-correct_fault_runs
-evidence_points_matched
-evidence_points_expected
-mean_diagnosis_time_seconds
-mean_react_steps
-mean_tool_calls
-```
-
-`model-comparison.csv` contains the same simple measurements aggregated by model profile and can be used later if alternative model configurations are evaluated.
+Each run stores `metadata.json`, `trigger.json`, `incident.json` and `scores.json`. `summary.csv` contains the objective scenario aggregates, while final causal correctness is manually reviewed from the persisted diagnosis.
 
 ## Evaluation integrity
 
-Do not edit `ground-truth.json` after inspecting measured results. If a correctness expectation must be changed for a methodological reason, document the change and rerun the affected campaign.
+Do not edit the frozen ground truth or baseline results after inspecting the measured outcomes. Do not delete failed, timed-out or inconclusive runs; they are part of the experimental dataset.
 
-Do not delete failed, timed-out or inconclusive runs. They are part of the experimental dataset.
-
-The thesis must explicitly state that OpenSearch anomaly detection is part of the implemented architecture but is not experimentally evaluated in this campaign. Synthetic anomaly injection is used to isolate the diagnostic subsystem while the underlying faults and diagnostic evidence remain real.
+The thesis must explicitly state that OpenSearch anomaly detection is part of the implemented architecture but is not experimentally evaluated in these campaigns. Synthetic anomaly injection is used to isolate the diagnostic subsystem while the underlying faults and diagnostic evidence remain real.
