@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-import agentic_system.reasoning.evaluation_react as module
-from agentic_system.reasoning.evaluation_react import _EvaluationDiagnosticFinalizer
+import agentic_system.reasoning.evaluation_react as evaluation_module
+from agentic_system.reasoning.evaluation_context_guard import _EvaluationDiagnosticFinalizer
 
 
 class _FakeResponse:
@@ -164,6 +164,10 @@ def test_finalizer_compacts_large_prompt_below_context_guard() -> None:
     normalized = finalizer._normalized_messages(prepared)
     total_chars = sum(len(message["content"]) for message in normalized)
     assert total_chars <= finalizer._max_input_chars()
+    assert any(
+        "response schema supplied through the structured output format" in message["content"]
+        for message in normalized
+    )
 
     user_content = next(message["content"] for message in prepared if message["role"] == "user")
     assert "NETLAT-api-gateway-processing-service" in user_content
@@ -174,8 +178,20 @@ def test_finalizer_compacts_large_prompt_below_context_guard() -> None:
     assert "processing-service" in user_content
 
 
+def test_small_prompt_preserves_historical_schema_instruction() -> None:
+    finalizer = _finalizer()
+    normalized = finalizer._normalized_messages(
+        [
+            {"role": "system", "content": "Finalize only from evidence."},
+            {"role": "user", "content": "Small evidence payload."},
+        ]
+    )
+
+    assert any("JSON Schema:" in message["content"] for message in normalized)
+
+
 def test_finalizer_uses_fixed_context_and_logs_ollama_counts(monkeypatch) -> None:
-    monkeypatch.setattr(module.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(evaluation_module.httpx, "AsyncClient", _FakeAsyncClient)
     monkeypatch.setenv("AGENT_REASONING_TEMPERATURE", "0.5")
     _FakeAsyncClient.last_payload = None
     _FakeAsyncClient.response_body = {
@@ -212,5 +228,6 @@ def test_finalizer_uses_fixed_context_and_logs_ollama_counts(monkeypatch) -> Non
     assert payload["options"]["num_ctx"] == 8192
     assert payload["options"]["num_predict"] == 2048
     assert payload["options"]["temperature"] == 0.5
+    assert payload["format"] == _finalizer().schema
     total_chars = sum(len(message["content"]) for message in payload["messages"])
     assert total_chars <= _finalizer()._max_input_chars()
