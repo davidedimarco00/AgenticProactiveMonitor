@@ -11,7 +11,7 @@ from .technical_lead import TechnicalLeadAgent
 
 
 MCP_SERVER_NAME = "apm_mcp"
-MAX_DIAGNOSTIC_REACT_STEPS = 6
+MAX_DIAGNOSTIC_REACT_STEPS = 10
 
 
 def build_agents(config: RuntimeConfig) -> list[BaseAgent]:

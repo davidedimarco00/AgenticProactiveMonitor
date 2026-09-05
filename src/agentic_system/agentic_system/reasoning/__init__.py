@@ -13,7 +13,7 @@ from .langchain_agent import (
     ReActInvestigationResult,
 )
 from .models import RoleLLMProvider, SharedInferenceGate
-from .specialist_react import SpecialistReActExecutor
+from .evaluation_react import SpecialistReActExecutor
 
 __all__ = [
     "AgentSpeakBDIRuntime",
