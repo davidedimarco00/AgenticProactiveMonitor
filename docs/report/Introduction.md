@@ -1,26 +1,70 @@
 # Introduction
 
-Modern gyms are complex environments composed of different areas, various types of equipment, and a number of users that changes significantly during the day.  
-For this reason, monitoring the occupancy of gym areas and machines is important to ensure safety, improve user experience, and support better management decisions.
+AgenticProactiveMonitor is a thesis prototype for **proactive monitoring and explainable diagnosis of distributed software systems**. The project combines observability, machine-learning-based anomaly detection, retrieval-augmented generation, and a multi-agent architecture designed to support technical incident investigation.
 
-The **SmartGym Monitor** project aims to design and implement a smart gym monitoring system that allows administrative staff to observe, in real time, the level of occupancy in different gym areas and the usage of gym equipment.  
-The system also supports the analysis of historical data in order to identify peak hours, congestion patterns, and equipment utilization trends.
+The main objective is not only to detect that a system is behaving abnormally. The system is designed to move from an anomaly signal to an investigation process in which specialised agents can collect evidence, consult technical knowledge, compare possible causes, and produce an explainable diagnosis for a human operator.
 
-In addition to building a working monitoring system, an important objective of the project is the **collection and storage of data in a structured and reusable format**.  
-Data such as access events, area occupancy changes, and machine usage sessions are stored in a way that makes them suitable for future processing by data analysis tools or **Artificial Intelligence (AI) systems**, for example for prediction, optimization, or anomaly detection.
+## Project idea
 
-The project follows the **Domain-Driven Design (DDD)** approach, with the goal of modeling the software system around the main concepts of the gym domain.  
-Instead of focusing only on technical aspects, the design starts from the domain language and identifies concepts such as gym areas, access events, occupancy, and machine usage, organizing them into clearly defined **bounded contexts**.
+The project separates the system under observation from the monitoring and reasoning infrastructure.
 
-From a system point of view, SmartGym Monitor is composed of:
-- simulated sensors that generate events related to people entering and exiting gym areas, as well as the usage of gym machines,
-- a backend system that processes domain events, updates the current state of the gym, and stores historical data,
-- a web dashboard that displays real-time occupancy information and basic analytics for administrative users.
+The monitored workload is a small distributed **Notes Platform** composed of five containers:
 
-The system is designed to keep **data generation, domain processing, and data visualization separated**, allowing the same data to be reused by different components.  
-This design choice makes it possible to extend the system in the future with advanced analytics or AI-based services without changing the core domain logic.
+- `traffic-generator`, which simulates real user activity;
+- `api-gateway`, which exposes the web interface and routes requests;
+- `processing-service`, which implements application processing logic;
+- `data-service`, which persists notes in SQLite;
+- `worker-service`, which represents an independent background workload.
 
-The project also adopts basic **DevOps practices**, such as containerization and continuous integration, to improve reliability, scalability, and ease of deployment.  
-All components are designed to be modular and loosely coupled, supporting future extensions of the system.
+The monitoring infrastructure is deployed as a separate Docker Compose project and contains OpenSearch, OpenSearch Dashboards, Qdrant, Open WebUI, Prosody/XMPP, the MCP Server, and the operator dashboard. Ollama runs directly on the Windows host and provides local LLM and embedding models.
 
-This document presents the domain analysis and design of the SmartGym Monitor system, focusing on the domain model, the ubiquitous language, the bounded contexts, and their interactions.
+## Monitoring and diagnosis flow
+
+```mermaid
+flowchart LR
+    MS[Monitored Notes Platform] --> T[Telegraf]
+    MS --> F[Fluent Bit]
+    T --> OS[OpenSearch]
+    F --> OS
+    OS --> AD[Anomaly Detection]
+    OS --> MCP[MCP Server]
+    KB[Qdrant Knowledge Base] --> MCP
+    OL[Ollama] --> MCP
+    AD --> AG[Agentic Investigation]
+    MCP --> AG
+    AG --> DASH[Operator Dashboard]
+```
+
+Metrics and logs are collected continuously. OpenSearch Anomaly Detection is used to identify unusual behaviour in CPU, memory, and network-service latency. Every detector is intentionally configured as **SINGLE_ENTITY**, with a dedicated detector for each monitored source or network link.
+
+When an anomaly is available, the target architecture assigns the investigation to a virtual technical team composed of five professional roles:
+
+- **Technical Lead**;
+- **System Engineer**;
+- **Network Engineer**;
+- **Application Engineer**;
+- **Software Developer**.
+
+The specialists are intended to use a BDI-oriented deliberative state together with an operational ReAct loop: reason about the current incident, invoke a controlled diagnostic tool, observe the result, and continue the investigation until enough evidence is available.
+
+## Current implementation status
+
+The repository already contains the main infrastructure required for the thesis experiments:
+
+- a standalone monitored distributed application;
+- Telegraf and Fluent Bit telemetry collection;
+- OpenSearch indices, dashboards, and anomaly detectors;
+- controlled CPU, memory, network, latency, and service-outage scenarios;
+- a repeatable PowerShell test suite for detector experiments;
+- Qdrant-based knowledge storage and RAG retrieval;
+- a Model Context Protocol server exposing read-only diagnostic tools;
+- Prosody/XMPP configuration and validated SPADE communication;
+- a Flask operator dashboard for incidents, infrastructure health, and agent activity.
+
+The complete production-style multi-agent reasoning backend is the next major implementation step. The dashboard already represents the final five-role team, while the autonomous specialist runtime is still being developed and integrated.
+
+## Human-in-the-loop principle
+
+The project follows a human-in-the-loop approach. The system may autonomously investigate an anomaly and propose a diagnosis or remediation, but the operator remains responsible for approving potentially disruptive corrective actions.
+
+This boundary is important for two reasons. First, the system is a research prototype operating on infrastructure components. Second, explainability and auditability are part of the thesis objective: the operator should be able to understand which evidence supported a diagnosis and why a remediation was suggested.

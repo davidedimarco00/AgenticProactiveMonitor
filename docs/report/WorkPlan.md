@@ -1,82 +1,142 @@
 # Work Plan
 
-This project follows a structured work plan that combines **Domain-Driven Design (DDD)** principles with an incremental development approach.  
-The goal is to progressively move from domain understanding to implementation, while keeping the domain model consistent and evolvable throughout the project.
+The project is developed incrementally. Each phase produces a component that can be tested independently before it is connected to the complete agentic workflow.
 
-The work is divided into several phases, each producing clear and verifiable outputs.
+## Phase 1 — Monitoring infrastructure
 
-## Phase 1 – Domain Analysis
+**Status: completed and operational.**
 
-The first phase focuses on understanding the gym domain and identifying its main concepts and rules.  
-During this phase, the problem domain is analyzed independently from technical implementation details.
+The first phase established the observability stack and the separation between the monitoring infrastructure and the monitored workload.
 
-The main activities of this phase include:
-- identification of the core domain and relevant subdomains,
-- definition of the ubiquitous language shared by domain experts and developers,
-- identification of the main domain events related to access control, occupancy, and equipment usage.
+Implemented activities:
 
-The output of this phase is a clear domain description and a shared vocabulary that will guide all subsequent design and implementation decisions.
+- OpenSearch and OpenSearch Dashboards deployment;
+- Qdrant deployment for the vector knowledge base;
+- Open WebUI integration for manual RAG experiments;
+- Prosody/XMPP deployment for agent communication;
+- native Ollama integration from the Windows host;
+- shared Docker observability network between the infrastructure and monitored system.
 
-## Phase 2 – Bounded Contexts and Context Map
+## Phase 2 — Monitored distributed application
 
-In the second phase, the domain is divided into **bounded contexts**, each representing a coherent part of the system with a well-defined responsibility and terminology.
+**Status: completed and operational.**
 
-The activities of this phase include:
-- definition of bounded contexts related to access monitoring, equipment usage, occupancy projection, and analytics,
-- identification of relationships between bounded contexts,
-- construction of a context map describing how contexts interact and exchange information.
+A realistic but controlled Notes Platform was implemented to provide a system on which faults can be reproduced and diagnosed.
 
-This phase helps reduce complexity and prevents ambiguity in the domain model by clearly separating concerns.
+The current workload includes:
 
-## Phase 3 – Domain Model Design
+- a Flask API Gateway and web interface;
+- a FastAPI Processing Service;
+- a FastAPI Data Service with SQLite persistence;
+- a background Worker Service;
+- a Traffic Generator that produces real HTTP requests every few seconds.
 
-During this phase, the conceptual domain model is translated into a software-oriented model using DDD building blocks.
+Requests carry an `X-Request-ID`, allowing logs from different services to be correlated across the request path.
 
-The main activities include:
-- identification of entities, value objects, and aggregate roots,
-- definition of domain invariants and consistency rules,
-- modeling of domain events and domain services,
-- definition of repositories and domain interfaces.
+## Phase 3 — Telemetry and anomaly detection
 
-The result of this phase is a detailed domain model that represents the core business logic of the SmartGym Monitor system.
+**Status: completed for the current experimental scope.**
 
-## Phase 4 – System Architecture and Technology Design
+Every monitored container runs Telegraf and Fluent Bit. Metrics and logs are written to service-specific OpenSearch indices.
 
-Once the domain model is defined, the overall system architecture is designed.  
-This phase focuses on how domain concepts are implemented and how system components interact.
+The current detector set contains **13 SINGLE_ENTITY detectors**:
 
-The activities include:
-- definition of the backend architecture based on DDD principles,
-- design of interfaces between the backend, simulated sensors, and the web dashboard,
-- selection of communication mechanisms such as REST APIs and WebSockets,
-- definition of data persistence strategies.
+- 5 CPU detectors;
+- 5 RAM detectors;
+- 3 network-service-latency detectors.
 
-The architecture is designed to support modularity, scalability, and future extensions.
+The detector bootstrap waits for a configurable amount of historical data before the detector is created and enabled.
 
-## Phase 5 – Implementation and Integration
+## Phase 4 — Controlled fault scenarios and experiments
 
-In this phase, the system is implemented incrementally following the previously defined design.
+**Status: implemented.**
 
-The main activities include:
-- implementation of simulated sensors for access control and equipment usage,
-- development of the backend services and domain logic,
-- implementation of real-time updates and data storage,
-- development of the web dashboard for monitoring and visualization.
+The monitored system includes repeatable PowerShell scenarios for:
 
-Continuous integration tools are used to ensure code quality and system consistency during development.
+- CPU saturation on `processing-service`;
+- progressive memory pressure on `worker-service`;
+- real network latency between `api-gateway` and `processing-service` using Linux `tc/netem`;
+- application-level processing latency;
+- `data-service` unavailability.
 
-## Phase 6 – Testing and Validation
+A dedicated PowerShell test suite checks the base state, telemetry, detector configuration, scenario execution, anomaly results, and recovery. Experimental results can be written to JSON and detector-confidence history CSV files.
 
-The goal of this phase is to verify that the system behaves correctly and satisfies the project objectives.  
-Testing activities are organized according to the **Testing Pyramid**, in order to ensure a good balance between reliability, maintainability, and development effort.
+## Phase 5 — Knowledge base and RAG
 
-At the base of the pyramid, **unit tests** are used to validate the core domain logic.  
-These tests focus on entities, value objects, aggregate roots, and domain services, verifying domain invariants such as correct occupancy updates, valid state transitions, and consistency rules.
+**Status: implemented at infrastructure and content level.**
 
-The middle layer of the pyramid is composed of **integration tests**, which verify the interaction between different system components.  
-These tests focus on the integration between the backend, the database, and external inputs such as simulated sensors, ensuring that domain events are correctly processed and persisted.
+A monitored-system knowledge base has been created for Qdrant. It contains stable technical knowledge rather than test answers or scenario ground truth.
 
-At the top of the pyramid, a limited number of **end-to-end tests** are used to validate the system from a user perspective.  
-These tests verify complete scenarios, such as people entering and exiting gym areas or machines being used, and check that real-time updates are correctly displayed on the dashboard.
+Knowledge is organised around the five target professional roles and contains:
 
-By following the Testing Pyramid approach, the project prioritizes fast and reliable tests for domain logic, while still ensuring that the complete system behaves correctly when all components are integrated.
+- system architecture;
+- observability semantics;
+- service responsibilities;
+- runtime and Linux/container knowledge;
+- network knowledge;
+- application behaviour;
+- diagnostic patterns.
+
+The MCP Server already exposes `search_knowledge()` to embed a query with Ollama and retrieve relevant Qdrant chunks.
+
+## Phase 6 — Controlled diagnostic tools
+
+**Status: implemented and tested.**
+
+The MCP Server exposes read-only tools for:
+
+- OpenSearch metrics;
+- OpenSearch logs and full-text log search;
+- container processes;
+- container runtime statistics;
+- disk usage;
+- network connections;
+- Qdrant knowledge retrieval.
+
+The server deliberately does not expose a generic remote shell. Docker inspection is restricted to the five monitored containers.
+
+## Phase 7 — Operator dashboard
+
+**Status: implemented as a working prototype.**
+
+The Flask dashboard provides:
+
+- incident overview and detail pages;
+- infrastructure health information;
+- diagnosis and remediation fields;
+- the five-role virtual technical team;
+- per-agent activity events;
+- OpenSearch persistence for incidents and agent events.
+
+The dashboard is separated from the agent control loop and acts as an operator-facing observability component.
+
+## Phase 8 — Hybrid multi-agent backend
+
+**Status: current development focus.**
+
+The next step is the autonomous reasoning backend. The target design combines:
+
+- SPADE agents communicating through XMPP;
+- explicit BDI state for beliefs, desires, and intentions;
+- a real ReAct execution loop for tool use;
+- dynamic specialist delegation by the Technical Lead;
+- MCP tools for live evidence collection;
+- Qdrant RAG for domain knowledge;
+- local Ollama models for reasoning and tool selection.
+
+The intended runtime must avoid a fixed specialist pipeline. The Technical Lead should select the specialists that are useful for the current incident and revise the investigation when new evidence changes the hypothesis.
+
+## Phase 9 — Final evaluation
+
+**Status: planned after backend integration.**
+
+The final evaluation will use the controlled scenarios to measure the complete pipeline from anomaly to diagnosis. The experimental focus will include:
+
+- detection behaviour;
+- diagnostic correctness;
+- evidence quality;
+- confidence and uncertainty;
+- time required for investigation;
+- usefulness of RAG;
+- contribution of specialist roles;
+- explainability of the final diagnosis and remediation proposal.
