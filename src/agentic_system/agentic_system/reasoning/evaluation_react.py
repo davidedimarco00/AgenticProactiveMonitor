@@ -330,7 +330,7 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
     def _parse_finalization_prompt(
         cls,
         content: str,
-    ) -> tuple[str, dict[str, Any], list[Any], list[Any]] | None:
+    ) -> tuple[str, dict[str, Any], list[Any], list[Any], str] | None:
         if cls._ASSIGNMENT_MARKER not in content:
             return None
         policy, remainder = content.split(cls._ASSIGNMENT_MARKER, 1)
@@ -343,21 +343,23 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
         try:
             assignment = json.loads(assignment_text)
             decisions = json.loads(decisions_text)
-            evidence = json.loads(evidence_text)
-        except json.JSONDecodeError:
+            stripped_evidence = evidence_text.lstrip()
+            evidence, end_index = json.JSONDecoder().raw_decode(stripped_evidence)
+            trailing = stripped_evidence[end_index:].strip()
+        except (json.JSONDecodeError, ValueError):
             return None
         if not isinstance(assignment, dict) or not isinstance(decisions, list) or not isinstance(evidence, list):
             return None
-        return policy, assignment, decisions, evidence
+        return policy, assignment, decisions, evidence, trailing
 
     @classmethod
     def _render_compact_prompt(
         cls,
-        parsed: tuple[str, dict[str, Any], list[Any], list[Any]],
+        parsed: tuple[str, dict[str, Any], list[Any], list[Any], str],
         level: int,
     ) -> str:
-        policy, assignment, decisions, evidence = parsed
-        return (
+        policy, assignment, decisions, evidence, trailing = parsed
+        rendered = (
             policy
             + cls._ASSIGNMENT_MARKER
             + json.dumps(
@@ -378,6 +380,10 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
                 separators=(",", ":"),
             )
         )
+        if trailing:
+            retry_limit = (800, 600, 420, 280)[level]
+            rendered += "\n\n" + cls._bounded_string(trailing, retry_limit)
+        return rendered
 
     def _input_chars_after_schema_injection(self, messages: list[dict[str, Any]]) -> int:
         normalized = self._normalized_messages(messages)
