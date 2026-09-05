@@ -3,6 +3,7 @@
   "name": "more-reasoning",
   "profile": "more-reasoning",
   "scenarios": [
+    "cpu-spike",
     "memory-leak",
     "network-latency"
   ],
