@@ -18,6 +18,12 @@ from .langchain_agent import AssistanceDomain, DiagnosisStatus, ReasoningAction
 
 _DEFAULT_OLLAMA_CONTEXT = 8192
 
+# The explicit wording a specialist uses when the bounded investigation ended
+# without a supported causal mechanism. It is a stated outcome, not a missing
+# field, so it survives serialization and reaches the operator report.
+UNCONFIRMED_ROOT_CAUSE = "Unconfirmed causal mechanism after bounded autonomous investigation"
+_INCONCLUSIVE_CONFIDENCE_CEILING = 0.5
+
 EvidenceKind = Literal[
     "metric_history",
     "runtime_resource_state",
@@ -160,7 +166,7 @@ class _PromptDiagnosticFinalOutput(BaseModel):
 
     summary: str
     diagnosis_status: DiagnosisStatus
-    root_cause: str | None = None
+    root_cause: str
     causal_chain: list[str]
     confidence: float = Field(ge=0.0, le=1.0)
     findings: list[str]
@@ -183,12 +189,19 @@ class _PromptDiagnosticFinalOutput(BaseModel):
 
     @field_validator("root_cause", mode="before")
     @classmethod
-    def _normalize_root_cause(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        normalized = str(value).strip()
-        if normalized.lower() in {"", "none", "null", "unknown", "unconfirmed"}:
-            return None
+    def _normalize_root_cause(cls, value: Any) -> str:
+        """Always resolve to a stated cause, possibly the conservative one.
+
+        The field is mandatory so that grammar-constrained decoding forces the
+        model to write the cause it already reasoned about instead of omitting
+        it. An absent or placeholder value becomes the explicit "unconfirmed"
+        label rather than an empty field that would invalidate the whole
+        result and discard the collected evidence.
+        """
+
+        normalized = str(value or "").strip()
+        if normalized.lower() in {"", "none", "null", "unknown", "unconfirmed", "n/a"}:
+            return UNCONFIRMED_ROOT_CAUSE
         return normalized
 
     @field_validator("causal_chain", "findings", "hypotheses", "recommended_next_steps")
@@ -198,14 +211,23 @@ class _PromptDiagnosticFinalOutput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_closure(self) -> "_PromptDiagnosticFinalOutput":
-        if self.diagnosis_status in {"confirmed", "probable"}:
-            if not self.root_cause:
-                raise ValueError(f"{self.diagnosis_status} diagnosis requires a root_cause")
-            if not self.causal_chain:
-                raise ValueError(f"{self.diagnosis_status} diagnosis requires a causal_chain")
+        # A causal claim without a stated cause or without material links is not
+        # a causal diagnosis. Demoting it keeps the collected evidence and the
+        # model's own wording, where rejecting the object used to consume the
+        # remaining attempts and end the investigation with nothing.
+        if self.diagnosis_status in {"confirmed", "probable"} and (
+            self.root_cause == UNCONFIRMED_ROOT_CAUSE or not self.causal_chain
+        ):
+            self.diagnosis_status = "inconclusive"
+            # A bounded inconclusive result cannot carry a causal confidence.
+            self.confidence = min(self.confidence, _INCONCLUSIVE_CONFIDENCE_CEILING)
 
+        # A confirmed mechanism that still asks a peer for evidence contradicts
+        # itself. The conservative reading is that the mechanism is not settled,
+        # so the causal claim is weakened while the collaboration request the
+        # specialist asked for is preserved.
         if self.diagnosis_status == "confirmed" and self.assistance_domain is not None:
-            raise ValueError("confirmed diagnosis cannot request diagnostic peer assistance")
+            self.diagnosis_status = "probable"
         return self
 
 

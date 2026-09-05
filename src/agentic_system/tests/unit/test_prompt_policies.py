@@ -89,7 +89,8 @@ def test_finalization_policy_keeps_peer_request_specific_and_generalized() -> No
     assert "Choose assistance_domain from the unresolved hypothesis" in policy
     assert "NOT from the original detector name" in policy
     assert "specific evidence the peer should collect" in policy
-    assert "NEVER output confirmed or probable" in policy
+    assert "root_cause is ALWAYS required" in policy
+    assert "the runtime demotes such a result to inconclusive" in policy
     assert "Never use probable to mean" in policy
     assert "never remediation" in policy
     assert "step limit" in policy
