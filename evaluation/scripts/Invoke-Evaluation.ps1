@@ -359,7 +359,7 @@ function Wait-ForDetectorSet {
 function Assert-NoActiveIncidents {
     $response = Invoke-JsonRequest -Uri "$BackendUrl/api/v1/incidents?limit=500"
     $terminal = @("RESOLVED", "CLOSED", "OPERATOR_ACTION_REQUIRED")
-    $active = @($response.incidents) | Where-Object { $terminal -notcontains ([string]$_.status).ToUpperInvariant() }
+    $active = @(@($response.incidents) | Where-Object { $terminal -notcontains ([string]$_.status).ToUpperInvariant() })
     if ($active.Count -gt 0) {
         $ids = @($active | ForEach-Object { "$($_.incident_id):$($_.status)" }) -join ", "
         throw "There are non-terminal incidents before the measured run: $ids"
@@ -446,14 +446,14 @@ function Wait-ForIncident {
 
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         $response = Invoke-JsonRequest -Uri "$BackendUrl/api/v1/incidents?limit=500"
-        $matches = @($response.incidents) | Where-Object {
+        $matches = @(@($response.incidents) | Where-Object {
             $anomaly = $_.anomaly
             if ($null -eq $anomaly) { return $false }
             if ([string]$anomaly.detector_id -ne $DetectorId) { return $false }
             $execution = 0
             try { $execution = [int64]$anomaly.execution_start_time } catch { $execution = 0 }
             return $execution -ge $faultStartMs
-        } | Sort-Object -Property created_at -Descending
+        } | Sort-Object -Property created_at -Descending)
 
         if ($matches.Count -gt 0) {
             return [string]$matches[0].incident_id
