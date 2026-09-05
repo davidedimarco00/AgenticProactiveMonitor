@@ -1,6 +1,6 @@
 ---
 kb_id: monitored-system.shared.observability-model
-version: 5
+version: 6
 domain: monitored_system
 document_type: observability
 roles:
@@ -57,7 +57,8 @@ Telegraf collects telemetry every 10 seconds. Important measurements include:
 - `docker_container_cpu`: per-container CPU telemetry. The anomaly-relevant field is `usage_percent`;
 - `docker_container_mem`: per-container memory telemetry. The anomaly-relevant field is `usage_percent`;
 - `ping`: ICMP RTT and packet-loss telemetry. Important fields include `average_response_ms`, `percentile50_ms`, `percentile95_ms`, `percentile99_ms`, `percent_packet_loss` and `result_code`;
-- `network_service_latency`: active service probe produced by Telegraf `net_response` with `name_override`. It opens the configured TCP connection, sends a small HTTP request and waits for the expected response. Important fields are `response_time` and `result_code`;
+- `network_transport_latency`: Layer-4 TCP connection-establishment telemetry produced by Telegraf `net_response` with `name_override`. The anomaly-relevant field is `response_time`; the destination service is stored in `tag.network_target`;
+- `application_service_latency`: Layer-7 HTTP service-probe telemetry produced by Telegraf `http_response` with `name_override`. Important fields include `response_time` and `result_code`;
 - `net`: interface bytes, packets, errors and drops;
 - `disk`, `diskio`, `system`, `swap`, `processes`, `kernel`: additional runtime measurements.
 
@@ -65,29 +66,53 @@ System CPU and memory measurements are available, but CPU and RAM anomaly detect
 
 ## Active network probes
 
-The three request-path links observed by network-latency detectors are:
+The three source-to-target links observed by network transport-latency detectors are:
 
 ```text
-traffic-generator  -> api-gateway          probe path /notes/new
-api-gateway        -> processing-service   probe path /docs
-processing-service -> data-service         probe path /docs
+traffic-generator  -> api-gateway
+api-gateway        -> processing-service
+processing-service -> data-service
 ```
 
 The NETLAT detector feature is:
 
 ```text
-measurement_name = network_service_latency
-field            = network_service_latency.response_time
+measurement_name = network_transport_latency
+field            = network_transport_latency.response_time
 ```
 
-`network_service_latency.result_code` records the outcome of the configured service probe.
+`network_transport_latency.response_time` measures TCP connection-establishment time. The `net_response` configuration intentionally omits `send` and `expect`, so this measurement does not include application request processing.
+
+The target service is represented by the Telegraf tag:
+
+```text
+tag.network_target
+```
+
+NETLAT investigations must therefore preserve the detector source/link and retrieve the matching source-to-target telemetry.
+
+Application-service latency is monitored separately. The configured HTTP probe paths are:
+
+```text
+traffic-generator  -> api-gateway          /notes/new
+api-gateway        -> processing-service   /docs
+processing-service -> data-service         /docs
+```
+
+The APPLAT detector feature is:
+
+```text
+measurement_name = application_service_latency
+field            = application_service_latency.response_time
+```
 
 ## Timing semantics
 
 The system exposes several timing measurements with different meanings:
 
 - `ping.*` measures ICMP reachability and round-trip timing;
-- `network_service_latency.response_time` measures the configured TCP/HTTP probe response time;
+- `network_transport_latency.response_time` measures TCP connection-establishment latency;
+- `application_service_latency.response_time` measures the configured HTTP service-probe response time;
 - application `latency_ms` fields measure time spent in application requests or downstream calls;
 - traffic-generator `latency_ms` measures the user-facing request duration seen by the synthetic client.
 
@@ -101,13 +126,20 @@ The configured detector model is:
 
 - 5 CPU detectors, one per monitored service;
 - 5 RAM detectors, one per monitored service;
-- 3 network-latency detectors, one per critical source/link.
+- 3 network transport-latency detectors, one per critical source/link;
+- 3 application-latency detectors, one per critical source/link.
 
 The NETLAT detector names are:
 
 - `NETLAT-traffic-generator-api-gateway`;
 - `NETLAT-api-gateway-processing-service`;
 - `NETLAT-processing-service-data-service`.
+
+The APPLAT detector names are:
+
+- `APPLAT-traffic-generator-api-gateway`;
+- `APPLAT-api-gateway-processing-service`;
+- `APPLAT-processing-service-data-service`.
 
 A detector result belongs only to the entity or source/link represented by that detector.
 
