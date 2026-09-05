@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "name": "higher-temperature",
+  "profile": "higher-temperature",
+  "scenarios": [
+    "memory-leak",
+    "network-latency"
+  ],
+  "repetitions": 5,
+  "recovery_seconds": 30,
+  "incident_wait_minutes": 3,
+  "diagnosis_wait_minutes": 15
+}
