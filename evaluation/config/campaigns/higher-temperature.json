@@ -3,6 +3,7 @@
   "name": "higher-temperature",
   "profile": "higher-temperature",
   "scenarios": [
+    "cpu-spike",
     "memory-leak",
     "network-latency"
   ],
