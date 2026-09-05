@@ -59,29 +59,31 @@ def collected_evidence(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def final_diagnostic_text(incident: dict[str, Any], outcomes: list[dict[str, Any]]) -> str:
     """Text used for LA/TA scoring.
 
-    Correctness is scored from the final diagnosis, not from every explored
-    hypothesis or raw observation. If the Technical Lead diagnosis is missing,
-    the latest structured specialist diagnosis is used as a fallback.
+    Correctness is scored from concluded diagnostic content only. Raw
+    observations and unresolved hypotheses are excluded. The Technical Lead
+    diagnosis and structured specialist conclusions are both considered because
+    the current persisted final diagnosis has no dedicated location/type fields.
     """
+    parts: list[Any] = []
     diagnosis = incident.get("diagnosis")
     if isinstance(diagnosis, dict):
-        return normalize_text(
+        parts.extend(
             [
                 diagnosis.get("summary"),
                 diagnosis.get("root_cause"),
             ]
         )
 
-    if outcomes:
-        outcome = outcomes[-1]
-        return normalize_text(
+    for outcome in outcomes:
+        parts.extend(
             [
                 outcome.get("summary"),
                 outcome.get("root_cause"),
                 outcome.get("causal_chain"),
             ]
         )
-    return ""
+
+    return normalize_text(parts)
 
 
 def location_score(text: str, location: dict[str, Any]) -> tuple[float, str, list[str]]:
