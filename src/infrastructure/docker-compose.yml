@@ -329,7 +329,6 @@ services:
       OLLAMA_URL: ${OLLAMA_HOST_URL:-http://host.docker.internal:11434}
       OLLAMA_REASONING_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e4b}
       OLLAMA_TOOL_MODEL: ${OLLAMA_TOOL_MODEL:-qwen3.5:4b}
-      OLLAMA_FALLBACK_TOOL_MODEL: ${OLLAMA_FALLBACK_TOOL_MODEL:-qwen2.5:latest}
 
       MONGODB_URI: "mongodb://${MONGODB_ROOT_USERNAME:-agentic}:${MONGODB_ROOT_PASSWORD:-change-this-local-password}@mongodb:27017/${MONGODB_DATABASE:-agentic_monitor}?authSource=admin"
       MONGODB_DATABASE: ${MONGODB_DATABASE:-agentic_monitor}

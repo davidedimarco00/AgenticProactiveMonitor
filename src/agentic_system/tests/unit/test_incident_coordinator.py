@@ -228,7 +228,9 @@ def test_new_incident_is_triaged_dispatched_and_running_idempotently() -> None:
     second = asyncio.run(coordinator.handle_anomaly(_observation("result-b")))
 
     assert first.created is True
-    assert first["status"] == "TRIAGED"
+    # The specialist owns a RUNNING task, so the incident is already under
+    # analysis rather than merely triaged.
+    assert first["status"] == "UNDER_ANALYSIS"
     assert first["incident_id"] == "INC-20260818-001"
     assert first["entity"] == "CPU-processing-service"
     assert first["agentic"]["current_agent"] == "system_engineer"
@@ -306,7 +308,7 @@ def test_recovery_resumes_and_dispatches_persisted_taken_in_charge_incident() ->
 
     recovered = repository.incidents["INC-20260818-001"]
     assert summary == {"scanned": 1, "resumed": 1, "failed": 0}
-    assert recovered["status"] == "TRIAGED"
+    assert recovered["status"] == "UNDER_ANALYSIS"
     assert recovered["agentic"]["primary_investigator"] == "system_engineer"
     assert recovered["agentic"]["investigation_task_id"] == "TASK-TEST-001"
     assert recovered["agentic"]["specialist_bdi_intention"] == "investigate_incident"

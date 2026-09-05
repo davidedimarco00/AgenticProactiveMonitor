@@ -12,7 +12,7 @@ from .workflow import IncidentWorkflow
 
 
 LOGGER = logging.getLogger("agentic_system.incidents.coordinator")
-RECOVERABLE_INCIDENT_STATUSES = ("NEW", "TAKEN_IN_CHARGE", "TRIAGED")
+RECOVERABLE_INCIDENT_STATUSES = ("NEW", "TAKEN_IN_CHARGE", "TRIAGED", "UNDER_ANALYSIS")
 AUTONOMOUS_WORKFLOW_TERMINAL_STATUSES = {
     "RESOLVED",
     "CLOSED",
@@ -119,6 +119,8 @@ class IncidentCoordinator:
                 if not incident_id or incident_id in seen:
                     continue
                 seen.add(incident_id)
+                if await self._awaits_review_only(incident):
+                    continue
                 incidents.append(incident)
 
         incidents.sort(
@@ -260,6 +262,34 @@ class IncidentCoordinator:
                 failed,
             )
         return {"scanned": scanned, "resumed": resumed, "failed": failed}
+
+    async def _awaits_review_only(self, incident: dict[str, Any]) -> bool:
+        """Report an incident whose investigation finished but whose review did not.
+
+        Its durable task is already COMPLETED, so nothing in the workflow loop
+        can drive it forward: re-admitting it to the exclusive FIFO would hold
+        the queue against every later anomaly. It stays out of recovery until
+        the review can be resumed from the persisted specialist result.
+        """
+
+        if str(incident.get("status") or "").upper() != "UNDER_ANALYSIS":
+            return False
+        task_id = str(
+            (incident.get("agentic") or {}).get("investigation_task_id") or ""
+        ).strip()
+        if not task_id:
+            return False
+        task = await self.repository.get_task(task_id)
+        if task is None:
+            return False
+        if normalize_task_state(task.get("state") or "") != AgentTaskState.COMPLETED:
+            return False
+        LOGGER.warning(
+            "Incident=%s kept out of durable recovery: its investigation completed but the "
+            "Technical Lead review did not, and the workflow loop cannot resume a review",
+            incident.get("incident_id"),
+        )
+        return True
 
     async def _resume_incident(
         self,
@@ -409,6 +439,11 @@ class IncidentCoordinator:
         updated = await self.repository.update_incident(
             incident_id,
             {
+                # The specialist owns a RUNNING durable task from here on, so the
+                # incident is genuinely under analysis. Leaving it TRIAGED for the
+                # whole investigation made the operator view lag the real workflow
+                # state by minutes.
+                "status": "UNDER_ANALYSIS",
                 "agentic": {
                     "current_agent": receipt.agent_role,
                     "active_agents": ["technical_lead", receipt.agent_role],
