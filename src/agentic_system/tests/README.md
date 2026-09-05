@@ -6,6 +6,8 @@ The backend test suite is split by responsibility:
 - `integration/`: real communication between the backend and the running infrastructure, including XMPP, MCP, MongoDB and the FastAPI incident API;
 - `e2e/`: Gherkin acceptance scenarios executed with `pytest-bdd`.
 
+The thesis-driven behavioural specification is documented in `e2e/THESIS_REQUIREMENTS_TRACEABILITY.md`. The `e2e/features/thesis_*.feature` files are derived from the current Chapter 3 requirements (`FR-01` to `FR-18`, `NFR-01` to `NFR-07`) and operator user stories (`US-01` to `US-10`). They describe externally observable behaviour and must not be derived from the outdated repository documentation in `docs/report/Requirements.md`.
+
 Install the backend and test dependencies from Windows PowerShell:
 
 ```powershell
