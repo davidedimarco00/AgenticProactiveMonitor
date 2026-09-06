@@ -701,8 +701,11 @@ class _EvaluationDiagnosticFinalizer(_ContextAwarePromptGemmaDiagnosticFinalizer
 
             # A length stop is a transport/context failure, not a diagnostic result.
             # Retry once with the same model and same evidence represented through
-            # the deterministic minimal projection. No alternate model is used.
-            if done_reason == "length" and budget.get("compaction_level") != 4:
+            # the deterministic minimal projection. This retry is allowed even when
+            # the first request was already at minimal compaction, because Ollama can
+            # still end generation with done_reason=length after a valid bounded input.
+            # No alternate model is used.
+            if done_reason == "length":
                 minimal_messages, minimal_budget = self._prepare_messages(
                     messages,
                     force_minimal=True,
