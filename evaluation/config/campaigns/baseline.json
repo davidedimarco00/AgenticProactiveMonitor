@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "name": "baseline",
+  "profile": "baseline",
+  "scenarios": [
+    "cpu-spike",
+    "memory-leak",
+    "network-latency"
+  ],
+  "repetitions": 5,
+  "recovery_seconds": 30,
+  "incident_wait_minutes": 3,
+  "diagnosis_wait_minutes": 15
+}
