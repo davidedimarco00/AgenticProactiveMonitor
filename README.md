@@ -2,24 +2,24 @@
 
 **Hybrid Multi-Agent System for Infrastructure Monitoring and Anomaly Detection**
 
-AgenticProactiveMonitor è un sistema ibrido multi-agente per il monitoraggio proattivo dell’infrastruttura e il rilevamento di anomalie. Combina agenti autonomi, orchestrazione containerizzata e strumenti di osservabilità per raccogliere metriche, identificare anomalie e facilitare la risposta operativa.
+AgenticProactiveMonitor is a hybrid multi-agent system for proactive infrastructure monitoring and anomaly detection. It combines autonomous agents, containerized orchestration, and observability tooling to detect incidents early, correlate signals, and support remediation workflows.
 
 ---
 
-## ✅ Panoramica rapida
+## Quick overview
 
-- Monitoraggio continuo di risorse e servizi infrastrutturali.
-- Rilevamento anomalie precoce (SINGLE_ENTITY detectors + correlazione multi-segnale).
-- Coordinamento di agenti con ruoli distinti: raccolta, analisi, decisione e notifica / remediation.
-- Obiettivo: ridurre MTTD e MTTR tramite automazioni e suggerimenti operativi.
+- Continuous monitoring of infrastructure resources and services.
+- Early anomaly detection through single-entity detectors and multi-signal correlation.
+- Coordination of agents with distinct roles: collection, analysis, decision-making, and notification / remediation.
+- Goal: reduce MTTD and MTTR through automation and operational guidance.
 
 ---
 
-## 🔭 Architettura (overview)
+## Architecture overview
 
-Di seguito due diagrammi che illustrano la topologia dei componenti e il flusso di telemetria.
+The repository includes diagrams that illustrate the component topology and telemetry flow.
 
-Component overview (mermaid):
+Component overview (Mermaid):
 
 ```mermaid
 graph TD
@@ -55,7 +55,7 @@ graph TD
   OL --> BE
 ```
 
-Flusso di telemetria e gestione incidenti:
+Telemetry and incident management flow:
 
 ```mermaid
 flowchart LR
@@ -67,97 +67,104 @@ flowchart LR
   AgenticBackend -->|observability| OperatorDashboard["Operator Dashboard (read-only)"]
 ```
 
-Nota: Ollama è in esecuzione nativa sul host Windows e viene usata come modello LLM locale.
+Note: Ollama runs natively on the Windows host and is used as the local LLM.
 
 ---
 
-## 🧩 Ruoli degli agenti
+## Agent roles
 
-1. Collector Agent  
-   Raccoglie metriche da host/servizi (CPU, RAM, disco), health endpoints e log.
+1. **Collector Agent**  
+   Collects metrics from hosts/services (CPU, RAM, disk), health endpoints, and logs.
 
-2. Analyzer Agent  
-   Applica regole, soglie e modelli per identificare deviazioni e segnali anomali.
+2. **Analyzer Agent**  
+   Applies rules, thresholds, and models to identify deviations and anomalous signals.
 
-3. Decision Agent  
-   Correlazione eventi, scoring severità, definizione di azioni suggerite o automatiche.
+3. **Decision Agent**  
+   Correlates events, scores severity, and defines suggested or automated actions.
 
-4. Notifier / Action Agent  
-   Invia alert (webhook/email/chat) e può innescare remediation (restart container, escalation, apertura ticket).
-
----
-
-## ⚙️ Stack tecnologico (repo composition)
-Basato sulla composizione del repository:
-- Python: ~76.6% (backend, agent logic)
-- CSS / JS / HTML: UI & dashboard
-- PowerShell / Shell: script di orchestrazione e bootstrap
-- Docker: packaging ed esecuzione containerizzata
+4. **Notifier / Action Agent**  
+   Sends alerts (webhook/email/chat) and can trigger remediation (container restart, escalation, ticket creation).
 
 ---
 
-## 📁 Struttura suggerita del repository
+## Technology stack
+
+Based on the repository composition:
+
+- Python: ~76.6% (backend and agent logic)
+- CSS / JS / HTML: UI and dashboard
+- PowerShell / Shell: orchestration and bootstrap scripts
+- Docker: container packaging and runtime execution
+
+---
+
+## Suggested repository structure
 
 ```text
 .
 ├─ src/
 │  ├─ agentic_backend/         # SPADE + FastAPI backend
 │  ├─ agentic_dashboard/       # Flask operator dashboard (SPA)
-│  ├─ infrastructure/          # docker-compose, bootstrap, scripts Ollama
-│  ├─ monitored_system/        # servizi di esempio/traffic generator
-│  └─ agents/                  # codice e configurazione degli agenti
-├─ scripts/                    # script utili (start/stop/status/logs)
+│  ├─ infrastructure/          # docker-compose, bootstrap, Ollama scripts
+│  ├─ monitored_system/        # sample services / traffic generator
+│  └─ agents/                  # agent code and configuration
+├─ scripts/                    # utility scripts (start/stop/status/logs)
 ├─ .env.example
 └─ README.md
 ```
 
-Adatta i nomi e i percorsi alla struttura reale del repository se differiscono.
+Adjust the names and paths to match the actual repository structure if they differ.
 
 ---
 
-## 🧰 Prerequisiti
+## Prerequisites
 
-- Docker & Docker Compose
-- Bash (Linux/macOS) o PowerShell/WSL su Windows
-- Ollama (se usato come modello locale) installato e avviato sul host
-- Variabili ambiente e segreti configurati (.env)
+- Docker and Docker Compose
+- Bash (Linux/macOS) or PowerShell/WSL on Windows
+- Ollama installed and running on the host, if used as the local model
+- Environment variables and secrets configured in `.env`
 
 ---
 
-## 🚀 Quickstart (locale)
+## Quickstart (local)
 
-1) Clona il repository:
+1. Clone the repository:
+
 ```bash
 git clone https://github.com/davidedimarco00/AgenticProactiveMonitor.git
 cd AgenticProactiveMonitor
 ```
 
-2) Configura l'ambiente:
+2. Configure the environment:
+
 ```bash
 cp .env.example .env
-# modifica .env: MongoDB password, XMPP credentials, endpoint Ollama se necessario
+# edit .env: MongoDB password, XMPP credentials, Ollama endpoint if needed
 ```
 
-3) Avvia i servizi (infrastructure):
-- Con Docker Compose (PowerShell / Bash):
+3. Start the infrastructure services:
+
 ```bash
 cd src/infrastructure
 docker compose up --build -d
 ```
 
-4) Avvia il monitored-system:
+4. Start the monitored system:
+
 ```bash
 cd src/monitored_system
 docker compose up -d --build
 ```
 
-5) Apri gli endpoint principali:
+5. Open the main endpoints:
+
 - OpenSearch: http://127.0.0.1:9200
 - OpenSearch Dashboards: http://127.0.0.1:5601
 - FastAPI Swagger: http://127.0.0.1:8082/docs
 - Operator Dashboard: http://127.0.0.1:5050
 
-Comandi utili:
+Useful commands:
+
 ```bash
 # logs
 docker compose logs -f agentic-backend
@@ -169,73 +176,75 @@ docker compose ps
 
 ---
 
-## 🧪 Rilevamento anomalie: concetti
+## Anomaly detection concepts
 
-Detectors e logica possibili:
-- Soglie statiche (CPU, memoria, error rate)
-- Rilevamento di shift rispetto a baseline (rate/derivata)
-- Correlazione multi-segnale (metriche + log + stato processi)
-- Scoring e policy di escalation (severity → remediation / operator action)
+Possible detectors and logic:
+
+- Static thresholds (CPU, memory, error rate)
+- Shift detection versus baseline (rate / derivative)
+- Multi-signal correlation (metrics + logs + process state)
+- Scoring and escalation policy (severity → remediation / operator action)
 
 ---
 
-## 🔔 Notifiche e remediation
+## Notifications and remediation
 
-Azioni configurabili:
+Configurable actions:
+
 - Webhook / Chat (XMPP / Slack / MS Teams)
 - Email
-- Restart di servizio / container
-- Apertura automatica di ticket (integrazione con sistemi esterni)
-- Escalation basata su severity e orario
+- Service / container restart
+- Automatic ticket creation (integration with external systems)
+- Escalation based on severity and time of day
 
 ---
 
-## 🔐 Sicurezza e best practice
+## Security and best practices
 
-- Non committare segreti (.env, token). Usa secret managers.
-- Limitare permessi per gli script di remediation.
-- Registrare/audidare le azioni automatiche per post-mortem.
-- Separare gli ambienti (dev/test/prod) e validare le remediation in ambienti controllati.
-
----
-
-## 🛣️ Roadmap (proposta)
-
-- [ ] Dashboard real-time con visualizzazioni incidenti
-- [ ] Modello anomaly detection adattivo (online learning)
-- [ ] Correlazione eventi cross-host e multi-entity detectors
-- [ ] Plugin system per aggiungere nuovi agenti
-- [ ] Test end-to-end e chaos testing
-- [ ] Automazione test per pipeline CI
+- Do not commit secrets (`.env`, tokens). Use secret managers.
+- Restrict permissions for remediation scripts.
+- Log and audit automatic actions for post-mortem analysis.
+- Separate environments (dev/test/prod) and validate remediations in controlled environments.
 
 ---
 
-## 🤝 Contribuire
+## Roadmap
 
-1. Fork del repository
-2. Crea un branch feature: `git checkout -b feature/nome-feature`
-3. Implementa e testa
-4. Commit: `git commit -m "feat: descrizione"`
-5. Push e apri una Pull Request
-
-Per contribuzioni più grandi, apri prima un issue per discutere design/impatti.
-
----
-
-## 📄 Licenza
-
-Specifica la licenza del progetto (es. MIT, Apache-2.0). Se non presente, aggiungi un file `LICENSE`.
+- [ ] Real-time dashboard with incident visualizations
+- [ ] Adaptive anomaly detection model (online learning)
+- [ ] Cross-host event correlation and multi-entity detectors
+- [ ] Plugin system to add new agents
+- [ ] End-to-end tests and chaos testing
+- [ ] Automated CI pipeline tests
 
 ---
 
-## 👤 Autore
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/name`
+3. Implement and test your changes
+4. Commit: `git commit -m "feat: description"`
+5. Push and open a Pull Request
+
+For larger contributions, open an issue first to discuss design and impact.
+
+---
+
+## License
+
+Specify the project license (e.g. MIT, Apache-2.0). If it is not already present, add a `LICENSE` file.
+
+---
+
+## Author
 
 **Davide Di Marco**  
 GitHub: [@davidedimarco00](https://github.com/davidedimarco00)
 
 ---
 
-## Note finali
+## Final notes
 
-- I diagrammi Mermaid sono resi su GitHub (supporto integrato); per una preview locale puoi usare estensioni VSCode per Mermaid o strumenti CLI.
-- Se vuoi che aggiorni anche i READMEs secondari (src/infrastructure/README.md, src/agentic_dashboard/README.md) per uniformare gli schemi e i diagrammi, posso preparare le modifiche in batch.
+- Mermaid diagrams are rendered on GitHub; for local preview you can use VS Code Mermaid extensions or CLI tools.
+- If you want me to update the secondary READMEs as well (`src/infrastructure/README.md`, `src/agentic_dashboard/README.md`) to keep terminology and diagrams consistent, I can prepare those changes too.
